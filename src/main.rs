@@ -87,7 +87,7 @@ impl SynthApp {
         Self {
             _audio: audio,
             state,
-            osc_wave:   [0, 0, 2],  // saw, saw, tri
+            osc_wave:   [0, 0, 0],  // sine x3 — default until filter is in place
             osc_octave: [0, 0, 0],
             osc_detune: [0.0, 0.0, 0.0],
             osc_vol:    [0.7, 0.5, 0.0],
@@ -236,7 +236,7 @@ impl eframe::App for SynthApp {
 // OSC panel
 // ---------------------------------------------------------------------------
 
-const WAVE_LABELS: &[&str] = &["Saw", "Sqr", "Tri"];
+const WAVE_LABELS: &[&str] = &["Sin", "Saw", "Sqr", "Tri"];
 
 impl SynthApp {
     fn ui_osc_panel(&mut self, ui: &mut egui::Ui, i: usize) {
