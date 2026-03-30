@@ -9,7 +9,9 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample, Stream};
 use fundsp::prelude32::*;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::AtomicU8;
+
+use crate::osc::MultiWaveOsc;
 
 pub const VOICE_COUNT: usize = 6;
 
@@ -114,91 +116,6 @@ impl AudioEngine {
 }
 
 // ---------------------------------------------------------------------------
-// Custom multi-waveform oscillator
-// ---------------------------------------------------------------------------
-
-/// Waveform selector. Stored as u8 in AtomicU8 for lock-free thread sharing.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[repr(u8)]
-pub enum WaveShape {
-    Sine     = 0,
-    Saw      = 1,
-    Square   = 2,
-    Triangle = 3,
-}
-
-impl WaveShape {
-    pub fn from_u8(v: u8) -> Self {
-        match v {
-            1 => Self::Saw,
-            2 => Self::Square,
-            3 => Self::Triangle,
-            _ => Self::Sine,
-        }
-    }
-}
-
-/// Polynomial Band-Limited Step (PolyBLEP) correction.
-/// Smooths the discontinuity at phase = 0 over ±1 sample.
-/// `t`: current phase [0, 1) — `dt`: phase increment per sample (freq / sr).
-#[inline]
-fn poly_blep(t: f32, dt: f32) -> f32 {
-    if t < dt {
-        let t = t / dt;
-        t + t - t * t - 1.0
-    } else if t > 1.0 - dt {
-        let t = (t - 1.0) / dt;
-        t * t + t + t + 1.0
-    } else {
-        0.0
-    }
-}
-
-/// Single oscillator node: 1 input (freq Hz) → 1 output (audio).
-/// Waveform is selected at runtime via an AtomicU8 — no graph rebuild needed.
-/// Saw and square use PolyBLEP band-limiting; triangle and sine are alias-free.
-#[derive(Clone)]
-struct MultiWaveOsc {
-    wave:  Arc<AtomicU8>,
-    phase: f32,
-    sr:    f32,
-}
-
-impl MultiWaveOsc {
-    fn new(wave: Arc<AtomicU8>, sr: f32) -> Self {
-        Self { wave, phase: 0.0, sr }
-    }
-}
-
-impl AudioNode for MultiWaveOsc {
-    const ID: u64 = 0x4d756c74_69576176; // "MultiWav"
-    type Inputs  = U1;
-    type Outputs = U1;
-
-    #[inline]
-    fn tick(&mut self, input: &Frame<f32, U1>) -> Frame<f32, U1> {
-        let freq = input[0].max(0.0);
-        let dt   = freq / self.sr;
-        self.phase += dt;
-        self.phase -= self.phase.floor();
-        let p = self.phase;
-        let s = match WaveShape::from_u8(self.wave.load(Ordering::Relaxed)) {
-            WaveShape::Sine => (p * f32::TAU).sin(),
-            WaveShape::Saw  => (2.0 * p - 1.0) - poly_blep(p, dt),
-            WaveShape::Square => {
-                let naive = if p < 0.5 { 1.0_f32 } else { -1.0 };
-                naive + poly_blep(p, dt) - poly_blep((p + 0.5) % 1.0, dt)
-            }
-            WaveShape::Triangle => if p < 0.5 { 4.0 * p - 1.0 } else { 3.0 - 4.0 * p },
-        };
-        [s].into()
-    }
-
-    fn reset(&mut self) { self.phase = 0.0; }
-
-    fn set_sample_rate(&mut self, sr: f64) { self.sr = sr as f32; }
-}
-
 // ---------------------------------------------------------------------------
 // DSP graph builder
 // ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@
 #![allow(clippy::precedence)]
 
 mod audio;
+mod osc;
 
 use audio::{AudioEngine, AudioState, VOICE_COUNT};
 use eframe::egui;
