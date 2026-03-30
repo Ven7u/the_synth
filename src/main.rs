@@ -43,8 +43,10 @@ struct SynthApp {
     osc_wave:    [usize; 3],   // 0=sine 1=saw 2=square 3=triangle
     osc_octave:  [i32; 3],     // -2..+2
     osc_detune:  [f32; 3],     // -100..+100 cents
-    osc_vol:     [f32; 3],
-    osc_enabled: [bool; 3],
+    osc_vol:          [f32; 3],
+    osc_enabled:      [bool; 3],
+    osc_pulse_width:  [f32; 3],
+    osc_pw_enabled:   [bool; 3],
 
     // Noise
     noise_vol: f32,
@@ -92,8 +94,10 @@ impl SynthApp {
             osc_wave:    [0, 0, 0],  // sine x3 — default until filter is in place
             osc_octave:  [0, 0, 0],
             osc_detune:  [0.0, 0.0, 0.0],
-            osc_vol:     [0.5, 0.5, 0.5],
-            osc_enabled: [true, true, false],
+            osc_vol:         [0.5, 0.5, 0.5],
+            osc_enabled:     [true, true, false],
+            osc_pulse_width: [0.5, 0.5, 0.5],
+            osc_pw_enabled:  [false, false, false],
             noise_vol:  0.0,
             lfo_rate:   2.0,
             lfo_depth:  0.0,
@@ -299,6 +303,31 @@ impl SynthApp {
                     self.update_freq_mult(i);
                 }
             });
+
+            // Pulse width — only shown when Square is selected
+            if self.osc_wave[i] == 2 {
+                ui.horizontal(|ui| {
+                    let pw_on = self.osc_pw_enabled[i];
+                    let label = egui::RichText::new("PW").small()
+                        .color(if pw_on { Color32::from_rgb(0, 220, 160) } else { Color32::GRAY });
+                    if ui.button(label).clicked() {
+                        self.osc_pw_enabled[i] = !pw_on;
+                        if !self.osc_pw_enabled[i] {
+                            // Reset to 50% when disabled
+                            self.osc_pulse_width[i] = 0.5;
+                            self.state.osc_pulse_width[i].set(0.5);
+                        }
+                    }
+                    ui.add_enabled_ui(self.osc_pw_enabled[i], |ui| {
+                        if ui.add(egui::Slider::new(&mut self.osc_pulse_width[i], 0.01..=0.99)
+                            .fixed_decimals(2))
+                            .changed()
+                        {
+                            self.state.osc_pulse_width[i].set(self.osc_pulse_width[i]);
+                        }
+                    });
+                });
+            }
         });
     }
 

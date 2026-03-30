@@ -32,16 +32,18 @@ impl WaveShape {
         }
     }
 
-    /// Compute one sample given phase `p` ∈ [0, 1) and phase increment `dt` = freq / sr.
-    /// `dt` is used by band-limited shapes for PolyBLEP correction; ignored by others.
+    /// Compute one sample given phase `p` ∈ [0, 1), phase increment `dt` = freq / sr,
+    /// and pulse width `pw` ∈ (0, 1) — only used by Square, ignored by other shapes.
     #[inline]
-    pub fn sample(self, p: f32, dt: f32) -> f32 {
+    pub fn sample(self, p: f32, dt: f32, pw: f32) -> f32 {
         match self {
             Self::Sine     => (p * f32::TAU).sin(),
             Self::Saw      => (2.0 * p - 1.0) - poly_blep(p, dt),
             Self::Square   => {
-                let naive = if p < 0.5 { 1.0_f32 } else { -1.0 };
-                naive + poly_blep(p, dt) - poly_blep((p + 0.5) % 1.0, dt)
+                let pw = pw.clamp(0.01, 0.99);
+                let naive = if p < pw { 1.0_f32 } else { -1.0 };
+                // PolyBLEP at the rising edge (phase=0) and falling edge (phase=pw)
+                naive + poly_blep(p, dt) - poly_blep((p + (1.0 - pw)) % 1.0, dt)
             }
             Self::Triangle => if p < 0.5 { 4.0 * p - 1.0 } else { 3.0 - 4.0 * p },
         }
@@ -77,14 +79,15 @@ fn poly_blep(t: f32, dt: f32) -> f32 {
 /// Saw and square use PolyBLEP band-limiting; triangle and sine are alias-free.
 #[derive(Clone)]
 pub struct MultiWaveOsc {
-    wave:  Arc<AtomicU8>,
-    phase: f32,
-    sr:    f32,
+    wave:        Arc<AtomicU8>,
+    pulse_width: Shared,
+    phase:       f32,
+    sr:          f32,
 }
 
 impl MultiWaveOsc {
-    pub fn new(wave: Arc<AtomicU8>, sr: f32) -> Self {
-        Self { wave, phase: 0.0, sr }
+    pub fn new(wave: Arc<AtomicU8>, pulse_width: Shared, sr: f32) -> Self {
+        Self { wave, pulse_width, phase: 0.0, sr }
     }
 }
 
@@ -97,10 +100,11 @@ impl AudioNode for MultiWaveOsc {
     fn tick(&mut self, input: &Frame<f32, U1>) -> Frame<f32, U1> {
         let freq = input[0].max(0.0);
         let dt   = freq / self.sr;
+        let pw   = self.pulse_width.value();
         self.phase += dt;
         self.phase -= self.phase.floor();
         let shape = WaveShape::from_u8(self.wave.load(Ordering::Relaxed));
-        [shape.sample(self.phase, dt)].into()
+        [shape.sample(self.phase, dt, pw)].into()
     }
 
     fn reset(&mut self) { self.phase = 0.0; }

@@ -17,9 +17,10 @@ pub const VOICE_COUNT: usize = 6;
 
 pub struct AudioState {
     // OSC bank — 3 oscillators per voice
-    pub osc_wave: [Arc<AtomicU8>; 3],  // 0=sine 1=saw 2=square 3=triangle
-    pub osc_freq_mult: [Shared; 3],       // octave+detune combined multiplier (1.0 = no change)
-    pub osc_vol:    [Shared; 3],          // 0.0..1.0 mix level
+    pub osc_wave:        [Arc<AtomicU8>; 3],  // 0=sine 1=saw 2=square 3=triangle
+    pub osc_freq_mult:   [Shared; 3],          // octave+detune combined multiplier (1.0 = no change)
+    pub osc_vol:         [Shared; 3],          // 0.0..1.0 mix level
+    pub osc_pulse_width: [Shared; 3],          // 0.01..0.99, only used by Square
 
     // Noise
     pub noise_vol:  Shared,               // 0.0..1.0
@@ -82,8 +83,9 @@ impl AudioState {
                 Arc::new(AtomicU8::new(0)),
                 Arc::new(AtomicU8::new(0)),
             ],
-            osc_freq_mult: [shared(1.0), shared(1.0), shared(1.0)],
-            osc_vol:    [shared(0.65), shared(0.5), shared(0.0)],
+            osc_freq_mult:   [shared(1.0), shared(1.0), shared(1.0)],
+            osc_vol:         [shared(0.65), shared(0.5), shared(0.0)],
+            osc_pulse_width: [shared(0.5), shared(0.5), shared(0.5)],
             noise_vol:  shared(0.0),
             cutoff:     shared(3000.0),
             resonance:  shared(1.0),
@@ -150,13 +152,13 @@ fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Send> {
         let vg = &state.voice_gates[vi];
 
         let osc0 = (var(vf) * var(&state.osc_freq_mult[0]) >> follow(0.002)
-                 >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[0]), sr as f32)))
+                 >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32)))
                  * var(&state.osc_vol[0]);
         let osc1 = (var(vf) * var(&state.osc_freq_mult[1]) >> follow(0.002)
-                 >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[1]), sr as f32)))
+                 >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[1]), state.osc_pulse_width[1].clone(), sr as f32)))
                  * var(&state.osc_vol[1]);
         let osc2 = (var(vf) * var(&state.osc_freq_mult[2]) >> follow(0.002)
-                 >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[2]), sr as f32)))
+                 >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32)))
                  * var(&state.osc_vol[2]);
 
         let osc = osc0 + osc1 + osc2;
