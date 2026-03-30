@@ -40,10 +40,11 @@ struct SynthApp {
     state: Arc<AudioState>,
 
     // OSC bank
-    osc_wave:   [usize; 3],   // 0=sine 1=saw 2=square 3=triangle
-    osc_octave: [i32; 3],     // -2..+2
-    osc_detune: [f32; 3],     // -100..+100 cents
-    osc_vol:    [f32; 3],
+    osc_wave:    [usize; 3],   // 0=sine 1=saw 2=square 3=triangle
+    osc_octave:  [i32; 3],     // -2..+2
+    osc_detune:  [f32; 3],     // -100..+100 cents
+    osc_vol:     [f32; 3],
+    osc_enabled: [bool; 3],
 
     // Noise
     noise_vol: f32,
@@ -88,10 +89,11 @@ impl SynthApp {
         Self {
             _audio: audio,
             state,
-            osc_wave:   [0, 0, 0],  // sine x3 — default until filter is in place
-            osc_octave: [0, 0, 0],
-            osc_detune: [0.0, 0.0, 0.0],
-            osc_vol:    [0.7, 0.5, 0.0],
+            osc_wave:    [0, 0, 0],  // sine x3 — default until filter is in place
+            osc_octave:  [0, 0, 0],
+            osc_detune:  [0.0, 0.0, 0.0],
+            osc_vol:     [0.5, 0.5, 0.5],
+            osc_enabled: [true, true, false],
             noise_vol:  0.0,
             lfo_rate:   2.0,
             lfo_depth:  0.0,
@@ -241,41 +243,54 @@ const WAVE_LABELS: &[&str] = &["Sin", "Saw", "Sqr", "Tri"];
 
 impl SynthApp {
     fn ui_osc_panel(&mut self, ui: &mut egui::Ui, i: usize) {
-        ui.label(egui::RichText::new(format!("OSC {}", i + 1)).strong());
-
-        // Waveform selector
+        // Header: label + on/off toggle
         ui.horizontal(|ui| {
-            for (w, &label) in WAVE_LABELS.iter().enumerate() {
-                if ui.selectable_label(self.osc_wave[i] == w, label).clicked() {
-                    self.osc_wave[i] = w;
-                    self.state.osc_wave[i].store(w as u8, Ordering::Relaxed);
+            let label = egui::RichText::new(format!("OSC {}", i + 1)).strong();
+            let on = self.osc_enabled[i];
+            let text = if on { label.color(Color32::from_rgb(0, 220, 160)) } else { label.color(Color32::GRAY) };
+            if ui.button(text).clicked() {
+                self.osc_enabled[i] = !on;
+                let vol = if self.osc_enabled[i] { self.osc_vol[i] } else { 0.0 };
+                self.state.osc_vol[i].set(vol);
+            }
+        });
+
+        // Controls greyed out when disabled
+        ui.add_enabled_ui(self.osc_enabled[i], |ui| {
+            // Waveform selector
+            ui.horizontal(|ui| {
+                for (w, &label) in WAVE_LABELS.iter().enumerate() {
+                    if ui.selectable_label(self.osc_wave[i] == w, label).clicked() {
+                        self.osc_wave[i] = w;
+                        self.state.osc_wave[i].store(w as u8, Ordering::Relaxed);
+                    }
                 }
-            }
-        });
+            });
 
-        // Octave
-        ui.horizontal(|ui| {
-            ui.label("Oct:");
-            if ui.small_button("−").clicked() && self.osc_octave[i] > -2 {
-                self.osc_octave[i] -= 1;
-                self.update_freq_mult(i);
-            }
-            ui.label(format!("{:+}", self.osc_octave[i]));
-            if ui.small_button("+").clicked() && self.osc_octave[i] < 2 {
-                self.osc_octave[i] += 1;
-                self.update_freq_mult(i);
-            }
-        });
+            // Octave
+            ui.horizontal(|ui| {
+                ui.label("Oct:");
+                if ui.small_button("−").clicked() && self.osc_octave[i] > -2 {
+                    self.osc_octave[i] -= 1;
+                    self.update_freq_mult(i);
+                }
+                ui.label(format!("{:+}", self.osc_octave[i]));
+                if ui.small_button("+").clicked() && self.osc_octave[i] < 2 {
+                    self.osc_octave[i] += 1;
+                    self.update_freq_mult(i);
+                }
+            });
 
-        // Detune
-        ui.horizontal(|ui| {
-            ui.label("Det:");
-            if ui.add(egui::Slider::new(&mut self.osc_detune[i], -100.0..=100.0)
-                .text("¢").fixed_decimals(0))
-                .changed()
-            {
-                self.update_freq_mult(i);
-            }
+            // Detune
+            ui.horizontal(|ui| {
+                ui.label("Det:");
+                if ui.add(egui::Slider::new(&mut self.osc_detune[i], -100.0..=100.0)
+                    .text("¢").fixed_decimals(0))
+                    .changed()
+                {
+                    self.update_freq_mult(i);
+                }
+            });
         });
     }
 
@@ -303,7 +318,11 @@ impl SynthApp {
                         .text(format!("{}", i + 1)))
                         .changed()
                     {
-                        self.state.osc_vol[i].set(self.osc_vol[i]);
+                        // Only push to DSP if the oscillator is enabled; otherwise
+                        // just save the value so it restores correctly on re-enable.
+                        if self.osc_enabled[i] {
+                            self.state.osc_vol[i].set(self.osc_vol[i]);
+                        }
                     }
                 });
             }
