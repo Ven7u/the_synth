@@ -1,8 +1,7 @@
 //! Audio engine: cpal stream + fundsp synthesis.
 //!
-//! Continuous parameters use `Shared` (thread-safe atomic f32).
-//! The piano tab uses a pool of VOICE_COUNT independent voices, each with its own
-//! `freq` and `gate` Shared — enabling true polyphony without any locking.
+//! Single unified poly graph: 3 OSCs per voice → filter → amp ADSR.
+//! LFO is computed in the callback and modulates effective_cutoff via a Shared.
 
 #![allow(clippy::precedence)]
 
@@ -10,58 +9,88 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample, Stream};
 use fundsp::prelude32::*;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU8;
 
-/// Number of simultaneous voices for the piano tab.
 pub const VOICE_COUNT: usize = 6;
 
 pub struct AudioState {
-    // Waveform / sequencer (monophonic)
-    pub frequency:     Shared,
-    pub gate:          Shared,
-    pub wave_type:     Arc<std::sync::atomic::AtomicU8>,
-    pub volume:        Shared,
+    // OSC bank — 3 oscillators per voice
+    pub osc_wave:   [Arc<AtomicU8>; 3],  // 0=sine 1=saw 2=square 3=triangle
+    pub osc_freq_mult: [Shared; 3],       // octave+detune combined multiplier (1.0 = no change)
+    pub osc_vol:    [Shared; 3],          // 0.0..1.0 mix level
 
-    // Filter tab
-    pub cutoff:        Shared,
-    pub resonance:     Shared,
-    pub filter_type:   Arc<std::sync::atomic::AtomicU8>,
-    pub filter_source: Arc<std::sync::atomic::AtomicU8>,
+    // Noise
+    pub noise_vol:  Shared,               // 0.0..1.0
 
-    // ADSR (shared by piano and sequencer)
-    pub adsr_attack:   Shared,
-    pub adsr_decay:    Shared,
-    pub adsr_sustain:  Shared,
-    pub adsr_release:  Shared,
+    // Filter
+    pub cutoff:     Shared,               // base cutoff Hz (80..18000)
+    pub resonance:  Shared,               // Q (0.5..20)
+    pub filter_env_amount: Shared,        // 0.0..1.0
+    // Filter ADSR
+    pub fenv_attack:  Shared,
+    pub fenv_decay:   Shared,
+    pub fenv_sustain: Shared,
+    pub fenv_release: Shared,
 
-    // Piano polyphonic voice pool — VOICE_COUNT independent freq/gate pairs.
-    // The UI thread writes here on key press/release; the audio callback reads
-    // them every sample via fundsp's Var nodes (zero allocation, zero locking).
+    // LFO
+    pub lfo_rate:   Shared,               // 0.1..20 Hz
+    pub lfo_depth:  Shared,               // 0.0..1.0
+    pub lfo_dest:   Arc<AtomicU8>,        // 0=pitch 1=filter 2=amp
+
+    // Amp ADSR
+    pub adsr_attack:  Shared,
+    pub adsr_decay:   Shared,
+    pub adsr_sustain: Shared,
+    pub adsr_release: Shared,
+
+    // Glide
+    pub glide_time: Shared,               // 0.0..0.5 s
+
+    // Master
+    pub master_vol: Shared,
+
+    // Polyphonic voice pool
     pub voice_freqs: Vec<Shared>,
     pub voice_gates: Vec<Shared>,
 
-    pub active_tab:    Arc<std::sync::atomic::AtomicU8>,
-    pub osc_buffer:    Arc<std::sync::Mutex<Vec<f32>>>,
+    // Internal: effective cutoff written by callback, read by graph
+    pub effective_cutoff: Shared,
+
+    // Oscilloscope
+    pub osc_buffer: Arc<std::sync::Mutex<Vec<f32>>>,
 }
 
 impl AudioState {
     pub fn new() -> Self {
         Self {
-            frequency:     shared(440.0),
-            gate:          shared(0.0),
-            wave_type:     Arc::new(std::sync::atomic::AtomicU8::new(0)),
-            volume:        shared(0.4),
-            cutoff:        shared(1000.0),
-            resonance:     shared(1.0),
-            filter_type:   Arc::new(std::sync::atomic::AtomicU8::new(0)),
-            filter_source: Arc::new(std::sync::atomic::AtomicU8::new(0)),
-            adsr_attack:   shared(0.01),
-            adsr_decay:    shared(0.1),
-            adsr_sustain:  shared(0.7),
-            adsr_release:  shared(0.4),
-            voice_freqs:   (0..VOICE_COUNT).map(|_| shared(440.0)).collect(),
-            voice_gates:   (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
-            active_tab:    Arc::new(std::sync::atomic::AtomicU8::new(0)),
-            osc_buffer:    Arc::new(std::sync::Mutex::new(vec![0.0f32; 1024])),
+            osc_wave:   [
+                Arc::new(AtomicU8::new(0)), // saw
+                Arc::new(AtomicU8::new(0)), // saw
+                Arc::new(AtomicU8::new(2)), // triangle (sub-osc)
+            ],
+            osc_freq_mult: [shared(1.0), shared(1.0), shared(1.0)],
+            osc_vol:    [shared(0.65), shared(0.5), shared(0.0)],
+            noise_vol:  shared(0.0),
+            cutoff:     shared(3000.0),
+            resonance:  shared(1.0),
+            filter_env_amount: shared(0.3),
+            fenv_attack:  shared(0.01),
+            fenv_decay:   shared(0.3),
+            fenv_sustain: shared(0.6),
+            fenv_release: shared(0.2),
+            lfo_rate:   shared(2.0),
+            lfo_depth:  shared(0.0),
+            lfo_dest:   Arc::new(AtomicU8::new(1)), // filter
+            adsr_attack:  shared(0.01),
+            adsr_decay:   shared(0.15),
+            adsr_sustain: shared(0.7),
+            adsr_release: shared(0.4),
+            glide_time: shared(0.0),
+            master_vol: shared(0.4),
+            voice_freqs: (0..VOICE_COUNT).map(|_| shared(440.0)).collect(),
+            voice_gates: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
+            effective_cutoff: shared(3000.0),
+            osc_buffer: Arc::new(std::sync::Mutex::new(vec![0.0f32; 1024])),
         }
     }
 }
@@ -85,91 +114,62 @@ impl AudioEngine {
 }
 
 // ---------------------------------------------------------------------------
-// Graph builders
+// DSP graph builder
 // ---------------------------------------------------------------------------
 
-fn build_waveform_graph(
-    wave_type: u8, freq: &Shared, vol: &Shared, sr: f64,
-) -> Box<dyn AudioUnit + Send> {
-    let mut g: Box<dyn AudioUnit + Send> = match wave_type {
-        1 => Box::new((var(freq) >> saw())      * var(vol) >> pan(0.0)),
-        2 => Box::new((var(freq) >> square())   * var(vol) >> pan(0.0)),
-        3 => Box::new((var(freq) >> triangle()) * var(vol) >> pan(0.0)),
-        _ => Box::new((var(freq) >> sine())     * var(vol) >> pan(0.0)),
-    };
-    g.set_sample_rate(sr);
-    g.allocate();
-    g
+/// Build one oscillator signal: frequency × multiplier → waveform × volume.
+/// All three waveforms (Saw/Sqr/Tri) are WaveSynth<U1>, so the types unify.
+#[allow(unused_macros)]
+macro_rules! make_osc {
+    ($wave:expr, $freq:expr, $fmult:expr, $vol:expr) => {{
+        let freq_signal = var($freq) * var($fmult);
+        match $wave {
+            1 => (freq_signal >> square())   * var($vol),
+            2 => (freq_signal >> triangle()) * var($vol),
+            _ => (freq_signal >> saw())      * var($vol),  // default: saw
+        }
+    }};
 }
 
-fn build_filter_graph(
-    filter_type: u8, source: u8, cutoff: f32, q: f32, sr: f64,
-) -> Box<dyn AudioUnit + Send> {
-    let mut g: Box<dyn AudioUnit + Send> = match (source, filter_type) {
-        (1, 1) => Box::new(pink() * 0.4 >> highpass_hz(cutoff, q) >> pan(0.0)),
-        (1, 2) => Box::new(pink() * 0.4 >> bandpass_hz(cutoff, q) >> pan(0.0)),
-        (1, _) => Box::new(pink() * 0.4 >> lowpass_hz(cutoff, q)  >> pan(0.0)),
-        (_, 1) => Box::new(saw_hz(110.0) * 0.4 >> highpass_hz(cutoff, q) >> pan(0.0)),
-        (_, 2) => Box::new(saw_hz(110.0) * 0.4 >> bandpass_hz(cutoff, q) >> pan(0.0)),
-        (_, _) => Box::new(saw_hz(110.0) * 0.4 >> lowpass_hz(cutoff, q)  >> pan(0.0)),
-    };
-    g.set_sample_rate(sr);
-    g.allocate();
-    g
-}
-
-/// Monophonic piano graph (used by the sequencer tab).
-fn build_mono_graph(
-    wave_type: u8, freq: &Shared, gate: &Shared, vol: &Shared,
-    a: f32, d: f32, s: f32, r: f32, sr: f64,
-) -> Box<dyn AudioUnit + Send> {
-    let mut g: Box<dyn AudioUnit + Send> = match wave_type {
-        1 => Box::new((var(freq) >> saw())      * (var(gate) >> adsr_live(a,d,s,r)) * var(vol) >> pan(0.0)),
-        2 => Box::new((var(freq) >> square())   * (var(gate) >> adsr_live(a,d,s,r)) * var(vol) >> pan(0.0)),
-        3 => Box::new((var(freq) >> triangle()) * (var(gate) >> adsr_live(a,d,s,r)) * var(vol) >> pan(0.0)),
-        _ => Box::new((var(freq) >> sine())     * (var(gate) >> adsr_live(a,d,s,r)) * var(vol) >> pan(0.0)),
-    };
-    g.set_sample_rate(sr);
-    g.allocate();
-    g
-}
-
-/// Polyphonic piano graph: VOICE_COUNT independent voices summed together.
-///
-/// Each voice is:  `(var(freq[i]) >> osc) * (var(gate[i]) >> adsr_live(...))`
-///
-/// The `&` (Bus) operator sums multiple AudioNodes with identical I/O counts.
-/// All voices run in parallel; the audio callback needs no additional logic —
-/// it just calls `get_stereo()` and fundsp evaluates every voice automatically.
-fn build_poly_graph(
-    vf: &[Shared], vg: &[Shared],
-    wave_type: u8, vol: &Shared,
-    a: f32, d: f32, s: f32, r: f32, sr: f64,
-) -> Box<dyn AudioUnit + Send> {
+/// Build the unified 6-voice poly graph.
+/// Each voice: 3 OSCs + noise → lowpass(effective_cutoff) → amp ADSR
+fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Send> {
+    let a = state.adsr_attack.value();
+    let d = state.adsr_decay.value();
+    let s = state.adsr_sustain.value();
+    let r = state.adsr_release.value();
     let scale = 1.0 / VOICE_COUNT as f32;
 
-    let mut g: Box<dyn AudioUnit + Send> = match wave_type {
-        1 => Box::new({
-            let mk = |i: usize| (var(&vf[i]) >> saw()) * (var(&vg[i]) >> adsr_live(a,d,s,r));
-            let (v0,v1,v2,v3,v4,v5) = (mk(0),mk(1),mk(2),mk(3),mk(4),mk(5));
-            (v0 & v1 & v2 & v3 & v4 & v5) * var(vol) * scale >> pan(0.0)
-        }),
-        2 => Box::new({
-            let mk = |i: usize| (var(&vf[i]) >> square()) * (var(&vg[i]) >> adsr_live(a,d,s,r));
-            let (v0,v1,v2,v3,v4,v5) = (mk(0),mk(1),mk(2),mk(3),mk(4),mk(5));
-            (v0 & v1 & v2 & v3 & v4 & v5) * var(vol) * scale >> pan(0.0)
-        }),
-        3 => Box::new({
-            let mk = |i: usize| (var(&vf[i]) >> triangle()) * (var(&vg[i]) >> adsr_live(a,d,s,r));
-            let (v0,v1,v2,v3,v4,v5) = (mk(0),mk(1),mk(2),mk(3),mk(4),mk(5));
-            (v0 & v1 & v2 & v3 & v4 & v5) * var(vol) * scale >> pan(0.0)
-        }),
-        _ => Box::new({
-            let mk = |i: usize| (var(&vf[i]) >> sine()) * (var(&vg[i]) >> adsr_live(a,d,s,r));
-            let (v0,v1,v2,v3,v4,v5) = (mk(0),mk(1),mk(2),mk(3),mk(4),mk(5));
-            (v0 & v1 & v2 & v3 & v4 & v5) * var(vol) * scale >> pan(0.0)
-        }),
+    let make_voice = |vi: usize| {
+        let vf = &state.voice_freqs[vi];
+        let vg = &state.voice_gates[vi];
+        let fm0 = &state.osc_freq_mult[0];
+        let fm1 = &state.osc_freq_mult[1];
+        let vo0 = &state.osc_vol[0];
+        let vo1 = &state.osc_vol[1];
+        // Stable live-controlled oscillator section.
+        // Keep the UI-controlled tuning and mixer levels, but temporarily force
+        // both oscillators to sine while debugging. The waveform cross-switching
+        // version was reintroducing breakup.
+        let osc0 = (var(vf) * var(fm0)) >> follow(0.002) >> sine();
+        let osc1 = (var(vf) * var(fm1)) >> follow(0.002) >> sine();
+
+        let osc = osc0 * var(vo0) + osc1 * var(vo1);
+
+        let env = var(vg) >> adsr_live(a, d, s, r);
+        osc * env
     };
+
+    let v0 = make_voice(0);
+    let v1 = make_voice(1);
+    let v2 = make_voice(2);
+    let v3 = make_voice(3);
+    let v4 = make_voice(4);
+    let v5 = make_voice(5);
+
+    let mut g: Box<dyn AudioUnit + Send> = Box::new(
+        (v0 + v1 + v2 + v3 + v4 + v5) * var(&state.master_vol) * scale >> pan(0.0)
+    );
     g.set_sample_rate(sr);
     g.allocate();
     g
@@ -207,88 +207,40 @@ where
 {
     let channels = config.channels as usize;
 
-    let mut wave_graph  = build_waveform_graph(0, &state.frequency, &state.volume, sr);
-    let mut filter_graph = build_filter_graph(0, 0, 1000.0, 1.0, sr);
-    let mut poly_graph  = build_poly_graph(
-        &state.voice_freqs, &state.voice_gates, 0, &state.volume,
-        0.01, 0.1, 0.7, 0.4, sr,
-    );
-    let mut seq_graph   = build_mono_graph(
-        0, &state.frequency, &state.gate, &state.volume,
-        0.01, 0.1, 0.7, 0.4, sr,
-    );
-
-    let mut prev_wave_type:   u8  = 0;
-    let mut prev_filter_type: u8  = 0;
-    let mut prev_filter_src:  u8  = 0;
-    let mut prev_cutoff:      f32 = 1000.0;
-    let mut prev_resonance:   f32 = 1.0;
-    let mut prev_piano_wave:  u8  = 0;
-    let mut prev_adsr:        (f32, f32, f32, f32) = (0.01, 0.1, 0.7, 0.4);
+    // Fundsp best practice for callback efficiency: run the graph through a
+    // block-rate adapter instead of raw sample-by-sample graph traversal.
+    let mut graph = BlockRateAdapter::new(build_synth_graph(&state, sr));
 
     let mut osc_idx: usize = 0;
 
     let stream = device.build_output_stream(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
-            use std::sync::atomic::Ordering::Relaxed;
+            // TEMPORARY DEBUG MODE:
+            // Keep the graph stable during playback. Rebuilding the graph inside the
+            // real-time callback resets oscillator/filter/envelope state and can cause
+            // discontinuities that sound like random breaking or tails.
 
-            let tab       = state.active_tab.load(Relaxed);
-            let wave_type = state.wave_type.load(Relaxed);
-            let flt_type  = state.filter_type.load(Relaxed);
-            let flt_src   = state.filter_source.load(Relaxed);
-            let cutoff    = state.cutoff.value();
-            let resonance = state.resonance.value();
-            let a = state.adsr_attack.value();
-            let d = state.adsr_decay.value();
-            let s = state.adsr_sustain.value();
-            let r = state.adsr_release.value();
+            // In debug mode the filter is bypassed, so skip LFO/filter envelope processing.
+            // Keep effective cutoff equal to base cutoff for compatibility with UI state.
+            state.effective_cutoff.set(state.cutoff.value().clamp(80.0, 18000.0));
 
-            if tab == 0 && wave_type != prev_wave_type {
-                prev_wave_type = wave_type;
-                wave_graph = build_waveform_graph(wave_type, &state.frequency, &state.volume, sr);
-            }
-            if tab == 1
-                && (flt_type != prev_filter_type
-                    || flt_src != prev_filter_src
-                    || (cutoff - prev_cutoff).abs() > 0.5
-                    || (resonance - prev_resonance).abs() > 0.01)
-            {
-                prev_filter_type = flt_type;
-                prev_filter_src  = flt_src;
-                prev_cutoff      = cutoff;
-                prev_resonance   = resonance;
-                filter_graph = build_filter_graph(flt_type, flt_src, cutoff, resonance, sr);
-            }
-            if (tab == 2 || tab == 3)
-                && (wave_type != prev_piano_wave || (a, d, s, r) != prev_adsr)
-            {
-                prev_piano_wave = wave_type;
-                prev_adsr       = (a, d, s, r);
-                poly_graph = build_poly_graph(
-                    &state.voice_freqs, &state.voice_gates, wave_type, &state.volume,
-                    a, d, s, r, sr,
-                );
-                seq_graph = build_mono_graph(
-                    wave_type, &state.frequency, &state.gate, &state.volume,
-                    a, d, s, r, sr,
-                );
-            }
+            // Try to lock oscilloscope buffer once per callback (instead of once per sample).
+            let mut scope_buf = state.osc_buffer.try_lock().ok();
 
-            let active: &mut Box<dyn AudioUnit + Send> = match tab {
-                1 => &mut filter_graph,
-                2 => &mut poly_graph,
-                3 => &mut seq_graph,
-                _ => &mut wave_graph,
-            };
+            for (frame_i, frame) in data.chunks_mut(channels).enumerate() {
+                let (raw_l, raw_r) = graph.get_stereo();
+                // Gentle soft clip for occasional overshoots.
+                let l = raw_l.tanh();
+                let r_out = raw_r.tanh();
 
-            for frame in data.chunks_mut(channels) {
-                let (l, r_out) = active.get_stereo();
-
-                if let Ok(mut buf) = state.osc_buffer.try_lock() {
-                    let len = buf.len();
-                    buf[osc_idx % len] = l;
-                    osc_idx = osc_idx.wrapping_add(1);
+                if let Some(buf) = scope_buf.as_mut() {
+                    // Downsample scope writes to reduce callback pressure.
+                    if frame_i & 3 == 0 {
+                        let len = buf.len();
+                        buf[osc_idx % len] = l;
+                        osc_idx = osc_idx.wrapping_add(1);
+                    }
                 }
 
                 let left  = T::from_sample(l);

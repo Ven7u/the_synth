@@ -1,4 +1,4 @@
-//! The Synth — interactive DSP learning app
+//! The Synth — unified MiniMoog-style synthesizer
 //! Run with: cargo run
 
 #![allow(clippy::precedence)]
@@ -7,20 +7,19 @@ mod audio;
 
 use audio::{AudioEngine, AudioState, VOICE_COUNT};
 use eframe::egui;
-use egui::{Color32, Painter, Pos2, Rect, Rounding, Sense, Stroke, Vec2};
+use egui::{Color32, Pos2, Rect, Rounding, Sense, Stroke, Vec2};
 use fundsp::prelude::midi_hz;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 fn main() -> eframe::Result {
     let engine = AudioEngine::new().expect("Failed to start audio");
-    let state = Arc::clone(&engine.state);
+    let state  = Arc::clone(&engine.state);
 
-    // Keep engine alive for the duration of the app
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([920.0, 620.0])
-            .with_title("The Synth — DSP Learning"),
+            .with_inner_size([1100.0, 740.0])
+            .with_title("The Synth"),
         ..Default::default()
     };
 
@@ -36,324 +35,95 @@ fn main() -> eframe::Result {
 // ---------------------------------------------------------------------------
 
 struct SynthApp {
-    audio: AudioEngine,          // keeps stream alive
+    _audio: AudioEngine,  // keeps cpal stream alive
     state: Arc<AudioState>,
-    active_tab: usize,
 
-    // Waveform tab local UI state
-    waveform_freq: f32,
-    waveform_vol: f32,
-    waveform_playing: bool,
+    // OSC bank
+    osc_wave:   [usize; 3],   // 0=sine 1=saw 2=square 3=triangle
+    osc_octave: [i32; 3],     // -2..+2
+    osc_detune: [f32; 3],     // -100..+100 cents
+    osc_vol:    [f32; 3],
 
-    // Filter tab local UI state
-    filter_cutoff: f32,
-    filter_q: f32,
+    // Noise
+    noise_vol: f32,
 
-    // Piano tab local UI state
-    piano_octave: i32,
-    /// MIDI notes currently held by keyboard keys (multiple at once = polyphony)
-    piano_held_midi: std::collections::HashSet<u8>,
-    /// Which MIDI note each voice slot is playing (None = voice is free / in release)
+    // LFO
+    lfo_rate:  f32,
+    lfo_depth: f32,
+    lfo_dest:  usize,         // 0=pitch 1=filter 2=amp
+
+    // Filter
+    filter_cutoff:     f32,
+    filter_q:          f32,
+    filter_env_amount: f32,
+    fenv_adsr: [f32; 4],
+
+    // Amp ADSR
+    amp_adsr: [f32; 4],
+
+    // Glide + master
+    glide_time: f32,
+    master_vol: f32,
+
+    // Keyboard
+    piano_octave:      i32,
+    piano_held_midi:   std::collections::HashSet<u8>,
     piano_voice_notes: [Option<u8>; VOICE_COUNT],
-    /// Rotates through slots for voice stealing when all are busy
-    piano_steal_idx: usize,
-    /// MIDI note currently held by mouse click (None if mouse not pressed)
-    piano_mouse_midi: Option<u8>,
-    adsr: [f32; 4], // attack, decay, sustain, release
+    piano_steal_idx:   usize,
+    piano_mouse_midi:  Option<u8>,
 
-    // Sequencer tab local UI state
-    seq_playing: bool,
-    seq_bpm: u32,
-    seq_steps: [bool; 8],
-    seq_notes: [u8; 8],   // MIDI note numbers
+    // Sequencer
+    seq_playing:      bool,
+    seq_bpm:          u32,
+    seq_steps:        [bool; 8],
+    seq_notes:        [u8; 8],
     seq_current_step: usize,
-    seq_selected_step: usize,
-    seq_last_tick: std::time::Instant,
+    seq_last_tick:    std::time::Instant,
+    seq_prev_midi:    Option<u8>,
 }
 
 impl SynthApp {
     fn new(state: Arc<AudioState>, audio: AudioEngine) -> Self {
-        // Pentatonic scale default pattern (C D E G A in octave 4)
-        let seq_notes = [60u8, 62, 64, 67, 69, 72, 67, 64];
         Self {
-            audio,
+            _audio: audio,
             state,
-            active_tab: 0,
-            waveform_freq: 440.0,
-            waveform_vol: 0.4,
-            waveform_playing: false,
-            filter_cutoff: 1000.0,
-            filter_q: 1.0,
-            piano_octave: 4,
-            piano_held_midi: std::collections::HashSet::new(),
+            osc_wave:   [0, 0, 2],  // saw, saw, tri
+            osc_octave: [0, 0, 0],
+            osc_detune: [0.0, 0.0, 0.0],
+            osc_vol:    [0.7, 0.5, 0.0],
+            noise_vol:  0.0,
+            lfo_rate:   2.0,
+            lfo_depth:  0.0,
+            lfo_dest:   1,
+            filter_cutoff:     3000.0,
+            filter_q:          1.0,
+            filter_env_amount: 0.3,
+            fenv_adsr: [0.01, 0.3, 0.0, 0.2],
+            amp_adsr:  [0.01, 0.15, 0.7, 0.4],
+            glide_time: 0.0,
+            master_vol: 0.5,
+            piano_octave:      4,
+            piano_held_midi:   std::collections::HashSet::new(),
             piano_voice_notes: [None; VOICE_COUNT],
-            piano_steal_idx: 0,
-            piano_mouse_midi: None,
-            adsr: [0.01, 0.1, 0.7, 0.4],
-            seq_playing: false,
-            seq_bpm: 120,
-            seq_steps: [true, false, true, false, true, true, false, true],
-            seq_notes,
+            piano_steal_idx:   0,
+            piano_mouse_midi:  None,
+            seq_playing:      false,
+            seq_bpm:          120,
+            seq_steps:        [true, false, true, false, true, true, false, true],
+            seq_notes:        [60, 62, 64, 67, 69, 72, 67, 64],
             seq_current_step: 0,
-            seq_selected_step: 0,
-            seq_last_tick: std::time::Instant::now(),
+            seq_last_tick:    std::time::Instant::now(),
+            seq_prev_midi:    None,
         }
     }
 }
 
-impl eframe::App for SynthApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Advance sequencer clock
-        self.tick_sequencer(ctx);
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            // Tab bar
-            ui.horizontal(|ui| {
-                for (i, label) in ["🌊 Waveform", "🎛 Filter", "🎹 Piano", "🥁 Sequencer"]
-                    .iter()
-                    .enumerate()
-                {
-                    if ui.selectable_label(self.active_tab == i, *label).clicked() {
-                        self.active_tab = i;
-                        self.state.active_tab.store(i as u8, Ordering::Relaxed);
-                        // Stop any playing note when switching tabs
-                        self.state.gate.set(0.0);
-                        self.waveform_playing = false;
-                    }
-                }
-            });
-            ui.separator();
-
-            match self.active_tab {
-                0 => self.ui_waveform(ui),
-                1 => self.ui_filter(ui),
-                2 => self.ui_piano(ui),
-                3 => self.ui_sequencer(ui),
-                _ => {}
-            }
-        });
-
-        // Request continuous repaints so oscilloscope updates
-        ctx.request_repaint();
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Oscilloscope widget (shared across tabs)
-// ---------------------------------------------------------------------------
-
-fn draw_oscilloscope(ui: &mut egui::Ui, buffer: &[f32], height: f32) {
-    let (resp, painter) = ui.allocate_painter(
-        Vec2::new(ui.available_width(), height),
-        Sense::hover(),
-    );
-    let rect = resp.rect;
-    painter.rect_filled(rect, Rounding::same(4.0), Color32::from_rgb(10, 15, 20));
-
-    if buffer.is_empty() { return; }
-
-    let mid_y = rect.center().y;
-    let half_h = rect.height() * 0.45;
-    let step = rect.width() / buffer.len() as f32;
-
-    let points: Vec<Pos2> = buffer
-        .iter()
-        .enumerate()
-        .map(|(i, &s)| Pos2::new(rect.left() + i as f32 * step, mid_y - s * half_h))
-        .collect();
-
-    // Draw zero line
-    painter.line_segment(
-        [Pos2::new(rect.left(), mid_y), Pos2::new(rect.right(), mid_y)],
-        Stroke::new(1.0, Color32::from_rgb(30, 40, 50)),
-    );
-
-    // Draw waveform
-    for w in points.windows(2) {
-        painter.line_segment([w[0], w[1]], Stroke::new(1.5, Color32::from_rgb(0, 220, 160)));
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Tab 0 — Waveform explorer
-// ---------------------------------------------------------------------------
-
-const WAVEFORM_LABELS: &[&str] = &["Sine", "Saw", "Square", "Triangle"];
-
-impl SynthApp {
-    fn ui_waveform(&mut self, ui: &mut egui::Ui) {
-        ui.label("Select a waveform to hear and see how its shape differs.");
-        ui.add_space(8.0);
-
-        // Waveform buttons
-        ui.horizontal(|ui| {
-            let current = self.state.wave_type.load(Ordering::Relaxed) as usize;
-            for (i, label) in WAVEFORM_LABELS.iter().enumerate() {
-                if ui.selectable_label(current == i, *label).clicked() {
-                    self.state.wave_type.store(i as u8, Ordering::Relaxed);
-                }
-            }
-        });
-
-        ui.add_space(8.0);
-
-        // Frequency slider
-        ui.horizontal(|ui| {
-            ui.label("Frequency:");
-            if ui.add(egui::Slider::new(&mut self.waveform_freq, 55.0..=880.0)
-                .text("Hz")
-                .logarithmic(true))
-                .changed()
-            {
-                self.state.frequency.set(self.waveform_freq);
-            }
-        });
-
-        // Volume slider
-        ui.horizontal(|ui| {
-            ui.label("Volume:    ");
-            if ui.add(egui::Slider::new(&mut self.waveform_vol, 0.0..=1.0)).changed() {
-                self.state.volume.set(self.waveform_vol);
-            }
-        });
-
-        ui.add_space(8.0);
-
-        // Play/stop toggle
-        let btn_label = if self.waveform_playing { "⏹ Stop" } else { "▶ Play" };
-        if ui.button(btn_label).clicked() {
-            self.waveform_playing = !self.waveform_playing;
-            self.state.gate.set(if self.waveform_playing { 1.0 } else { 0.0 });
-            self.state.frequency.set(self.waveform_freq);
-        }
-
-        ui.add_space(12.0);
-
-        // Oscilloscope
-        ui.label("Oscilloscope:");
-        let buf = self.state.osc_buffer.lock().unwrap().clone();
-        draw_oscilloscope(ui, &buf, 200.0);
-
-        ui.add_space(8.0);
-        ui.label(egui::RichText::new(
-            "💡 Tip: Sine = pure tone (one frequency). Saw/Square/Triangle have harmonics — \
-             extra frequencies that give them their characteristic buzzy or hollow sound.",
-        ).weak());
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Tab 1 — Filter explorer
+// Voice management
 // ---------------------------------------------------------------------------
 
 impl SynthApp {
-    fn ui_filter(&mut self, ui: &mut egui::Ui) {
-        ui.label("A filter removes some frequencies and passes others. Drag the sliders to hear the effect.");
-        ui.add_space(8.0);
-
-        // Source selector
-        ui.horizontal(|ui| {
-            ui.label("Source:");
-            let src = self.state.filter_source.load(Ordering::Relaxed);
-            if ui.selectable_label(src == 0, "Saw drone").clicked() {
-                self.state.filter_source.store(0, Ordering::Relaxed);
-            }
-            if ui.selectable_label(src == 1, "Pink noise").clicked() {
-                self.state.filter_source.store(1, Ordering::Relaxed);
-            }
-        });
-
-        // Filter type selector
-        ui.horizontal(|ui| {
-            ui.label("Filter: ");
-            let ft = self.state.filter_type.load(Ordering::Relaxed);
-            if ui.selectable_label(ft == 0, "Lowpass").clicked() {
-                self.state.filter_type.store(0, Ordering::Relaxed);
-            }
-            if ui.selectable_label(ft == 1, "Highpass").clicked() {
-                self.state.filter_type.store(1, Ordering::Relaxed);
-            }
-            if ui.selectable_label(ft == 2, "Bandpass").clicked() {
-                self.state.filter_type.store(2, Ordering::Relaxed);
-            }
-        });
-
-        ui.add_space(8.0);
-
-        // Cutoff slider (logarithmic — frequency perception is logarithmic)
-        ui.horizontal(|ui| {
-            ui.label("Cutoff:    ");
-            if ui.add(egui::Slider::new(&mut self.filter_cutoff, 80.0..=12000.0)
-                .text("Hz")
-                .logarithmic(true))
-                .changed()
-            {
-                self.state.cutoff.set(self.filter_cutoff);
-            }
-        });
-
-        // Resonance / Q slider
-        ui.horizontal(|ui| {
-            ui.label("Resonance:");
-            if ui.add(egui::Slider::new(&mut self.filter_q, 0.5..=20.0)
-                .text("Q")
-                .logarithmic(true))
-                .changed()
-            {
-                self.state.resonance.set(self.filter_q);
-            }
-        });
-
-        ui.add_space(12.0);
-
-        let buf = self.state.osc_buffer.lock().unwrap().clone();
-        draw_oscilloscope(ui, &buf, 200.0);
-
-        ui.add_space(8.0);
-        ui.label(egui::RichText::new(
-            "💡 Tip: Lowpass = keeps bass, removes treble. \
-             Highpass = keeps treble, removes bass. \
-             High Q adds a resonant peak at the cutoff frequency.",
-        ).weak());
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Tab 2 — Piano keyboard
-// ---------------------------------------------------------------------------
-
-// White key semitone offsets (C D E F G A B) repeated for drawing 2 octaves
-const WHITE_SEMITONES: &[i32] = &[0, 2, 4, 5, 7, 9, 11];
-// Black key semitone offsets per white-key slot (None = no black key at that gap)
-const BLACK_SEMITONES: &[Option<i32>] = &[
-    Some(1), Some(3), None, Some(6), Some(8), Some(10), None,
-];
-
-// Flat keyboard map: (key, semitone-offset-from-octave-base)
-//   a s d f g h j k l  →  C D E F G A B C D  (white keys, k/l wrap to next octave)
-//   w e   t y u        →  C# D# _ F# G# A#   (black keys)
-const KEY_MAP: &[(egui::Key, i32)] = &[
-    (egui::Key::A, 0),   // C
-    (egui::Key::W, 1),   // C#
-    (egui::Key::S, 2),   // D
-    (egui::Key::E, 3),   // D#
-    (egui::Key::D, 4),   // E
-    (egui::Key::F, 5),   // F
-    (egui::Key::T, 6),   // F#
-    (egui::Key::G, 7),   // G
-    (egui::Key::Y, 8),   // G#
-    (egui::Key::H, 9),   // A
-    (egui::Key::U, 10),  // A#
-    (egui::Key::J, 11),  // B
-    (egui::Key::K, 12),  // C (next octave)
-    (egui::Key::L, 14),  // D (next octave)
-];
-
-impl SynthApp {
-    /// Assign a free voice slot to this MIDI note and trigger it.
-    /// If all slots are busy, steal the oldest one (round-robin).
     fn voice_on(&mut self, midi: u8) {
-        // Don't double-trigger an already-playing note
         if self.piano_voice_notes.iter().any(|&n| n == Some(midi)) { return; }
         let slot = self.piano_voice_notes.iter().position(|n| n.is_none())
             .unwrap_or_else(|| {
@@ -366,7 +136,6 @@ impl SynthApp {
         self.state.voice_gates[slot].set(1.0);
     }
 
-    /// Trigger the release phase of the voice holding this MIDI note.
     fn voice_off(&mut self, midi: u8) {
         for (slot, note) in self.piano_voice_notes.iter_mut().enumerate() {
             if *note == Some(midi) {
@@ -376,27 +145,350 @@ impl SynthApp {
             }
         }
     }
+}
 
-    fn ui_piano(&mut self, ui: &mut egui::Ui) {
+// ---------------------------------------------------------------------------
+// Sequencer tick
+// ---------------------------------------------------------------------------
+
+impl SynthApp {
+    fn tick_sequencer(&mut self, ctx: &egui::Context) {
+        if !self.seq_playing { return; }
+        let step_dur = std::time::Duration::from_millis(60_000 / self.seq_bpm as u64 / 2);
+        if self.seq_last_tick.elapsed() < step_dur { return; }
+        self.seq_last_tick = std::time::Instant::now();
+
+        // Release previous step note
+        if let Some(m) = self.seq_prev_midi.take() { self.voice_off(m); }
+
+        self.seq_current_step = (self.seq_current_step + 1) % 8;
+        if self.seq_steps[self.seq_current_step] {
+            let midi = self.seq_notes[self.seq_current_step];
+            self.voice_on(midi);
+            self.seq_prev_midi = Some(midi);
+        }
+        ctx.request_repaint_after(step_dur);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Main update
+// ---------------------------------------------------------------------------
+
+impl eframe::App for SynthApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.tick_sequencer(ctx);
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            // Row 1: OSC bank + mixer
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("OSCILLATORS").strong().small());
+            });
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.columns(4, |cols| {
+                    self.ui_osc_panel(&mut cols[0], 0);
+                    self.ui_osc_panel(&mut cols[1], 1);
+                    self.ui_osc_panel(&mut cols[2], 2);
+                    self.ui_mixer_panel(&mut cols[3]);
+                });
+            });
+
+            ui.add_space(4.0);
+
+            // Row 2: LFO + Filter + Filter ADSR + Amp ADSR
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("MODULATION & FILTER").strong().small());
+            });
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.columns(4, |cols| {
+                    self.ui_lfo_panel(&mut cols[0]);
+                    self.ui_filter_panel(&mut cols[1]);
+                    self.ui_adsr_panel(&mut cols[2], "Filter Env", &mut [0usize, 1, 2, 3], true);
+                    self.ui_adsr_panel(&mut cols[3], "Amp Env", &mut [0usize, 1, 2, 3], false);
+                });
+            });
+
+            ui.add_space(4.0);
+
+            // Row 3: Keyboard + Sequencer
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("KEYBOARD & SEQUENCER").strong().small());
+            });
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.columns(2, |cols| {
+                    self.ui_keyboard_panel(&mut cols[0]);
+                    self.ui_sequencer_panel(&mut cols[1]);
+                });
+            });
+
+            ui.add_space(4.0);
+
+            // Oscilloscope footer
+            let buf = self.state.osc_buffer.lock().unwrap().clone();
+            draw_oscilloscope(ui, &buf, 70.0);
+        });
+
+        ctx.request_repaint();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// OSC panel
+// ---------------------------------------------------------------------------
+
+const WAVE_LABELS: &[&str] = &["Saw", "Sqr", "Tri"];
+
+impl SynthApp {
+    fn ui_osc_panel(&mut self, ui: &mut egui::Ui, i: usize) {
+        ui.label(egui::RichText::new(format!("OSC {}", i + 1)).strong());
+
         // Waveform selector
         ui.horizontal(|ui| {
-            ui.label("Waveform:");
-            let current = self.state.wave_type.load(Ordering::Relaxed) as usize;
-            for (i, label) in WAVEFORM_LABELS.iter().enumerate() {
-                if ui.selectable_label(current == i, *label).clicked() {
-                    self.state.wave_type.store(i as u8, Ordering::Relaxed);
+            for (w, &label) in WAVE_LABELS.iter().enumerate() {
+                if ui.selectable_label(self.osc_wave[i] == w, label).clicked() {
+                    self.osc_wave[i] = w;
+                    self.state.osc_wave[i].store(w as u8, Ordering::Relaxed);
                 }
             }
-            ui.separator();
+        });
+
+        // Octave
+        ui.horizontal(|ui| {
+            ui.label("Oct:");
+            if ui.small_button("−").clicked() && self.osc_octave[i] > -2 {
+                self.osc_octave[i] -= 1;
+                self.update_freq_mult(i);
+            }
+            ui.label(format!("{:+}", self.osc_octave[i]));
+            if ui.small_button("+").clicked() && self.osc_octave[i] < 2 {
+                self.osc_octave[i] += 1;
+                self.update_freq_mult(i);
+            }
+        });
+
+        // Detune
+        ui.horizontal(|ui| {
+            ui.label("Det:");
+            if ui.add(egui::Slider::new(&mut self.osc_detune[i], -100.0..=100.0)
+                .text("¢").fixed_decimals(0))
+                .changed()
+            {
+                self.update_freq_mult(i);
+            }
+        });
+    }
+
+    fn update_freq_mult(&self, i: usize) {
+        let oct   = self.osc_octave[i] as f32;
+        let cents = self.osc_detune[i];
+        let mult  = 2_f32.powf(oct + cents / 1200.0);
+        self.state.osc_freq_mult[i].set(mult);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mixer panel
+// ---------------------------------------------------------------------------
+
+impl SynthApp {
+    fn ui_mixer_panel(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("MIXER").strong());
+        ui.horizontal(|ui| {
+            for i in 0..3 {
+                ui.vertical(|ui| {
+                    ui.set_width(36.0);
+                    if ui.add(egui::Slider::new(&mut self.osc_vol[i], 0.0..=1.0)
+                        .vertical()
+                        .text(format!("{}", i + 1)))
+                        .changed()
+                    {
+                        self.state.osc_vol[i].set(self.osc_vol[i]);
+                    }
+                });
+            }
+            ui.vertical(|ui| {
+                ui.set_width(36.0);
+                if ui.add(egui::Slider::new(&mut self.noise_vol, 0.0..=1.0)
+                    .vertical()
+                    .text("N"))
+                    .changed()
+                {
+                    self.state.noise_vol.set(self.noise_vol);
+                }
+            });
+        });
+
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label("Vol:");
+            if ui.add(egui::Slider::new(&mut self.master_vol, 0.0..=1.0)).changed() {
+                self.state.master_vol.set(self.master_vol);
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Glide:");
+            if ui.add(egui::Slider::new(&mut self.glide_time, 0.0..=0.5).text("s")).changed() {
+                self.state.glide_time.set(self.glide_time);
+            }
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LFO panel
+// ---------------------------------------------------------------------------
+
+impl SynthApp {
+    fn ui_lfo_panel(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("LFO").strong());
+        ui.horizontal(|ui| {
+            ui.label("Rate:");
+            if ui.add(egui::Slider::new(&mut self.lfo_rate, 0.1..=20.0)
+                .text("Hz").logarithmic(true))
+                .changed()
+            {
+                self.state.lfo_rate.set(self.lfo_rate);
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Depth:");
+            if ui.add(egui::Slider::new(&mut self.lfo_depth, 0.0..=1.0)).changed() {
+                self.state.lfo_depth.set(self.lfo_depth);
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("→");
+            for (d, label) in [(0usize, "Pitch"), (1, "Filter"), (2, "Amp")] {
+                if ui.selectable_label(self.lfo_dest == d, label).clicked() {
+                    self.lfo_dest = d;
+                    self.state.lfo_dest.store(d as u8, Ordering::Relaxed);
+                }
+            }
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Filter panel
+// ---------------------------------------------------------------------------
+
+impl SynthApp {
+    fn ui_filter_panel(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("FILTER").strong());
+        ui.horizontal(|ui| {
+            ui.label("Cut:");
+            if ui.add(egui::Slider::new(&mut self.filter_cutoff, 80.0..=18000.0)
+                .text("Hz").logarithmic(true))
+                .changed()
+            {
+                self.state.cutoff.set(self.filter_cutoff);
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Res:");
+            if ui.add(egui::Slider::new(&mut self.filter_q, 0.5..=20.0)
+                .text("Q").logarithmic(true))
+                .changed()
+            {
+                self.state.resonance.set(self.filter_q);
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Env:");
+            if ui.add(egui::Slider::new(&mut self.filter_env_amount, 0.0..=1.0)).changed() {
+                self.state.filter_env_amount.set(self.filter_env_amount);
+            }
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ADSR panel (shared for filter env and amp env)
+// ---------------------------------------------------------------------------
+
+impl SynthApp {
+    fn ui_adsr_panel(&mut self, ui: &mut egui::Ui, title: &str, _slots: &mut [usize; 4], is_filter: bool) {
+        ui.label(egui::RichText::new(title).strong());
+
+        let adsr = if is_filter { &mut self.fenv_adsr } else { &mut self.amp_adsr };
+        let labels = ["A", "D", "S", "R"];
+        let ranges: [std::ops::RangeInclusive<f32>; 4] = [
+            0.001..=2.0,
+            0.001..=2.0,
+            0.0..=1.0,
+            0.001..=4.0,
+        ];
+
+        ui.horizontal(|ui| {
+            for i in 0..4 {
+                ui.vertical(|ui| {
+                    ui.set_width(28.0);
+                    let log = i != 2;
+                    let changed = ui.add(
+                        egui::Slider::new(&mut adsr[i], ranges[i].clone())
+                            .vertical()
+                            .logarithmic(log)
+                            .text(labels[i])
+                    ).changed();
+                    if changed {
+                        let v = adsr[i];
+                        if is_filter {
+                            match i {
+                                0 => self.state.fenv_attack.set(v),
+                                1 => self.state.fenv_decay.set(v),
+                                2 => self.state.fenv_sustain.set(v),
+                                _ => self.state.fenv_release.set(v),
+                            }
+                        } else {
+                            match i {
+                                0 => self.state.adsr_attack.set(v),
+                                1 => self.state.adsr_decay.set(v),
+                                2 => self.state.adsr_sustain.set(v),
+                                _ => self.state.adsr_release.set(v),
+                            }
+                        }
+                    }
+                });
+            }
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard panel
+// ---------------------------------------------------------------------------
+
+const WHITE_SEMITONES: &[i32]         = &[0, 2, 4, 5, 7, 9, 11];
+const BLACK_SEMITONES: &[Option<i32>] = &[Some(1), Some(3), None, Some(6), Some(8), Some(10), None];
+
+const KEY_MAP: &[(egui::Key, i32)] = &[
+    (egui::Key::A, 0),
+    (egui::Key::W, 1),
+    (egui::Key::S, 2),
+    (egui::Key::E, 3),
+    (egui::Key::D, 4),
+    (egui::Key::F, 5),
+    (egui::Key::T, 6),
+    (egui::Key::G, 7),
+    (egui::Key::Y, 8),
+    (egui::Key::H, 9),
+    (egui::Key::U, 10),
+    (egui::Key::J, 11),
+    (egui::Key::K, 12),
+    (egui::Key::L, 14),
+];
+
+impl SynthApp {
+    fn ui_keyboard_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
             ui.label("Octave:");
             if ui.button("−").clicked() && self.piano_octave > 1 { self.piano_octave -= 1; }
             ui.label(format!("{}", self.piano_octave));
             if ui.button("+").clicked() && self.piano_octave < 7 { self.piano_octave += 1; }
+            ui.label(egui::RichText::new("  a–l = white keys, w e t y u = sharps").weak().small());
         });
 
-        ui.add_space(8.0);
-
-        // Collect every key currently held this frame
+        // Keyboard input
         let mut current_held = std::collections::HashSet::<u8>::new();
         ui.input(|inp| {
             for &(key, semitone) in KEY_MAP {
@@ -405,70 +497,23 @@ impl SynthApp {
                 }
             }
         });
-
-        // Newly pressed keys → trigger voice
         for &midi in &current_held {
-            if !self.piano_held_midi.contains(&midi) {
-                self.voice_on(midi);
-            }
+            if !self.piano_held_midi.contains(&midi) { self.voice_on(midi); }
         }
-        // Released keys → release voice
         let released: Vec<u8> = self.piano_held_midi.iter()
-            .filter(|&&m| !current_held.contains(&m))
-            .copied().collect();
+            .filter(|&&m| !current_held.contains(&m)).copied().collect();
         for midi in released { self.voice_off(midi); }
-
         self.piano_held_midi = current_held;
 
-        // Draw the piano keyboard
         self.draw_piano(ui);
-
-        ui.add_space(8.0);
-
-        // ADSR knobs (as sliders — simpler than custom knob widgets)
-        ui.label("Envelope (ADSR):");
-        ui.horizontal(|ui| {
-            let labels = ["Attack", "Decay", "Sustain", "Release"];
-            let ranges = [
-                0.001_f32..=2.0,
-                0.001..=2.0,
-                0.0..=1.0,
-                0.001..=4.0,
-            ];
-            for (i, (label, range)) in labels.iter().zip(ranges).enumerate() {
-                ui.vertical(|ui| {
-                    ui.set_width(90.0);
-                    ui.label(*label);
-                    let log = i != 2; // sustain is linear
-                    if ui.add(
-                        egui::Slider::new(&mut self.adsr[i], range)
-                            .vertical()
-                            .logarithmic(log)
-                    ).changed() {
-                        match i {
-                            0 => self.state.adsr_attack.set(self.adsr[0]),
-                            1 => self.state.adsr_decay.set(self.adsr[1]),
-                            2 => self.state.adsr_sustain.set(self.adsr[2]),
-                            _ => self.state.adsr_release.set(self.adsr[3]),
-                        }
-                    }
-                });
-            }
-        });
-
-        ui.add_space(8.0);
-        ui.label(egui::RichText::new(
-            "💡 Hold multiple keys at once for chords! a–l = white keys, w e t y u = sharps. \
-             Mouse click/drag also works. Up to 6 voices play simultaneously.",
-        ).weak());
     }
 
     fn draw_piano(&mut self, ui: &mut egui::Ui) {
-        let white_w = 36.0_f32;
-        let white_h = 120.0_f32;
-        let black_w = 22.0_f32;
-        let black_h = 74.0_f32;
-        let num_white = 14; // 2 octaves
+        let white_w = 32.0_f32;
+        let white_h = 90.0_f32;
+        let black_w = 20.0_f32;
+        let black_h = 56.0_f32;
+        let num_white = 14;
         let total_width = white_w * num_white as f32;
 
         let (resp, painter) = ui.allocate_painter(
@@ -476,12 +521,9 @@ impl SynthApp {
             Sense::click_and_drag(),
         );
         let origin = resp.rect.left_top();
-
         let pointer_pos = resp.interact_pointer_pos();
-
         let mut clicked_midi: Option<u8> = None;
 
-        // Draw white keys
         for oct in 0..2_i32 {
             for (wi, &semi) in WHITE_SEMITONES.iter().enumerate() {
                 let x = (oct * 7 + wi as i32) as f32 * white_w;
@@ -490,24 +532,13 @@ impl SynthApp {
                     Vec2::new(white_w - 2.0, white_h - 2.0),
                 );
                 let midi = ((self.piano_octave + oct) * 12 + semi) as u8;
-                let is_pressed = self.piano_held_midi.contains(&midi)
-                    || self.piano_mouse_midi == Some(midi);
-
-                let fill = if is_pressed {
-                    Color32::from_rgb(100, 180, 255)
-                } else {
-                    Color32::WHITE
-                };
+                let pressed = self.piano_held_midi.contains(&midi) || self.piano_mouse_midi == Some(midi);
+                let fill = if pressed { Color32::from_rgb(100, 180, 255) } else { Color32::WHITE };
                 painter.rect_filled(rect, Rounding::same(3.0), fill);
                 painter.rect_stroke(rect, Rounding::same(3.0), Stroke::new(1.0, Color32::DARK_GRAY));
-
-                if let Some(pos) = pointer_pos {
-                    if rect.contains(pos) { clicked_midi = Some(midi); }
-                }
+                if let Some(pos) = pointer_pos { if rect.contains(pos) { clicked_midi = Some(midi); } }
             }
         }
-
-        // Draw black keys (on top)
         for oct in 0..2_i32 {
             for (bi, semi_opt) in BLACK_SEMITONES.iter().enumerate() {
                 let Some(semi) = semi_opt else { continue };
@@ -517,23 +548,13 @@ impl SynthApp {
                     Vec2::new(black_w, black_h),
                 );
                 let midi = ((self.piano_octave + oct) * 12 + semi) as u8;
-                let is_pressed = self.piano_held_midi.contains(&midi)
-                    || self.piano_mouse_midi == Some(midi);
-
-                let fill = if is_pressed {
-                    Color32::from_rgb(60, 120, 200)
-                } else {
-                    Color32::BLACK
-                };
+                let pressed = self.piano_held_midi.contains(&midi) || self.piano_mouse_midi == Some(midi);
+                let fill = if pressed { Color32::from_rgb(60, 120, 200) } else { Color32::BLACK };
                 painter.rect_filled(rect, Rounding::same(2.0), fill);
-
-                if let Some(pos) = pointer_pos {
-                    if rect.contains(pos) { clicked_midi = Some(midi); }
-                }
+                if let Some(pos) = pointer_pos { if rect.contains(pos) { clicked_midi = Some(midi); } }
             }
         }
 
-        // Handle mouse press/release — supports sliding between keys
         if resp.is_pointer_button_down_on() {
             if let Some(midi) = clicked_midi {
                 if self.piano_mouse_midi != Some(midi) {
@@ -549,44 +570,24 @@ impl SynthApp {
 }
 
 // ---------------------------------------------------------------------------
-// Tab 3 — Step sequencer
+// Sequencer panel
 // ---------------------------------------------------------------------------
 
-const SEQ_SCALE: &[u8] = &[60, 62, 64, 67, 69, 72, 74, 76]; // C pentatonic
+const SEQ_SCALE: &[u8] = &[60, 62, 64, 67, 69, 72, 74, 76];
 
 impl SynthApp {
-    fn tick_sequencer(&mut self, ctx: &egui::Context) {
-        if !self.seq_playing { return; }
-
-        let step_dur = std::time::Duration::from_millis(60_000 / self.seq_bpm as u64 / 2);
-        if self.seq_last_tick.elapsed() < step_dur { return; }
-        self.seq_last_tick = std::time::Instant::now();
-
-        self.seq_current_step = (self.seq_current_step + 1) % 8;
-        if self.seq_steps[self.seq_current_step] {
-            let midi = self.seq_notes[self.seq_current_step];
-            self.state.frequency.set(midi_hz(midi as f64) as f32);
-            self.state.gate.set(1.0);
-        } else {
-            self.state.gate.set(0.0);
-        }
-
-        ctx.request_repaint_after(step_dur);
-    }
-
-    fn ui_sequencer(&mut self, ui: &mut egui::Ui) {
-        // Transport controls
+    fn ui_sequencer_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let btn = if self.seq_playing { "⏹ Stop" } else { "▶ Play" };
             if ui.button(btn).clicked() {
                 self.seq_playing = !self.seq_playing;
-                if !self.seq_playing { self.state.gate.set(0.0); }
+                if !self.seq_playing {
+                    if let Some(m) = self.seq_prev_midi.take() { self.voice_off(m); }
+                }
             }
-            ui.separator();
             ui.label("BPM:");
             ui.add(egui::Slider::new(&mut self.seq_bpm, 40..=200));
-            ui.separator();
-            if ui.button("🎲 Randomize").clicked() {
+            if ui.button("🎲").clicked() {
                 use std::collections::hash_map::DefaultHasher;
                 use std::hash::{Hash, Hasher};
                 let mut h = DefaultHasher::new();
@@ -599,41 +600,30 @@ impl SynthApp {
             }
         });
 
-        ui.add_space(12.0);
-        ui.label("Steps (click to toggle on/off, ▲▼ to change pitch):");
-        ui.add_space(6.0);
-
-        // Step grid
+        ui.add_space(4.0);
         ui.horizontal(|ui| {
             for i in 0..8 {
                 ui.vertical(|ui| {
-                    ui.set_width(80.0);
-
-                    // Pitch up/down — find current position in SEQ_SCALE, then step
+                    ui.set_width(52.0);
                     if ui.small_button("▲").clicked() {
                         let pos = SEQ_SCALE.iter().position(|&n| n == self.seq_notes[i]).unwrap_or(0);
                         self.seq_notes[i] = SEQ_SCALE[(pos + 1).min(SEQ_SCALE.len() - 1)];
                     }
+                    ui.label(egui::RichText::new(midi_note_name(self.seq_notes[i])).monospace().small());
 
-                    // Note name
-                    let note_name = midi_note_name(self.seq_notes[i]);
-                    ui.label(egui::RichText::new(note_name).monospace());
-
-                    // Step toggle button — highlighted when active step
                     let is_current = self.seq_playing && self.seq_current_step == i;
                     let is_on = self.seq_steps[i];
-                    let (fill, stroke) = if is_current {
-                        (Color32::from_rgb(255, 200, 50), Stroke::new(2.0, Color32::WHITE))
+                    let fill = if is_current {
+                        Color32::from_rgb(255, 200, 50)
                     } else if is_on {
-                        (Color32::from_rgb(0, 180, 120), Stroke::new(1.0, Color32::WHITE))
+                        Color32::from_rgb(0, 180, 120)
                     } else {
-                        (Color32::from_rgb(40, 40, 50), Stroke::new(1.0, Color32::GRAY))
+                        Color32::from_rgb(40, 40, 55)
                     };
-
-                    let btn_size = Vec2::splat(50.0);
-                    let (r, painter) = ui.allocate_painter(btn_size, Sense::click());
-                    painter.rect_filled(r.rect, Rounding::same(6.0), fill);
-                    painter.rect_stroke(r.rect, Rounding::same(6.0), stroke);
+                    let (r, painter) = ui.allocate_painter(Vec2::splat(40.0), Sense::click());
+                    painter.rect_filled(r.rect, Rounding::same(5.0), fill);
+                    painter.rect_stroke(r.rect, Rounding::same(5.0),
+                        Stroke::new(1.0, if is_current { Color32::WHITE } else { Color32::GRAY }));
                     if r.clicked() { self.seq_steps[i] = !self.seq_steps[i]; }
 
                     if ui.small_button("▼").clicked() {
@@ -643,13 +633,35 @@ impl SynthApp {
                 });
             }
         });
+    }
+}
 
-        ui.add_space(8.0);
-        ui.label(egui::RichText::new(
-            "💡 A step sequencer triggers notes at a fixed tempo. \
-             Each lit step plays its note; dark steps are silent. \
-             This is how drum machines and bassline synths work.",
-        ).weak());
+// ---------------------------------------------------------------------------
+// Oscilloscope
+// ---------------------------------------------------------------------------
+
+fn draw_oscilloscope(ui: &mut egui::Ui, buffer: &[f32], height: f32) {
+    let (resp, painter) = ui.allocate_painter(
+        Vec2::new(ui.available_width(), height),
+        Sense::hover(),
+    );
+    let rect = resp.rect;
+    painter.rect_filled(rect, Rounding::same(4.0), Color32::from_rgb(10, 15, 20));
+    if buffer.is_empty() { return; }
+
+    let mid_y  = rect.center().y;
+    let half_h = rect.height() * 0.45;
+    let step   = rect.width() / buffer.len() as f32;
+
+    painter.line_segment(
+        [Pos2::new(rect.left(), mid_y), Pos2::new(rect.right(), mid_y)],
+        Stroke::new(1.0, Color32::from_rgb(30, 40, 50)),
+    );
+    let points: Vec<Pos2> = buffer.iter().enumerate()
+        .map(|(i, &s)| Pos2::new(rect.left() + i as f32 * step, mid_y - s * half_h))
+        .collect();
+    for w in points.windows(2) {
+        painter.line_segment([w[0], w[1]], Stroke::new(1.5, Color32::from_rgb(0, 220, 160)));
     }
 }
 
@@ -659,18 +671,9 @@ impl SynthApp {
 
 fn midi_note_name(midi: u8) -> &'static str {
     match midi % 12 {
-        0  => "C",
-        1  => "C#",
-        2  => "D",
-        3  => "D#",
-        4  => "E",
-        5  => "F",
-        6  => "F#",
-        7  => "G",
-        8  => "G#",
-        9  => "A",
-        10 => "A#",
-        11 => "B",
+        0  => "C",  1  => "C#", 2  => "D",  3  => "D#",
+        4  => "E",  5  => "F",  6  => "F#", 7  => "G",
+        8  => "G#", 9  => "A",  10 => "A#", 11 => "B",
         _  => "?",
     }
 }
