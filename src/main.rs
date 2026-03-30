@@ -136,6 +136,11 @@ impl SynthApp {
             });
         self.piano_voice_notes[slot] = Some(midi);
         self.state.voice_freqs[slot].set(midi_hz(midi as f64) as f32);
+        // Stamp the time just before setting the gate — the audio callback will
+        // measure how long it takes to reach this note.
+        if let Ok(mut t) = self.state.note_on_time.lock() {
+            *t = Some(std::time::Instant::now());
+        }
         self.state.voice_gates[slot].set(1.0);
     }
 
@@ -225,6 +230,9 @@ impl eframe::App for SynthApp {
             });
 
             ui.add_space(4.0);
+
+            // Latency indicator
+            draw_latency_bar(ui, &self.state, self.amp_adsr[0]);
 
             // Oscilloscope footer
             let buf = self.state.osc_buffer.lock().unwrap().clone();
@@ -654,6 +662,60 @@ impl SynthApp {
             }
         });
     }
+}
+
+// ---------------------------------------------------------------------------
+// Latency indicator
+// ---------------------------------------------------------------------------
+
+fn draw_latency_bar(ui: &mut egui::Ui, state: &AudioState, attack_s: f32) {
+    use std::sync::atomic::Ordering;
+
+    let sr          = state.sample_rate.load(Ordering::Relaxed);
+    let frames      = state.buffer_frames.load(Ordering::Relaxed);
+    let measured_us = state.last_latency_us.load(Ordering::Relaxed);
+
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Latency:").weak().small());
+
+        if sr == 0 || frames == 0 {
+            ui.label(egui::RichText::new("measuring…").weak().small().italics());
+            return;
+        }
+
+        let buffer_ms = frames as f32 / sr as f32 * 1000.0;
+        let ui_ms     = 1000.0 / 60.0;
+        let attack_ms = attack_s * 1000.0;
+        let est_ms    = buffer_ms + ui_ms + attack_ms;
+
+        // Estimated (always visible)
+        let est_color = if est_ms < 20.0 {
+            Color32::from_rgb(0, 180, 120)
+        } else if est_ms < 40.0 {
+            Color32::from_rgb(200, 180, 0)
+        } else {
+            Color32::from_rgb(200, 70, 50)
+        };
+        ui.label(egui::RichText::new(
+            format!("est ~{est_ms:.0}ms  (buf {buffer_ms:.1} + UI ~{ui_ms:.0} + atk {attack_ms:.0})")
+        ).small().color(est_color));
+
+        // Real measurement (only after first note-on)
+        if measured_us > 0 {
+            let measured_ms = measured_us as f32 / 1000.0;
+            let meas_color = if measured_ms < 20.0 {
+                Color32::from_rgb(0, 220, 160)
+            } else if measured_ms < 40.0 {
+                Color32::from_rgb(220, 200, 0)
+            } else {
+                Color32::from_rgb(220, 80, 60)
+            };
+            ui.separator();
+            ui.label(egui::RichText::new(
+                format!("measured {measured_ms:.1}ms")
+            ).small().strong().color(meas_color));
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------

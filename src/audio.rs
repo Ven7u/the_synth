@@ -9,7 +9,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample, Stream};
 use fundsp::prelude32::*;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU8;
+use std::sync::atomic::{AtomicU32, AtomicU8};
 
 use crate::osc::MultiWaveOsc;
 
@@ -60,6 +60,18 @@ pub struct AudioState {
 
     // Oscilloscope
     pub osc_buffer: Arc<std::sync::Mutex<Vec<f32>>>,
+
+    // Latency measurement
+    // Buffer size in frames, written by audio callback on first call.
+    pub buffer_frames: Arc<AtomicU32>,
+    // Sample rate in Hz, written once during stream creation.
+    pub sample_rate: Arc<AtomicU32>,
+    // Timestamp of the last voice_on call — written by UI, cleared by audio callback.
+    // Stored as a Mutex<Option<Instant>> so both sides can access without blocking
+    // (callback uses try_lock so it never stalls the audio thread).
+    pub note_on_time: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
+    // Last measured round-trip latency in microseconds, written by audio callback.
+    pub last_latency_us: Arc<AtomicU32>,
 }
 
 impl AudioState {
@@ -92,7 +104,11 @@ impl AudioState {
             voice_freqs: (0..VOICE_COUNT).map(|_| shared(440.0)).collect(),
             voice_gates: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
             effective_cutoff: shared(3000.0),
-            osc_buffer: Arc::new(std::sync::Mutex::new(vec![0.0f32; 1024])),
+            osc_buffer:      Arc::new(std::sync::Mutex::new(vec![0.0f32; 1024])),
+            buffer_frames:   Arc::new(AtomicU32::new(0)),
+            sample_rate:     Arc::new(AtomicU32::new(0)),
+            note_on_time:    Arc::new(std::sync::Mutex::new(None)),
+            last_latency_us: Arc::new(AtomicU32::new(0)),
         }
     }
 }
@@ -195,23 +211,37 @@ where
 {
     let channels = config.channels as usize;
 
+    state.sample_rate.store(sr as u32, std::sync::atomic::Ordering::Relaxed);
+
     // Fundsp best practice for callback efficiency: run the graph through a
     // block-rate adapter instead of raw sample-by-sample graph traversal.
     let mut graph = BlockRateAdapter::new(build_synth_graph(&state, sr));
 
     let mut osc_idx: usize = 0;
+    let mut buffer_size_captured = false;
 
     let stream = device.build_output_stream(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
-            // TEMPORARY DEBUG MODE:
-            // Keep the graph stable during playback. Rebuilding the graph inside the
-            // real-time callback resets oscillator/filter/envelope state and can cause
-            // discontinuities that sound like random breaking or tails.
+            // Capture actual buffer size on first callback (cpal may use Default buffer size
+            // which is only known at runtime).
+            if !buffer_size_captured {
+                let frames = (data.len() / channels) as u32;
+                state.buffer_frames.store(frames, std::sync::atomic::Ordering::Relaxed);
+                buffer_size_captured = true;
+            }
 
-            // In debug mode the filter is bypassed, so skip LFO/filter envelope processing.
-            // Keep effective cutoff equal to base cutoff for compatibility with UI state.
             state.effective_cutoff.set(state.cutoff.value().clamp(80.0, 18000.0));
+
+            // Real-time latency measurement: if a note_on timestamp is pending,
+            // consume it now and record how long it took to reach this callback.
+            // try_lock ensures we never block the audio thread.
+            if let Ok(mut guard) = state.note_on_time.try_lock() {
+                if let Some(t) = guard.take() {
+                    let us = t.elapsed().as_micros() as u32;
+                    state.last_latency_us.store(us, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
 
             // Try to lock oscilloscope buffer once per callback (instead of once per sample).
             let mut scope_buf = state.osc_buffer.try_lock().ok();
