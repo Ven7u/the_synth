@@ -47,6 +47,9 @@ struct SynthApp {
     osc_enabled:      [bool; 3],
     osc_pulse_width:  [f32; 3],
     osc_pw_enabled:   [bool; 3],
+    osc_unison_enabled: [bool; 3],
+    osc_unison_count:   [usize; 3],  // 2..5
+    osc_unison_spread:  [f32; 3],    // 0..50 cents total
 
     // Noise
     noise_vol: f32,
@@ -96,8 +99,11 @@ impl SynthApp {
             osc_detune:  [0.0, 0.0, 0.0],
             osc_vol:         [0.5, 0.5, 0.5],
             osc_enabled:     [true, true, false],
-            osc_pulse_width: [0.5, 0.5, 0.5],
-            osc_pw_enabled:  [false, false, false],
+            osc_pulse_width:    [0.5, 0.5, 0.5],
+            osc_pw_enabled:     [false, false, false],
+            osc_unison_enabled: [false, false, false],
+            osc_unison_count:   [2, 2, 2],
+            osc_unison_spread:  [20.0, 20.0, 20.0],
             noise_vol:  0.0,
             lfo_rate:   2.0,
             lfo_depth:  0.0,
@@ -328,6 +334,25 @@ impl SynthApp {
                     });
                 });
             }
+
+            // Unison
+            ui.horizontal(|ui| {
+                let uni_on = self.osc_unison_enabled[i];
+                let label = egui::RichText::new("Uni").small()
+                    .color(if uni_on { Color32::from_rgb(0, 220, 160) } else { Color32::GRAY });
+                if ui.button(label).clicked() {
+                    self.osc_unison_enabled[i] = !uni_on;
+                    self.update_unison(i);
+                }
+                ui.add_enabled_ui(self.osc_unison_enabled[i], |ui| {
+                    let mut changed = false;
+                    changed |= ui.add(egui::Slider::new(&mut self.osc_unison_count[i], 2..=5)
+                        .text("v")).changed();
+                    changed |= ui.add(egui::Slider::new(&mut self.osc_unison_spread[i], 0.0..=50.0)
+                        .text("¢").fixed_decimals(0)).changed();
+                    if changed { self.update_unison(i); }
+                });
+            });
         });
     }
 
@@ -336,6 +361,37 @@ impl SynthApp {
         let cents = self.osc_detune[i];
         let mult  = 2_f32.powf(oct + cents / 1200.0);
         self.state.osc_freq_mult[i].set(mult);
+    }
+
+    /// Push unison detune multipliers and volumes to the DSP graph.
+    /// Voices are spread symmetrically: ±spread/2 cents across `count` copies.
+    fn update_unison(&self, i: usize) {
+        let count  = self.osc_unison_count[i];
+        let spread = self.osc_unison_spread[i];
+
+        if !self.osc_unison_enabled[i] || count <= 1 {
+            // Disabled: only copy 0 active at full weight, no detune
+            for c in 0..5 {
+                self.state.osc_unison_detune[i][c].set(1.0);
+                self.state.osc_unison_vol[i][c].set(if c == 0 { 1.0 } else { 0.0 });
+            }
+            return;
+        }
+
+        let vol = 1.0 / count as f32;
+        for c in 0..5 {
+            if c < count {
+                // Spread evenly from -spread/2 to +spread/2 cents
+                let t = if count > 1 { c as f32 / (count - 1) as f32 } else { 0.5 };
+                let cents = -spread * 0.5 + t * spread;
+                let detune = 2_f32.powf(cents / 1200.0);
+                self.state.osc_unison_detune[i][c].set(detune);
+                self.state.osc_unison_vol[i][c].set(vol);
+            } else {
+                self.state.osc_unison_detune[i][c].set(1.0);
+                self.state.osc_unison_vol[i][c].set(0.0);
+            }
+        }
     }
 }
 
