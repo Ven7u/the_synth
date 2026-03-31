@@ -60,9 +60,13 @@ struct SynthApp {
     noise_vol: f32,
 
     // LFO
+    lfo_enabled: bool,
     lfo_rate: f32,
     lfo_depth: f32,
-    lfo_dest: usize, // 0=pitch 1=filter 2=amp
+    lfo_shape: usize, // 0=sin 1=tri 2=saw
+    lfo_dest: usize,  // 0=pitch 1=filter 2=amp
+
+    filter_enabled: bool,
 
     // Filter
     filter_cutoff: f32,
@@ -129,11 +133,14 @@ impl SynthApp {
             ring_enabled: false,
             ring_depth: 1.0,
             noise_vol: 0.0,
+            lfo_enabled: false,
             lfo_rate: 2.0,
             lfo_depth: 0.0,
+            lfo_shape: 0,
             lfo_dest: 1,
+            filter_enabled: true,
             filter_cutoff: 3000.0,
-            filter_q: 1.0,
+            filter_q: 0.3,
             filter_env_amount: 0.3,
             fenv_adsr: [0.01, 0.3, 0.0, 0.2],
             amp_adsr: [0.01, 0.15, 0.7, 0.4],
@@ -182,7 +189,7 @@ impl SynthApp {
                 s
             });
         self.piano_voice_notes[slot] = Some(midi);
-        self.state.voice_freqs[slot].set(midi_hz(midi as f64) as f32);
+        self.state.voice_freq_targets[slot].set(midi_hz(midi as f64) as f32);
         // Stamp the time just before setting the gate — the audio callback will
         // measure how long it takes to reach this note.
         if let Ok(mut t) = self.state.note_on_time.lock() {
@@ -660,37 +667,74 @@ impl SynthApp {
 
 impl SynthApp {
     fn ui_lfo_panel(&mut self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("LFO").strong());
+        // Header toggle
         ui.horizontal(|ui| {
-            ui.label("Rate:");
-            if ui
-                .add(
-                    egui::Slider::new(&mut self.lfo_rate, 0.1..=20.0)
-                        .text("Hz")
-                        .logarithmic(true),
-                )
-                .changed()
+            let on = self.lfo_enabled;
+            let label = egui::RichText::new("LFO").strong()
+                .color(if on { Color32::from_rgb(0, 220, 160) } else { Color32::GRAY });
+            if ui.button(label)
+                .on_hover_text("Low Frequency Oscillator — a slow (sub-audio) wave that modulates pitch, filter cutoff, or amplitude. Creates vibrato, filter wobble, or tremolo.")
+                .clicked()
             {
-                self.state.lfo_rate.set(self.lfo_rate);
+                self.lfo_enabled = !on;
+                self.state.lfo_depth.set(if self.lfo_enabled { self.lfo_depth } else { 0.0 });
             }
         });
-        ui.horizontal(|ui| {
-            ui.label("Depth:");
-            if ui
-                .add(egui::Slider::new(&mut self.lfo_depth, 0.0..=1.0))
-                .changed()
-            {
-                self.state.lfo_depth.set(self.lfo_depth);
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label("→");
-            for (d, label) in [(0usize, "Pitch"), (1, "Filter"), (2, "Amp")] {
-                if ui.selectable_label(self.lfo_dest == d, label).clicked() {
-                    self.lfo_dest = d;
-                    self.state.lfo_dest.store(d as u8, Ordering::Relaxed);
+
+        ui.add_enabled_ui(self.lfo_enabled, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Rate:").on_hover_text("LFO speed in Hz. Below ~20 Hz = slow modulation. At 20 Hz+ the effect becomes a subtle audio-rate wobble.");
+                if ui.add(egui::Slider::new(&mut self.lfo_rate, 0.1..=20.0)
+                    .text("Hz").logarithmic(true))
+                    .on_hover_text("0.1 Hz = very slow sweep (~10s cycle). 5 Hz = fast vibrato. 20 Hz = enters audio range.")
+                    .changed()
+                {
+                    self.state.lfo_rate.set(self.lfo_rate);
                 }
-            }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Depth:").on_hover_text("How strongly the LFO modulates its destination. 0 = no effect, 1 = full range.");
+                if ui.add(egui::Slider::new(&mut self.lfo_depth, 0.0..=1.0))
+                    .on_hover_text("Depth scales the mod amount. For pitch: ±2 semitones at 1.0. For filter: ±50% cutoff. For amp: full tremolo.")
+                    .changed()
+                {
+                    self.state.lfo_depth.set(self.lfo_depth);
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Shape:").on_hover_text("Waveform of the LFO. Affects the character of the modulation.");
+                let shape_tips = [
+                    "Sine — smooth, natural-sounding modulation. Classic vibrato.",
+                    "Triangle — linear ramp up and down. Slightly sharper than sine.",
+                    "Saw — ramps up then resets. Creates a rhythmic, one-directional sweep.",
+                ];
+                for (s, label) in [(0usize, "Sin"), (1, "Tri"), (2, "Saw")] {
+                    if ui.selectable_label(self.lfo_shape == s, label)
+                        .on_hover_text(shape_tips[s])
+                        .clicked()
+                    {
+                        self.lfo_shape = s;
+                        self.state.lfo_shape.store(s as u8, Ordering::Relaxed);
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("→").on_hover_text("Destination: what the LFO modulates.");
+                let dest_tips = [
+                    "Pitch — vibrato. LFO wiggles the frequency of all oscillators.",
+                    "Filter — filter wobble / wah effect. LFO sweeps the cutoff frequency.",
+                    "Amp — tremolo. LFO pulses the output volume.",
+                ];
+                for (d, label) in [(0usize, "Pitch"), (1, "Filter"), (2, "Amp")] {
+                    if ui.selectable_label(self.lfo_dest == d, label)
+                        .on_hover_text(dest_tips[d])
+                        .clicked()
+                    {
+                        self.lfo_dest = d;
+                        self.state.lfo_dest.store(d as u8, Ordering::Relaxed);
+                    }
+                }
+            });
         });
     }
 }
@@ -701,41 +745,57 @@ impl SynthApp {
 
 impl SynthApp {
     fn ui_filter_panel(&mut self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("FILTER").strong());
+        // Header toggle
         ui.horizontal(|ui| {
-            ui.label("Cut:");
-            if ui
-                .add(
-                    egui::Slider::new(&mut self.filter_cutoff, 80.0..=18000.0)
-                        .text("Hz")
-                        .logarithmic(true),
-                )
-                .changed()
+            let on = self.filter_enabled;
+            let label = egui::RichText::new("FILTER").strong()
+                .color(if on { Color32::from_rgb(0, 220, 160) } else { Color32::GRAY });
+            if ui.button(label)
+                .on_hover_text("Moog-style 4-pole lowpass filter. Removes high frequencies, shaping the brightness and timbre of the sound. The classic 'sweep' sound of a synthesizer.")
+                .clicked()
             {
-                self.state.cutoff.set(self.filter_cutoff);
+                self.filter_enabled = !on;
+                // Off: open filter fully (max cutoff, zero resonance) so it's transparent
+                if self.filter_enabled {
+                    self.state.cutoff.set(self.filter_cutoff);
+                    self.state.resonance.set(self.filter_q);
+                } else {
+                    self.state.cutoff.set(18000.0);
+                    self.state.resonance.set(0.0);
+                }
             }
         });
-        ui.horizontal(|ui| {
-            ui.label("Res:");
-            if ui
-                .add(
-                    egui::Slider::new(&mut self.filter_q, 0.5..=20.0)
-                        .text("Q")
-                        .logarithmic(true),
-                )
-                .changed()
-            {
-                self.state.resonance.set(self.filter_q);
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label("Env:");
-            if ui
-                .add(egui::Slider::new(&mut self.filter_env_amount, 0.0..=1.0))
-                .changed()
-            {
-                self.state.filter_env_amount.set(self.filter_env_amount);
-            }
+
+        ui.add_enabled_ui(self.filter_enabled, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Cut:").on_hover_text("Cutoff frequency — frequencies above this point are attenuated. Low = dark/muffled, high = bright/open.");
+                if ui.add(egui::Slider::new(&mut self.filter_cutoff, 80.0..=18000.0)
+                    .text("Hz").logarithmic(true))
+                    .on_hover_text("80 Hz = very dark. 500–2000 Hz = classic filter sweep range. 18000 Hz = fully open.")
+                    .changed()
+                {
+                    self.state.cutoff.set(self.filter_cutoff);
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Res:").on_hover_text("Resonance — boosts frequencies near the cutoff, adding a peak. High resonance = squelchy, whistling quality. Near 1.0 = self-oscillation.");
+                if ui.add(egui::Slider::new(&mut self.filter_q, 0.0..=0.95)
+                    .text("Res").fixed_decimals(2))
+                    .on_hover_text("0 = no resonance. 0.5 = prominent peak. 0.9+ = near self-oscillation (the filter sings on its own).")
+                    .changed()
+                {
+                    self.state.resonance.set(self.filter_q);
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Env:").on_hover_text("Filter envelope amount — how much the filter ADSR envelope opens the filter above the base cutoff on each note.");
+                if ui.add(egui::Slider::new(&mut self.filter_env_amount, 0.0..=1.0))
+                    .on_hover_text("0 = envelope has no effect. 1 = envelope fully sweeps from cutoff to 2× cutoff. Set a fast attack + decay for a pluck effect.")
+                    .changed()
+                {
+                    self.state.filter_env_amount.set(self.filter_env_amount);
+                }
+            });
         });
     }
 }

@@ -55,9 +55,16 @@ pub struct AudioState {
     pub fenv_release: Shared,
 
     // LFO
-    pub lfo_rate: Shared,        // 0.1..20 Hz
-    pub lfo_depth: Shared,       // 0.0..1.0
-    pub lfo_dest: Arc<AtomicU8>, // 0=pitch 1=filter 2=amp
+    pub lfo_rate: Shared,         // 0.1..20 Hz
+    pub lfo_depth: Shared,        // 0.0..1.0
+    pub lfo_shape: Arc<AtomicU8>, // 0=sin 1=tri 2=saw
+    pub lfo_dest: Arc<AtomicU8>,  // 0=pitch 1=filter 2=amp
+    // Written by callback each buffer; read by graph
+    pub lfo_pitch_mult: Shared,   // frequency multiplier (1.0 = no pitch mod)
+    pub lfo_amp_mult: Shared,     // amplitude multiplier (1.0 = no amp mod)
+
+    // Voice target frequencies — UI writes here; callback smooths to voice_freqs for glide
+    pub voice_freq_targets: Vec<Shared>,
 
     // Amp ADSR
     pub adsr_attack: Shared,
@@ -162,7 +169,7 @@ impl AudioState {
             ],
             noise_vol: shared(0.0),
             cutoff: shared(3000.0),
-            resonance: shared(1.0),
+            resonance: shared(0.3),
             filter_env_amount: shared(0.3),
             fenv_attack: shared(0.01),
             fenv_decay: shared(0.3),
@@ -170,7 +177,11 @@ impl AudioState {
             fenv_release: shared(0.2),
             lfo_rate: shared(2.0),
             lfo_depth: shared(0.0),
-            lfo_dest: Arc::new(AtomicU8::new(1)), // filter
+            lfo_shape: Arc::new(AtomicU8::new(0)), // sine
+            lfo_dest: Arc::new(AtomicU8::new(1)),  // filter
+            lfo_pitch_mult: shared(1.0),
+            lfo_amp_mult: shared(1.0),
+            voice_freq_targets: (0..VOICE_COUNT).map(|_| shared(440.0)).collect(),
             adsr_attack: shared(0.01),
             adsr_decay: shared(0.15),
             adsr_sustain: shared(0.7),
@@ -230,10 +241,14 @@ impl AudioEngine {
 /// Build the unified 6-voice poly graph.
 /// Each voice: 3 OSCs + noise → lowpass(effective_cutoff) → amp ADSR
 fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Send> {
-    let a = state.adsr_attack.value();
-    let d = state.adsr_decay.value();
-    let s = state.adsr_sustain.value();
-    let r = state.adsr_release.value();
+    let a  = state.adsr_attack.value();
+    let d  = state.adsr_decay.value();
+    let s  = state.adsr_sustain.value();
+    let r  = state.adsr_release.value();
+    let fa = state.fenv_attack.value();
+    let fd = state.fenv_decay.value();
+    let fs = state.fenv_sustain.value();
+    let fr = state.fenv_release.value();
     let scale = 1.0 / VOICE_COUNT as f32;
 
     let make_voice = |vi: usize| {
@@ -246,80 +261,91 @@ fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Send> {
         let sync_enabled = Arc::clone(&state.hard_sync_enabled);
         let sync_gen     = Arc::clone(&state.hard_sync_gen[vi]);
 
-        // FM: frequency deviation added to OSC 1's input.
-        // fm_tap[vi] is written by OSC 2 copy 0; deviation = tap × fm_depth × voice_freq × osc1_mult.
-        // Using voice_freq × osc1_mult keeps the modulation index pitch-independent.
+        // LFO pitch modulation: applied at the voice frequency level so all OSCs track together.
+        // lfo_pitch_mult is 1.0 when LFO dest != pitch.
+        let vf_lfo = var(vf) * var(&state.lfo_pitch_mult);
+
+        // FM: frequency deviation added to OSC 1's input (pitch-tracking).
         let osc0 = {
             let fm = var(&state.fm_tap[vi]) * var(&state.fm_depth)
-                * var(vf) * var(&state.osc_freq_mult[0]);
-            let c0 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][0]) + fm.clone()
+                * vf_lfo.clone() * var(&state.osc_freq_mult[0]);
+            let c0 = (vf_lfo.clone() * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][0]) + fm.clone()
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32, 0.0 / 5.0,
                     SyncRole::Master { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&sync_gen) },
                     Some(state.ring_tap[vi].clone()))))
                 * var(&state.osc_unison_vol[0][0]);
-            let c1 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][1]) + fm.clone()
+            let c1 = (vf_lfo.clone() * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][1]) + fm.clone()
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32, 1.0 / 5.0, SyncRole::None, None)))
                 * var(&state.osc_unison_vol[0][1]);
-            let c2 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][2]) + fm.clone()
+            let c2 = (vf_lfo.clone() * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][2]) + fm.clone()
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32, 2.0 / 5.0, SyncRole::None, None)))
                 * var(&state.osc_unison_vol[0][2]);
-            let c3 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][3]) + fm.clone()
+            let c3 = (vf_lfo.clone() * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][3]) + fm.clone()
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32, 3.0 / 5.0, SyncRole::None, None)))
                 * var(&state.osc_unison_vol[0][3]);
-            let c4 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][4]) + fm
+            let c4 = (vf_lfo.clone() * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][4]) + fm
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32, 4.0 / 5.0, SyncRole::None, None)))
                 * var(&state.osc_unison_vol[0][4]);
             (c0 + c1 + c2 + c3 + c4) * var(&state.osc_vol[0])
         };
         let osc1 = {
-            // Copy 0 writes its raw output to fm_tap[vi] for OSC 1's FM input.
-            let c0 = (var(vf) * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][0])
+            let c0 = (vf_lfo.clone() * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][0])
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[1]), state.osc_pulse_width[1].clone(), sr as f32, 0.0 / 5.0,
                     SyncRole::Slave { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&sync_gen), last_gen: 0 },
                     Some(state.fm_tap[vi].clone()))))
                 * var(&state.osc_unison_vol[1][0]);
-            let c1 = (var(vf) * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][1])
+            let c1 = (vf_lfo.clone() * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][1])
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[1]), state.osc_pulse_width[1].clone(), sr as f32, 1.0 / 5.0,
                     SyncRole::Slave { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&sync_gen), last_gen: 0 }, None)))
                 * var(&state.osc_unison_vol[1][1]);
-            let c2 = (var(vf) * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][2])
+            let c2 = (vf_lfo.clone() * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][2])
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[1]), state.osc_pulse_width[1].clone(), sr as f32, 2.0 / 5.0,
                     SyncRole::Slave { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&sync_gen), last_gen: 0 }, None)))
                 * var(&state.osc_unison_vol[1][2]);
-            let c3 = (var(vf) * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][3])
+            let c3 = (vf_lfo.clone() * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][3])
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[1]), state.osc_pulse_width[1].clone(), sr as f32, 3.0 / 5.0,
                     SyncRole::Slave { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&sync_gen), last_gen: 0 }, None)))
                 * var(&state.osc_unison_vol[1][3]);
-            let c4 = (var(vf) * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][4])
+            let c4 = (vf_lfo.clone() * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][4])
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[1]), state.osc_pulse_width[1].clone(), sr as f32, 4.0 / 5.0,
                     SyncRole::Slave { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&sync_gen), last_gen: 0 }, None)))
                 * var(&state.osc_unison_vol[1][4]);
             (c0 + c1 + c2 + c3 + c4) * var(&state.osc_vol[1])
         };
         let osc2 = {
-            let c0 = (var(vf) * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][0])
+            let c0 = (vf_lfo.clone() * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][0])
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32, 0.0 / 5.0, SyncRole::None, None)))
                 * var(&state.osc_unison_vol[2][0]);
-            let c1 = (var(vf) * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][1])
+            let c1 = (vf_lfo.clone() * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][1])
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32, 1.0 / 5.0, SyncRole::None, None)))
                 * var(&state.osc_unison_vol[2][1]);
-            let c2 = (var(vf) * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][2])
+            let c2 = (vf_lfo.clone() * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][2])
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32, 2.0 / 5.0, SyncRole::None, None)))
                 * var(&state.osc_unison_vol[2][2]);
-            let c3 = (var(vf) * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][3])
+            let c3 = (vf_lfo.clone() * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][3])
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32, 3.0 / 5.0, SyncRole::None, None)))
                 * var(&state.osc_unison_vol[2][3]);
-            let c4 = (var(vf) * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][4])
+            let c4 = (vf_lfo.clone() * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][4])
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32, 4.0 / 5.0, SyncRole::None, None)))
                 * var(&state.osc_unison_vol[2][4]);
             (c0 + c1 + c2 + c3 + c4) * var(&state.osc_vol[2])
         };
 
-        // Ring mod: OSC1 × OSC2 added to the mix. Both taps are 1-sample delayed.
+        // Ring mod: OSC1 × OSC2 added to the mix.
         let ring = var(&state.ring_tap[vi]) * var(&state.fm_tap[vi]) * var(&state.ring_depth);
         let osc = osc0 + osc1 + osc2 + ring;
+
+        // Moog lowpass filter with per-voice filter ADSR.
+        // dyn_cutoff = effective_cutoff (base + LFO) + fenv × env_amount × base_cutoff.
+        // Note: fa/fd/fs/fr are baked in at graph build time (same as amp ADSR).
+        let fenv = var(vg) >> adsr_live(fa, fd, fs, fr);
+        let dyn_cutoff = var(&state.effective_cutoff)
+            + fenv * var(&state.filter_env_amount) * var(&state.cutoff);
+        let filtered = (osc | dyn_cutoff | var(&state.resonance)) >> moog();
+
+        // Amp ADSR × LFO amplitude modulation (lfo_amp_mult = 1.0 when LFO dest != amp).
         let env = var(vg) >> adsr_live(a, d, s, r);
-        osc * env
+        filtered * env * var(&state.lfo_amp_mult)
     };
 
     let v0 = make_voice(0);
@@ -382,6 +408,12 @@ where
     // Limiter envelope state (lives across callbacks)
     let mut env_l: f32 = 0.0;
     let mut env_r: f32 = 0.0;
+
+    // LFO phase accumulator (0..1, advances per buffer)
+    let mut lfo_phase: f32 = 0.0;
+
+    // Per-voice smoothed frequencies for glide (callback writes to voice_freqs from these)
+    let mut smoothed_freqs: Vec<f32> = vec![440.0; VOICE_COUNT];
     let attack_coeff = (-1.0_f64 / (0.0001 * sr)).exp() as f32; // ~0.1ms attack
     let release_coeff = (-1.0_f64 / (0.05 * sr)).exp() as f32; // ~50ms release
 
@@ -398,9 +430,53 @@ where
                 buffer_size_captured = true;
             }
 
-            state
-                .effective_cutoff
-                .set(state.cutoff.value().clamp(80.0, 18000.0));
+            // --- LFO ---
+            let frames = data.len() / channels;
+            let sr_f = sr as f32;
+            let lfo_rate  = state.lfo_rate.value();
+            let lfo_depth = state.lfo_depth.value();
+            let lfo_shape = state.lfo_shape.load(std::sync::atomic::Ordering::Relaxed);
+            let lfo_dest  = state.lfo_dest.load(std::sync::atomic::Ordering::Relaxed);
+            lfo_phase += lfo_rate * frames as f32 / sr_f;
+            while lfo_phase >= 1.0 { lfo_phase -= 1.0; }
+            let lfo_raw = match lfo_shape {
+                1 => if lfo_phase < 0.5 { 4.0*lfo_phase-1.0 } else { 3.0-4.0*lfo_phase }, // tri
+                2 => 2.0 * lfo_phase - 1.0,                                                  // saw
+                _ => (lfo_phase * std::f32::consts::TAU).sin(),                              // sin
+            };
+            let lfo_out = lfo_raw * lfo_depth;
+            let base_cutoff = state.cutoff.value().clamp(80.0, 18000.0);
+            match lfo_dest {
+                0 => { // pitch: ±2 semitones at depth=1
+                    state.lfo_pitch_mult.set(2_f32.powf(lfo_out * 2.0 / 12.0));
+                    state.lfo_amp_mult.set(1.0);
+                    state.effective_cutoff.set(base_cutoff);
+                }
+                2 => { // amp: tremolo
+                    state.lfo_pitch_mult.set(1.0);
+                    state.lfo_amp_mult.set((1.0 + lfo_out).max(0.0));
+                    state.effective_cutoff.set(base_cutoff);
+                }
+                _ => { // filter (default=1)
+                    state.lfo_pitch_mult.set(1.0);
+                    state.lfo_amp_mult.set(1.0);
+                    state.effective_cutoff.set(
+                        (base_cutoff + lfo_out * base_cutoff * 0.5).clamp(80.0, 18000.0));
+                }
+            }
+
+            // --- Glide: smooth voice_freq_targets → voice_freqs ---
+            let glide_time = state.glide_time.value();
+            for vi in 0..VOICE_COUNT {
+                let target = state.voice_freq_targets[vi].value();
+                if glide_time < 0.001 {
+                    smoothed_freqs[vi] = target;
+                } else {
+                    let coeff = (-(frames as f32) / (glide_time * sr_f)).exp();
+                    smoothed_freqs[vi] = coeff * smoothed_freqs[vi] + (1.0 - coeff) * target;
+                }
+                state.voice_freqs[vi].set(smoothed_freqs[vi]);
+            }
 
             // Real-time latency measurement: if a note_on timestamp is pending,
             // consume it now and record how long it took to reach this callback.
