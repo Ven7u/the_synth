@@ -8,8 +8,8 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample, Stream};
 use fundsp::prelude32::*;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU8};
+use std::sync::Arc;
 
 use crate::osc::MultiWaveOsc;
 
@@ -17,40 +17,40 @@ pub const VOICE_COUNT: usize = 6;
 
 pub struct AudioState {
     // OSC bank — 3 oscillators per voice
-    pub osc_wave:        [Arc<AtomicU8>; 3],  // 0=sine 1=saw 2=square 3=triangle
-    pub osc_freq_mult:   [Shared; 3],          // octave+detune combined multiplier (1.0 = no change)
-    pub osc_vol:         [Shared; 3],          // 0.0..1.0 mix level
-    pub osc_pulse_width: [Shared; 3],          // 0.01..0.99, only used by Square
+    pub osc_wave: [Arc<AtomicU8>; 3], // 0=sine 1=saw 2=square 3=triangle
+    pub osc_freq_mult: [Shared; 3],   // octave+detune combined multiplier (1.0 = no change)
+    pub osc_vol: [Shared; 3],         // 0.0..1.0 mix level
+    pub osc_pulse_width: [Shared; 3], // 0.01..0.99, only used by Square
     // Unison: 5 copies max per OSC slot; inactive copies have vol=0.0
-    pub osc_unison_detune: [[Shared; 5]; 3],   // freq multiplier per copy (1.0 = no detune)
-    pub osc_unison_vol:    [[Shared; 5]; 3],   // mix weight per copy (sums to 1.0 when active)
+    pub osc_unison_detune: [[Shared; 5]; 3], // freq multiplier per copy (1.0 = no detune)
+    pub osc_unison_vol: [[Shared; 5]; 3],    // mix weight per copy (sums to 1.0 when active)
 
     // Noise
-    pub noise_vol:  Shared,               // 0.0..1.0
+    pub noise_vol: Shared, // 0.0..1.0
 
     // Filter
-    pub cutoff:     Shared,               // base cutoff Hz (80..18000)
-    pub resonance:  Shared,               // Q (0.5..20)
-    pub filter_env_amount: Shared,        // 0.0..1.0
+    pub cutoff: Shared,            // base cutoff Hz (80..18000)
+    pub resonance: Shared,         // Q (0.5..20)
+    pub filter_env_amount: Shared, // 0.0..1.0
     // Filter ADSR
-    pub fenv_attack:  Shared,
-    pub fenv_decay:   Shared,
+    pub fenv_attack: Shared,
+    pub fenv_decay: Shared,
     pub fenv_sustain: Shared,
     pub fenv_release: Shared,
 
     // LFO
-    pub lfo_rate:   Shared,               // 0.1..20 Hz
-    pub lfo_depth:  Shared,               // 0.0..1.0
-    pub lfo_dest:   Arc<AtomicU8>,        // 0=pitch 1=filter 2=amp
+    pub lfo_rate: Shared,        // 0.1..20 Hz
+    pub lfo_depth: Shared,       // 0.0..1.0
+    pub lfo_dest: Arc<AtomicU8>, // 0=pitch 1=filter 2=amp
 
     // Amp ADSR
-    pub adsr_attack:  Shared,
-    pub adsr_decay:   Shared,
+    pub adsr_attack: Shared,
+    pub adsr_decay: Shared,
     pub adsr_sustain: Shared,
     pub adsr_release: Shared,
 
     // Glide
-    pub glide_time: Shared,               // 0.0..0.5 s
+    pub glide_time: Shared, // 0.0..0.5 s
 
     // Master
     pub master_vol: Shared,
@@ -86,33 +86,69 @@ impl AudioState {
                 Arc::new(AtomicU8::new(0)),
                 Arc::new(AtomicU8::new(0)),
             ],
-            osc_freq_mult:   [shared(1.0), shared(1.0), shared(1.0)],
-            osc_vol:         [shared(0.65), shared(0.5), shared(0.0)],
+            osc_freq_mult: [shared(1.0), shared(1.0), shared(1.0)],
+            osc_vol: [shared(0.65), shared(0.5), shared(0.0)],
             osc_pulse_width: [shared(0.5), shared(0.5), shared(0.5)],
             // Unison off by default: copy 0 at full weight, copies 1-4 silent
             osc_unison_detune: [
-                [shared(1.0), shared(1.0), shared(1.0), shared(1.0), shared(1.0)],
-                [shared(1.0), shared(1.0), shared(1.0), shared(1.0), shared(1.0)],
-                [shared(1.0), shared(1.0), shared(1.0), shared(1.0), shared(1.0)],
+                [
+                    shared(1.0),
+                    shared(1.0),
+                    shared(1.0),
+                    shared(1.0),
+                    shared(1.0),
+                ],
+                [
+                    shared(1.0),
+                    shared(1.0),
+                    shared(1.0),
+                    shared(1.0),
+                    shared(1.0),
+                ],
+                [
+                    shared(1.0),
+                    shared(1.0),
+                    shared(1.0),
+                    shared(1.0),
+                    shared(1.0),
+                ],
             ],
             osc_unison_vol: [
-                [shared(1.0), shared(0.0), shared(0.0), shared(0.0), shared(0.0)],
-                [shared(1.0), shared(0.0), shared(0.0), shared(0.0), shared(0.0)],
-                [shared(1.0), shared(0.0), shared(0.0), shared(0.0), shared(0.0)],
+                [
+                    shared(1.0),
+                    shared(0.0),
+                    shared(0.0),
+                    shared(0.0),
+                    shared(0.0),
+                ],
+                [
+                    shared(1.0),
+                    shared(0.0),
+                    shared(0.0),
+                    shared(0.0),
+                    shared(0.0),
+                ],
+                [
+                    shared(1.0),
+                    shared(0.0),
+                    shared(0.0),
+                    shared(0.0),
+                    shared(0.0),
+                ],
             ],
-            noise_vol:  shared(0.0),
-            cutoff:     shared(3000.0),
-            resonance:  shared(1.0),
+            noise_vol: shared(0.0),
+            cutoff: shared(3000.0),
+            resonance: shared(1.0),
             filter_env_amount: shared(0.3),
-            fenv_attack:  shared(0.01),
-            fenv_decay:   shared(0.3),
+            fenv_attack: shared(0.01),
+            fenv_decay: shared(0.3),
             fenv_sustain: shared(0.6),
             fenv_release: shared(0.2),
-            lfo_rate:   shared(2.0),
-            lfo_depth:  shared(0.0),
-            lfo_dest:   Arc::new(AtomicU8::new(1)), // filter
-            adsr_attack:  shared(0.01),
-            adsr_decay:   shared(0.15),
+            lfo_rate: shared(2.0),
+            lfo_depth: shared(0.0),
+            lfo_dest: Arc::new(AtomicU8::new(1)), // filter
+            adsr_attack: shared(0.01),
+            adsr_decay: shared(0.15),
             adsr_sustain: shared(0.7),
             adsr_release: shared(0.4),
             glide_time: shared(0.0),
@@ -120,22 +156,24 @@ impl AudioState {
             voice_freqs: (0..VOICE_COUNT).map(|_| shared(440.0)).collect(),
             voice_gates: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
             effective_cutoff: shared(3000.0),
-            osc_buffer:      Arc::new(std::sync::Mutex::new(vec![0.0f32; 1024])),
-            buffer_frames:   Arc::new(AtomicU32::new(0)),
-            sample_rate:     Arc::new(AtomicU32::new(0)),
-            note_on_time:    Arc::new(std::sync::Mutex::new(None)),
+            osc_buffer: Arc::new(std::sync::Mutex::new(vec![0.0f32; 1024])),
+            buffer_frames: Arc::new(AtomicU32::new(0)),
+            sample_rate: Arc::new(AtomicU32::new(0)),
+            note_on_time: Arc::new(std::sync::Mutex::new(None)),
             last_latency_us: Arc::new(AtomicU32::new(0)),
         }
     }
 }
 
 impl Default for AudioState {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 pub struct AudioEngine {
     pub state: Arc<AudioState>,
-    _stream:   Stream,
+    _stream: Stream,
 }
 
 impl AudioEngine {
@@ -143,7 +181,10 @@ impl AudioEngine {
         let state = Arc::new(AudioState::new());
         let stream = build_stream(Arc::clone(&state))?;
         stream.play()?;
-        Ok(Self { state, _stream: stream })
+        Ok(Self {
+            state,
+            _stream: stream,
+        })
     }
 }
 
@@ -166,29 +207,134 @@ fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Send> {
         let vg = &state.voice_gates[vi];
 
         // Each OSC slot: 5 unison copies, inactive ones have vol=0.0.
-        // Fully flat — no inner closures, avoids var() capture issues.
+        // Phases spread evenly across [0, 1) to avoid phase coherence and beating artifacts.
         let osc0 = {
-            let c0 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][0]) >> follow(0.002) >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32))) * var(&state.osc_unison_vol[0][0]);
-            let c1 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][1]) >> follow(0.002) >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32))) * var(&state.osc_unison_vol[0][1]);
-            let c2 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][2]) >> follow(0.002) >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32))) * var(&state.osc_unison_vol[0][2]);
-            let c3 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][3]) >> follow(0.002) >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32))) * var(&state.osc_unison_vol[0][3]);
-            let c4 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][4]) >> follow(0.002) >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32))) * var(&state.osc_unison_vol[0][4]);
+            let c0 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][0])
+                >> An(MultiWaveOsc::with_phase(
+                    Arc::clone(&state.osc_wave[0]),
+                    state.osc_pulse_width[0].clone(),
+                    sr as f32,
+                    0.0 / 5.0,
+                )))
+                * var(&state.osc_unison_vol[0][0]);
+            let c1 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][1])
+                >> An(MultiWaveOsc::with_phase(
+                    Arc::clone(&state.osc_wave[0]),
+                    state.osc_pulse_width[0].clone(),
+                    sr as f32,
+                    1.0 / 5.0,
+                )))
+                * var(&state.osc_unison_vol[0][1]);
+            let c2 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][2])
+                >> An(MultiWaveOsc::with_phase(
+                    Arc::clone(&state.osc_wave[0]),
+                    state.osc_pulse_width[0].clone(),
+                    sr as f32,
+                    2.0 / 5.0,
+                )))
+                * var(&state.osc_unison_vol[0][2]);
+            let c3 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][3])
+                >> An(MultiWaveOsc::with_phase(
+                    Arc::clone(&state.osc_wave[0]),
+                    state.osc_pulse_width[0].clone(),
+                    sr as f32,
+                    3.0 / 5.0,
+                )))
+                * var(&state.osc_unison_vol[0][3]);
+            let c4 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][4])
+                >> An(MultiWaveOsc::with_phase(
+                    Arc::clone(&state.osc_wave[0]),
+                    state.osc_pulse_width[0].clone(),
+                    sr as f32,
+                    4.0 / 5.0,
+                )))
+                * var(&state.osc_unison_vol[0][4]);
             (c0 + c1 + c2 + c3 + c4) * var(&state.osc_vol[0])
         };
         let osc1 = {
-            let c0 = (var(vf) * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][0]) >> follow(0.002) >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[1]), state.osc_pulse_width[1].clone(), sr as f32))) * var(&state.osc_unison_vol[1][0]);
-            let c1 = (var(vf) * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][1]) >> follow(0.002) >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[1]), state.osc_pulse_width[1].clone(), sr as f32))) * var(&state.osc_unison_vol[1][1]);
-            let c2 = (var(vf) * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][2]) >> follow(0.002) >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[1]), state.osc_pulse_width[1].clone(), sr as f32))) * var(&state.osc_unison_vol[1][2]);
-            let c3 = (var(vf) * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][3]) >> follow(0.002) >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[1]), state.osc_pulse_width[1].clone(), sr as f32))) * var(&state.osc_unison_vol[1][3]);
-            let c4 = (var(vf) * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][4]) >> follow(0.002) >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[1]), state.osc_pulse_width[1].clone(), sr as f32))) * var(&state.osc_unison_vol[1][4]);
+            let c0 = (var(vf) * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][0])
+                >> An(MultiWaveOsc::with_phase(
+                    Arc::clone(&state.osc_wave[1]),
+                    state.osc_pulse_width[1].clone(),
+                    sr as f32,
+                    0.0 / 5.0,
+                )))
+                * var(&state.osc_unison_vol[1][0]);
+            let c1 = (var(vf) * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][1])
+                >> An(MultiWaveOsc::with_phase(
+                    Arc::clone(&state.osc_wave[1]),
+                    state.osc_pulse_width[1].clone(),
+                    sr as f32,
+                    1.0 / 5.0,
+                )))
+                * var(&state.osc_unison_vol[1][1]);
+            let c2 = (var(vf) * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][2])
+                >> An(MultiWaveOsc::with_phase(
+                    Arc::clone(&state.osc_wave[1]),
+                    state.osc_pulse_width[1].clone(),
+                    sr as f32,
+                    2.0 / 5.0,
+                )))
+                * var(&state.osc_unison_vol[1][2]);
+            let c3 = (var(vf) * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][3])
+                >> An(MultiWaveOsc::with_phase(
+                    Arc::clone(&state.osc_wave[1]),
+                    state.osc_pulse_width[1].clone(),
+                    sr as f32,
+                    3.0 / 5.0,
+                )))
+                * var(&state.osc_unison_vol[1][3]);
+            let c4 = (var(vf) * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][4])
+                >> An(MultiWaveOsc::with_phase(
+                    Arc::clone(&state.osc_wave[1]),
+                    state.osc_pulse_width[1].clone(),
+                    sr as f32,
+                    4.0 / 5.0,
+                )))
+                * var(&state.osc_unison_vol[1][4]);
             (c0 + c1 + c2 + c3 + c4) * var(&state.osc_vol[1])
         };
         let osc2 = {
-            let c0 = (var(vf) * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][0]) >> follow(0.002) >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32))) * var(&state.osc_unison_vol[2][0]);
-            let c1 = (var(vf) * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][1]) >> follow(0.002) >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32))) * var(&state.osc_unison_vol[2][1]);
-            let c2 = (var(vf) * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][2]) >> follow(0.002) >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32))) * var(&state.osc_unison_vol[2][2]);
-            let c3 = (var(vf) * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][3]) >> follow(0.002) >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32))) * var(&state.osc_unison_vol[2][3]);
-            let c4 = (var(vf) * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][4]) >> follow(0.002) >> An(MultiWaveOsc::new(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32))) * var(&state.osc_unison_vol[2][4]);
+            let c0 = (var(vf) * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][0])
+                >> An(MultiWaveOsc::with_phase(
+                    Arc::clone(&state.osc_wave[2]),
+                    state.osc_pulse_width[2].clone(),
+                    sr as f32,
+                    0.0 / 5.0,
+                )))
+                * var(&state.osc_unison_vol[2][0]);
+            let c1 = (var(vf) * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][1])
+                >> An(MultiWaveOsc::with_phase(
+                    Arc::clone(&state.osc_wave[2]),
+                    state.osc_pulse_width[2].clone(),
+                    sr as f32,
+                    1.0 / 5.0,
+                )))
+                * var(&state.osc_unison_vol[2][1]);
+            let c2 = (var(vf) * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][2])
+                >> An(MultiWaveOsc::with_phase(
+                    Arc::clone(&state.osc_wave[2]),
+                    state.osc_pulse_width[2].clone(),
+                    sr as f32,
+                    2.0 / 5.0,
+                )))
+                * var(&state.osc_unison_vol[2][2]);
+            let c3 = (var(vf) * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][3])
+                >> An(MultiWaveOsc::with_phase(
+                    Arc::clone(&state.osc_wave[2]),
+                    state.osc_pulse_width[2].clone(),
+                    sr as f32,
+                    3.0 / 5.0,
+                )))
+                * var(&state.osc_unison_vol[2][3]);
+            let c4 = (var(vf) * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][4])
+                >> An(MultiWaveOsc::with_phase(
+                    Arc::clone(&state.osc_wave[2]),
+                    state.osc_pulse_width[2].clone(),
+                    sr as f32,
+                    4.0 / 5.0,
+                )))
+                * var(&state.osc_unison_vol[2][4]);
             (c0 + c1 + c2 + c3 + c4) * var(&state.osc_vol[2])
         };
 
@@ -204,9 +350,8 @@ fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Send> {
     let v4 = make_voice(4);
     let v5 = make_voice(5);
 
-    let mut g: Box<dyn AudioUnit + Send> = Box::new(
-        (v0 + v1 + v2 + v3 + v4 + v5) * var(&state.master_vol) * scale >> pan(0.0)
-    );
+    let mut g: Box<dyn AudioUnit + Send> =
+        Box::new((v0 + v1 + v2 + v3 + v4 + v5) * var(&state.master_vol) * scale >> pan(0.0));
     g.set_sample_rate(sr);
     g.allocate();
     g
@@ -217,12 +362,12 @@ fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Send> {
 // ---------------------------------------------------------------------------
 
 fn build_stream(state: Arc<AudioState>) -> anyhow::Result<Stream> {
-    let host   = cpal::default_host();
+    let host = cpal::default_host();
     let device = host
         .default_output_device()
         .ok_or_else(|| anyhow::anyhow!("No output device"))?;
     let config = device.default_output_config()?;
-    let sr     = config.sample_rate().0 as f64;
+    let sr = config.sample_rate().0 as f64;
 
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => make_stream::<f32>(&device, &config.into(), state, sr)?,
@@ -244,7 +389,9 @@ where
 {
     let channels = config.channels as usize;
 
-    state.sample_rate.store(sr as u32, std::sync::atomic::Ordering::Relaxed);
+    state
+        .sample_rate
+        .store(sr as u32, std::sync::atomic::Ordering::Relaxed);
 
     // Fundsp best practice for callback efficiency: run the graph through a
     // block-rate adapter instead of raw sample-by-sample graph traversal.
@@ -260,11 +407,15 @@ where
             // which is only known at runtime).
             if !buffer_size_captured {
                 let frames = (data.len() / channels) as u32;
-                state.buffer_frames.store(frames, std::sync::atomic::Ordering::Relaxed);
+                state
+                    .buffer_frames
+                    .store(frames, std::sync::atomic::Ordering::Relaxed);
                 buffer_size_captured = true;
             }
 
-            state.effective_cutoff.set(state.cutoff.value().clamp(80.0, 18000.0));
+            state
+                .effective_cutoff
+                .set(state.cutoff.value().clamp(80.0, 18000.0));
 
             // Real-time latency measurement: if a note_on timestamp is pending,
             // consume it now and record how long it took to reach this callback.
@@ -272,7 +423,9 @@ where
             if let Ok(mut guard) = state.note_on_time.try_lock() {
                 if let Some(t) = guard.take() {
                     let us = t.elapsed().as_micros() as u32;
-                    state.last_latency_us.store(us, std::sync::atomic::Ordering::Relaxed);
+                    state
+                        .last_latency_us
+                        .store(us, std::sync::atomic::Ordering::Relaxed);
                 }
             }
 
@@ -294,7 +447,7 @@ where
                     }
                 }
 
-                let left  = T::from_sample(l);
+                let left = T::from_sample(l);
                 let right = T::from_sample(r_out);
                 for (i, smp) in frame.iter_mut().enumerate() {
                     *smp = if i & 1 == 0 { left } else { right };
