@@ -312,13 +312,9 @@ impl SynthApp {
             } else {
                 label.color(Color32::GRAY)
             };
-            if ui.button(text).clicked() {
+            if ui.button(text).on_hover_text("Toggle this oscillator on/off").clicked() {
                 self.osc_enabled[i] = !on;
-                let vol = if self.osc_enabled[i] {
-                    self.osc_vol[i]
-                } else {
-                    0.0
-                };
+                let vol = if self.osc_enabled[i] { self.osc_vol[i] } else { 0.0 };
                 self.state.osc_vol[i].set(vol);
             }
         });
@@ -327,8 +323,17 @@ impl SynthApp {
         ui.add_enabled_ui(self.osc_enabled[i], |ui| {
             // Waveform selector
             ui.horizontal(|ui| {
+                let tips = [
+                    "Sine — pure tone, no harmonics. Smooth and soft.",
+                    "Sawtooth — all harmonics, bright buzz. Classic for brass and strings.",
+                    "Square — odd harmonics only, hollow and woody. Supports pulse width.",
+                    "Triangle — odd harmonics, softer than square. Alias-free.",
+                ];
                 for (w, &label) in WAVE_LABELS.iter().enumerate() {
-                    if ui.selectable_label(self.osc_wave[i] == w, label).clicked() {
+                    if ui.selectable_label(self.osc_wave[i] == w, label)
+                        .on_hover_text(tips[w])
+                        .clicked()
+                    {
                         self.osc_wave[i] = w;
                         self.state.osc_wave[i].store(w as u8, Ordering::Relaxed);
                     }
@@ -337,13 +342,13 @@ impl SynthApp {
 
             // Octave
             ui.horizontal(|ui| {
-                ui.label("Oct:");
-                if ui.small_button("−").clicked() && self.osc_octave[i] > -2 {
+                ui.label("Oct:").on_hover_text("Shift pitch in octave steps relative to the played note (−2 to +2).");
+                if ui.small_button("−").on_hover_text("One octave down").clicked() && self.osc_octave[i] > -2 {
                     self.osc_octave[i] -= 1;
                     self.update_freq_mult(i);
                 }
                 ui.label(format!("{:+}", self.osc_octave[i]));
-                if ui.small_button("+").clicked() && self.osc_octave[i] < 2 {
+                if ui.small_button("+").on_hover_text("One octave up").clicked() && self.osc_octave[i] < 2 {
                     self.osc_octave[i] += 1;
                     self.update_freq_mult(i);
                 }
@@ -351,13 +356,14 @@ impl SynthApp {
 
             // Detune
             ui.horizontal(|ui| {
-                ui.label("Det:");
+                ui.label("Det:").on_hover_text("Fine-tune pitch in cents (1/100 of a semitone). ±100 ¢ = ±1 semitone.");
                 if ui
                     .add(
                         egui::Slider::new(&mut self.osc_detune[i], -100.0..=100.0)
                             .text("¢")
                             .fixed_decimals(0),
                     )
+                    .on_hover_text("Fine-tune pitch in cents. Use small values to fatten the sound when combined with another OSC.")
                     .changed()
                 {
                     self.update_freq_mult(i);
@@ -373,10 +379,12 @@ impl SynthApp {
                     } else {
                         Color32::GRAY
                     });
-                    if ui.button(label).clicked() {
+                    if ui.button(label)
+                        .on_hover_text("Pulse Width — vary the duty cycle of the square wave. 0.5 = standard square. Narrower = thinner, nasal tone.")
+                        .clicked()
+                    {
                         self.osc_pw_enabled[i] = !pw_on;
                         if !self.osc_pw_enabled[i] {
-                            // Reset to 50% when disabled
                             self.osc_pulse_width[i] = 0.5;
                             self.state.osc_pulse_width[i].set(0.5);
                         }
@@ -387,6 +395,7 @@ impl SynthApp {
                                 egui::Slider::new(&mut self.osc_pulse_width[i], 0.01..=0.99)
                                     .fixed_decimals(2),
                             )
+                            .on_hover_text("Duty cycle: 0.5 = square, 0.1 = thin/nasal, 0.9 = thin/nasal (mirrored).")
                             .changed()
                         {
                             self.state.osc_pulse_width[i].set(self.osc_pulse_width[i]);
@@ -403,7 +412,10 @@ impl SynthApp {
                 } else {
                     Color32::GRAY
                 });
-                if ui.button(label).clicked() {
+                if ui.button(label)
+                    .on_hover_text("Unison — stack multiple detuned copies of this oscillator for a thick, wide sound.")
+                    .clicked()
+                {
                     self.osc_unison_enabled[i] = !uni_on;
                     self.update_unison(i);
                 }
@@ -411,6 +423,7 @@ impl SynthApp {
                     let mut changed = false;
                     changed |= ui
                         .add(egui::Slider::new(&mut self.osc_unison_count[i], 2..=5).text("v"))
+                        .on_hover_text("Number of simultaneous copies (2–5). More copies = thicker sound.")
                         .changed();
                     changed |= ui
                         .add(
@@ -418,6 +431,7 @@ impl SynthApp {
                                 .text("¢")
                                 .fixed_decimals(0),
                         )
+                        .on_hover_text("Total pitch spread across all copies in cents. Higher = wider detune, more chorus effect.")
                         .changed();
                     if changed {
                         self.update_unison(i);
@@ -425,51 +439,62 @@ impl SynthApp {
                 });
             });
 
-            // Hard sync toggle — only shown on OSC 1 (the master)
+            // Hard sync, FM, Ring mod — only on OSC 1
             if i == 0 {
                 ui.horizontal(|ui| {
                     let on = self.hard_sync;
                     let label = egui::RichText::new("Sync→2").small()
                         .color(if on { Color32::from_rgb(255, 180, 0) } else { Color32::GRAY });
-                    if ui.button(label).clicked() {
+                    if ui.button(label)
+                        .on_hover_text("Hard Sync — OSC 1 resets OSC 2's phase on every cycle. Creates a complex, harmonically rich timbre. Sweep OSC 2's pitch for the classic sync sweep sound.")
+                        .clicked()
+                    {
                         self.hard_sync = !on;
                         self.state.hard_sync_enabled.store(self.hard_sync, std::sync::atomic::Ordering::Relaxed);
                     }
                     ui.label(egui::RichText::new("OSC1 → OSC2").weak().small());
                 });
 
-                // FM: OSC 2 → OSC 1 pitch (audio-rate FM)
                 ui.horizontal(|ui| {
                     let on = self.fm_enabled;
                     let label = egui::RichText::new("FM").small()
                         .color(if on { Color32::from_rgb(120, 180, 255) } else { Color32::GRAY });
-                    if ui.button(label).clicked() {
+                    if ui.button(label)
+                        .on_hover_text("Frequency Modulation — OSC 2 modulates OSC 1's pitch at audio rate. Low depth = warmth. High depth = metallic, DX7-style timbres.")
+                        .clicked()
+                    {
                         self.fm_enabled = !on;
                         let depth = if self.fm_enabled { self.fm_depth } else { 0.0 };
                         self.state.fm_depth.set(depth);
                     }
                     ui.add_enabled_ui(self.fm_enabled, |ui| {
                         if ui.add(egui::Slider::new(&mut self.fm_depth, 0.0..=10.0)
-                            .text("depth").fixed_decimals(1)).changed()
+                            .text("depth").fixed_decimals(1))
+                            .on_hover_text("FM depth (modulation index). ~1 = subtle. 3–5 = DX7 bells. 8+ = chaotic sidebands.")
+                            .changed()
                         {
                             self.state.fm_depth.set(self.fm_depth);
                         }
                     });
                 });
 
-                // Ring mod: OSC 1 × OSC 2 added to mix
                 ui.horizontal(|ui| {
                     let on = self.ring_enabled;
                     let label = egui::RichText::new("Ring").small()
                         .color(if on { Color32::from_rgb(255, 130, 200) } else { Color32::GRAY });
-                    if ui.button(label).clicked() {
+                    if ui.button(label)
+                        .on_hover_text("Ring Modulation — multiplies OSC 1 × OSC 2. Output contains sum and difference frequencies, not the originals. Metallic, bell-like, Dalek-style textures.")
+                        .clicked()
+                    {
                         self.ring_enabled = !on;
                         let depth = if self.ring_enabled { self.ring_depth } else { 0.0 };
                         self.state.ring_depth.set(depth);
                     }
                     ui.add_enabled_ui(self.ring_enabled, |ui| {
                         if ui.add(egui::Slider::new(&mut self.ring_depth, 0.0..=2.0)
-                            .text("depth").fixed_decimals(2)).changed()
+                            .text("depth").fixed_decimals(2))
+                            .on_hover_text("Ring mod level added to the mix. Mute OSC 1 and OSC 2 in the mixer for pure ring mod — only sum/difference tones remain.")
+                            .changed()
                         {
                             self.state.ring_depth.set(self.ring_depth);
                         }
