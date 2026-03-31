@@ -33,7 +33,13 @@ pub struct AudioState {
     // fm_tap[vi] is written by OSC 2 copy 0 each sample; fm_depth scales the deviation.
     // deviation (Hz) = fm_tap × fm_depth × voice_freq × osc1_freq_mult
     pub fm_depth: Shared,          // 0.0 = off, ~1.0 = strong FM
-    pub fm_tap: Vec<Shared>,       // one per voice
+    pub fm_tap: Vec<Shared>,       // one per voice — written by OSC 2 copy 0
+
+    // Ring modulation: OSC 1 × OSC 2 → added to voice mix.
+    // ring_tap[vi] is written by OSC 1 copy 0; ring signal = ring_tap × fm_tap × ring_depth.
+    // User mutes OSC 1/2 in mixer for pure ring mod sound.
+    pub ring_depth: Shared,        // 0.0 = off
+    pub ring_tap: Vec<Shared>,     // one per voice — written by OSC 1 copy 0
 
     // Noise
     pub noise_vol: Shared, // 0.0..1.0
@@ -175,6 +181,8 @@ impl AudioState {
             hard_sync_gen: (0..VOICE_COUNT).map(|_| Arc::new(AtomicU8::new(0))).collect(),
             fm_depth: shared(0.0),
             fm_tap: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
+            ring_depth: shared(0.0),
+            ring_tap: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
             voice_freqs: (0..VOICE_COUNT).map(|_| shared(440.0)).collect(),
             voice_gates: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
             effective_cutoff: shared(3000.0),
@@ -246,7 +254,8 @@ fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Send> {
                 * var(vf) * var(&state.osc_freq_mult[0]);
             let c0 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][0]) + fm.clone()
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32, 0.0 / 5.0,
-                    SyncRole::Master { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&sync_gen) }, None)))
+                    SyncRole::Master { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&sync_gen) },
+                    Some(state.ring_tap[vi].clone()))))
                 * var(&state.osc_unison_vol[0][0]);
             let c1 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][1]) + fm.clone()
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32, 1.0 / 5.0, SyncRole::None, None)))
@@ -306,7 +315,9 @@ fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Send> {
             (c0 + c1 + c2 + c3 + c4) * var(&state.osc_vol[2])
         };
 
-        let osc = osc0 + osc1 + osc2;
+        // Ring mod: OSC1 × OSC2 added to the mix. Both taps are 1-sample delayed.
+        let ring = var(&state.ring_tap[vi]) * var(&state.fm_tap[vi]) * var(&state.ring_depth);
+        let osc = osc0 + osc1 + osc2 + ring;
         let env = var(vg) >> adsr_live(a, d, s, r);
         osc * env
     };

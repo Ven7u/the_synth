@@ -158,6 +158,60 @@ The 1-sample delay (≈ 22 µs at 44.1 kHz) is inaudible. Only OSC 2 copy 0 driv
 
 ---
 
+## Ring Modulation (OSC 1 × OSC 2)
+
+Multiplies OSC 1 and OSC 2 together and adds the result to the mix. Unlike normal mixing (which adds frequencies), multiplication produces the **sum and difference** of the two input frequencies — the originals disappear entirely and new tones appear in their place.
+
+If OSC 1 = 440 Hz and OSC 2 = 550 Hz:
+- Sum: 440 + 550 = **990 Hz**
+- Difference: 550 − 440 = **110 Hz**
+
+Neither 440 Hz nor 550 Hz is in the output. The result is metallic, bell-like, and often dissonant — especially when OSC 2 is tuned to a non-integer ratio relative to OSC 1.
+
+| Control | Range | Default | Notes |
+|---|---|---|---|
+| Ring | toggle | off | On OSC 1 panel only, pink = active |
+| Depth | 0.0 … 2.0 | 1.0 | Scales the ring signal level added to the mix |
+
+**Pure ring mod:** Mute OSC 1 and OSC 2 in the mixer (vol = 0). The tap runs independently of the audio path — the ring signal is still computed and added to the mix. You hear only the sum/difference frequencies.
+
+**Mixed ring mod:** Leave OSC 1 and OSC 2 audible. The ring product blends with the original tones for a complex, layered timbre.
+
+**Interval guide:**
+
+| OSC 2 relative pitch | Ratio | Output character |
+|---|---|---|
+| Unison | 1:1 | DC + 2× fundamental (mostly silent, use for tremolo-like effects with detune) |
+| Octave +1 | 2:1 | Sum = 3× fundamental, difference = fundamental — adds a hollow quality |
+| Fifth (+7 semitones) | ~1.5:1 | Slightly inharmonic — mild metallic edge |
+| Large detune (e.g. +350 ¢) | irrational | Strongly inharmonic — bell, gong, Dalek |
+
+**Classic uses:** Dalek voice effect, metallic percussion, alien textures, gong/bell tones.
+
+### Ring mod signal flow
+
+```mermaid
+flowchart LR
+    OSC1C0["OSC 1 copy 0\nMultiWaveOsc"]
+    OSC2C0["OSC 2 copy 0\nMultiWaveOsc"]
+    RTAP["ring_tap\nShared f32\nper voice"]
+    FTAP["fm_tap\nShared f32\nper voice"]
+    RING["× ring_depth"]
+    SUM(("+"))
+    MIX([voice mix])
+
+    OSC1C0 -->|raw sample| RTAP
+    OSC2C0 -->|raw sample| FTAP
+    RTAP --> RING
+    FTAP --> RING
+    RING --> SUM
+    SUM --> MIX
+```
+
+Both taps are 1-sample delayed (≈ 22 µs at 44.1 kHz — inaudible). Only copy 0 of each oscillator contributes to the ring product; unison copies are not included to avoid amplitude scaling artifacts.
+
+---
+
 ## Signal flow (per OSC slot)
 
 ```mermaid

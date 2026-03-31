@@ -17,7 +17,7 @@ Status of all planned features, in implementation order.
 | PWM (LFO → pulse width) | 🔲 Planned | MultiWaveOsc gains 2nd input; LFO routed in |
 | Hard sync (OSC1 resets OSC2) | ✅ Done | Generation counter per voice; all OSC2 unison copies are slaves |
 | FM (OSC2 → OSC1 frequency) | ✅ Done | fm_tap Shared per voice; pitch-tracking linear FM |
-| Ring modulation (OSC1 × OSC2) | 🔲 Planned | One multiply node instead of sum |
+| Ring modulation (OSC1 × OSC2) | ✅ Done | ring_tap + fm_tap Shared per voice; added to mix |
 | Triangle PolyBLEP | 🔲 Low priority | Aliasing only audible above C6 |
 
 ---

@@ -53,6 +53,8 @@ struct SynthApp {
     hard_sync: bool,              // OSC 1 → OSC 2 hard sync
     fm_enabled: bool,             // OSC 2 → OSC 1 frequency modulation
     fm_depth: f32,                // FM depth (0 = off, ~1 = strong)
+    ring_enabled: bool,           // ring modulation OSC 1 × OSC 2
+    ring_depth: f32,              // ring mod depth
 
     // Noise
     noise_vol: f32,
@@ -124,6 +126,8 @@ impl SynthApp {
             hard_sync: false,
             fm_enabled: false,
             fm_depth: 1.0,
+            ring_enabled: false,
+            ring_depth: 1.0,
             noise_vol: 0.0,
             lfo_rate: 2.0,
             lfo_depth: 0.0,
@@ -449,6 +453,25 @@ impl SynthApp {
                             .text("depth").fixed_decimals(1)).changed()
                         {
                             self.state.fm_depth.set(self.fm_depth);
+                        }
+                    });
+                });
+
+                // Ring mod: OSC 1 × OSC 2 added to mix
+                ui.horizontal(|ui| {
+                    let on = self.ring_enabled;
+                    let label = egui::RichText::new("Ring").small()
+                        .color(if on { Color32::from_rgb(255, 130, 200) } else { Color32::GRAY });
+                    if ui.button(label).clicked() {
+                        self.ring_enabled = !on;
+                        let depth = if self.ring_enabled { self.ring_depth } else { 0.0 };
+                        self.state.ring_depth.set(depth);
+                    }
+                    ui.add_enabled_ui(self.ring_enabled, |ui| {
+                        if ui.add(egui::Slider::new(&mut self.ring_depth, 0.0..=2.0)
+                            .text("depth").fixed_decimals(2)).changed()
+                        {
+                            self.state.ring_depth.set(self.ring_depth);
                         }
                     });
                 });
