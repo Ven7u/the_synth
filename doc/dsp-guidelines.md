@@ -164,3 +164,42 @@ graph.set_sample_rate(sr);
 graph.allocate();
 ```
 `allocate()` pre-allocates internal buffers. Without it, the first few audio callbacks may allocate memory, causing dropouts.
+
+---
+
+## Build Profile: Always Optimize
+
+### Never run a real-time audio app in debug mode
+
+Rust's default `cargo run` uses the `dev` profile with **no optimization** (`opt-level = 0`). This means:
+- No inlining of `f32` math, `tanh()`, `sin()`, etc.
+- No auto-vectorization (SIMD)
+- Every `AudioNode::tick()` call has full function call overhead
+- fundsp graph traversal is orders of magnitude slower
+
+For a synth with 90+ oscillator nodes across 6 polyphonic voices, unoptimized code **cannot keep up with real-time audio** at 44.1kHz. The audio callback takes longer than the buffer duration, causing **buffer underruns** — gaps in the output that sound like random clicks, pops, and crackling.
+
+This is deceptive because:
+- The signal level looks fine on the meter (it's not clipping)
+- The clicks are random and intermittent (depends on CPU load and scheduling)
+- It sounds similar to amplitude clipping but has a different character (sharp digital pops vs. waveform distortion)
+
+### How to fix
+
+Add this to `Cargo.toml`:
+
+```toml
+[profile.dev]
+opt-level = 2
+```
+
+This gives optimized code while keeping debug symbols and reasonable compile times. `opt-level = 2` is enough for real-time audio. Use `opt-level = 3` or `--release` if you need maximum performance.
+
+### How to tell the difference
+
+- **Amplitude clipping**: visible on the peak meter (signal > 1.0), consistent distortion that gets worse with volume, waveform looks squashed on the oscilloscope.
+- **Buffer underruns**: meter shows normal levels, clicks are random and independent of volume, waveform has sudden discontinuities (gaps).
+
+### Rule of thumb
+
+If you hear random clicks/pops but the peak meter is green, check your build profile first. This applies to any real-time audio project in Rust, not just fundsp.

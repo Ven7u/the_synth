@@ -8,7 +8,7 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample, Stream};
 use fundsp::prelude32::*;
-use std::sync::atomic::{AtomicU32, AtomicU8};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8};
 use std::sync::Arc;
 
 use crate::osc::MultiWaveOsc;
@@ -76,6 +76,14 @@ pub struct AudioState {
     pub note_on_time: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
     // Last measured round-trip latency in microseconds, written by audio callback.
     pub last_latency_us: Arc<AtomicU32>,
+
+    // Peak metering (pre-clip level, written by audio callback each buffer)
+    pub peak_l: Arc<AtomicU32>, // f32 bits stored as u32
+    pub peak_r: Arc<AtomicU32>,
+
+    // Master limiter (envelope-follower, runs in callback before tanh)
+    pub limiter_enabled: Arc<AtomicBool>,
+    pub limiter_threshold: Shared, // 0.5..1.0
 }
 
 impl AudioState {
@@ -87,7 +95,7 @@ impl AudioState {
                 Arc::new(AtomicU8::new(0)),
             ],
             osc_freq_mult: [shared(1.0), shared(1.0), shared(1.0)],
-            osc_vol: [shared(0.65), shared(0.5), shared(0.0)],
+            osc_vol: [shared(0.4), shared(0.3), shared(0.0)],
             osc_pulse_width: [shared(0.5), shared(0.5), shared(0.5)],
             // Unison off by default: copy 0 at full weight, copies 1-4 silent
             osc_unison_detune: [
@@ -161,6 +169,10 @@ impl AudioState {
             sample_rate: Arc::new(AtomicU32::new(0)),
             note_on_time: Arc::new(std::sync::Mutex::new(None)),
             last_latency_us: Arc::new(AtomicU32::new(0)),
+            peak_l: Arc::new(AtomicU32::new(0)),
+            peak_r: Arc::new(AtomicU32::new(0)),
+            limiter_enabled: Arc::new(AtomicBool::new(true)),
+            limiter_threshold: shared(0.95),
         }
     }
 }
@@ -400,6 +412,12 @@ where
     let mut osc_idx: usize = 0;
     let mut buffer_size_captured = false;
 
+    // Limiter envelope state (lives across callbacks)
+    let mut env_l: f32 = 0.0;
+    let mut env_r: f32 = 0.0;
+    let attack_coeff = (-1.0_f64 / (0.0001 * sr)).exp() as f32; // ~0.1ms attack
+    let release_coeff = (-1.0_f64 / (0.05 * sr)).exp() as f32; // ~50ms release
+
     let stream = device.build_output_stream(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
@@ -432,8 +450,48 @@ where
             // Try to lock oscilloscope buffer once per callback (instead of once per sample).
             let mut scope_buf = state.osc_buffer.try_lock().ok();
 
+            let limiter_on = state
+                .limiter_enabled
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let threshold = state.limiter_threshold.value();
+            let mut peak_l_local: f32 = 0.0;
+            let mut peak_r_local: f32 = 0.0;
+
             for (frame_i, frame) in data.chunks_mut(channels).enumerate() {
-                let (raw_l, raw_r) = graph.get_stereo();
+                let (mut raw_l, mut raw_r) = graph.get_stereo();
+
+                // Peak metering: track pre-clip level
+                let abs_l = raw_l.abs();
+                let abs_r = raw_r.abs();
+                if abs_l > peak_l_local {
+                    peak_l_local = abs_l;
+                }
+                if abs_r > peak_r_local {
+                    peak_r_local = abs_r;
+                }
+
+                // Optional envelope-follower limiter (before soft clip)
+                if limiter_on {
+                    // Fast attack, slow release envelope follower
+                    env_l = if abs_l > env_l {
+                        attack_coeff * env_l + (1.0 - attack_coeff) * abs_l
+                    } else {
+                        release_coeff * env_l + (1.0 - release_coeff) * abs_l
+                    };
+                    env_r = if abs_r > env_r {
+                        attack_coeff * env_r + (1.0 - attack_coeff) * abs_r
+                    } else {
+                        release_coeff * env_r + (1.0 - release_coeff) * abs_r
+                    };
+
+                    if env_l > threshold {
+                        raw_l *= threshold / env_l;
+                    }
+                    if env_r > threshold {
+                        raw_r *= threshold / env_r;
+                    }
+                }
+
                 // Gentle soft clip for occasional overshoots.
                 let l = raw_l.tanh();
                 let r_out = raw_r.tanh();
@@ -453,6 +511,14 @@ where
                     *smp = if i & 1 == 0 { left } else { right };
                 }
             }
+
+            // Write peak levels for UI metering
+            state
+                .peak_l
+                .store(peak_l_local.to_bits(), std::sync::atomic::Ordering::Relaxed);
+            state
+                .peak_r
+                .store(peak_r_local.to_bits(), std::sync::atomic::Ordering::Relaxed);
         },
         |err| eprintln!("audio error: {err}"),
         None,
