@@ -51,6 +51,8 @@ struct SynthApp {
     osc_unison_count: [usize; 3], // 2..5
     osc_unison_spread: [f32; 3],  // 0..50 cents total
     hard_sync: bool,              // OSC 1 → OSC 2 hard sync
+    fm_enabled: bool,             // OSC 2 → OSC 1 frequency modulation
+    fm_depth: f32,                // FM depth (0 = off, ~1 = strong)
 
     // Noise
     noise_vol: f32,
@@ -120,6 +122,8 @@ impl SynthApp {
             osc_unison_count: [2, 2, 2],
             osc_unison_spread: [20.0, 20.0, 20.0],
             hard_sync: false,
+            fm_enabled: false,
+            fm_depth: 1.0,
             noise_vol: 0.0,
             lfo_rate: 2.0,
             lfo_depth: 0.0,
@@ -428,6 +432,25 @@ impl SynthApp {
                         self.state.hard_sync_enabled.store(self.hard_sync, std::sync::atomic::Ordering::Relaxed);
                     }
                     ui.label(egui::RichText::new("OSC1 → OSC2").weak().small());
+                });
+
+                // FM: OSC 2 → OSC 1 pitch (audio-rate FM)
+                ui.horizontal(|ui| {
+                    let on = self.fm_enabled;
+                    let label = egui::RichText::new("FM").small()
+                        .color(if on { Color32::from_rgb(120, 180, 255) } else { Color32::GRAY });
+                    if ui.button(label).clicked() {
+                        self.fm_enabled = !on;
+                        let depth = if self.fm_enabled { self.fm_depth } else { 0.0 };
+                        self.state.fm_depth.set(depth);
+                    }
+                    ui.add_enabled_ui(self.fm_enabled, |ui| {
+                        if ui.add(egui::Slider::new(&mut self.fm_depth, 0.0..=10.0)
+                            .text("depth").fixed_decimals(1)).changed()
+                        {
+                            self.state.fm_depth.set(self.fm_depth);
+                        }
+                    });
                 });
             }
         });

@@ -29,6 +29,12 @@ pub struct AudioState {
     pub hard_sync_enabled: Arc<AtomicBool>,
     pub hard_sync_gen: Vec<Arc<AtomicU8>>,   // one per voice
 
+    // FM: OSC 2 audio output → OSC 1 frequency input (audio-rate FM).
+    // fm_tap[vi] is written by OSC 2 copy 0 each sample; fm_depth scales the deviation.
+    // deviation (Hz) = fm_tap × fm_depth × voice_freq × osc1_freq_mult
+    pub fm_depth: Shared,          // 0.0 = off, ~1.0 = strong FM
+    pub fm_tap: Vec<Shared>,       // one per voice
+
     // Noise
     pub noise_vol: Shared, // 0.0..1.0
 
@@ -167,6 +173,8 @@ impl AudioState {
             master_vol: shared(0.4),
             hard_sync_enabled: Arc::new(AtomicBool::new(false)),
             hard_sync_gen: (0..VOICE_COUNT).map(|_| Arc::new(AtomicU8::new(0))).collect(),
+            fm_depth: shared(0.0),
+            fm_tap: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
             voice_freqs: (0..VOICE_COUNT).map(|_| shared(440.0)).collect(),
             voice_gates: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
             effective_cutoff: shared(3000.0),
@@ -230,63 +238,70 @@ fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Send> {
         let sync_enabled = Arc::clone(&state.hard_sync_enabled);
         let sync_gen     = Arc::clone(&state.hard_sync_gen[vi]);
 
+        // FM: frequency deviation added to OSC 1's input.
+        // fm_tap[vi] is written by OSC 2 copy 0; deviation = tap × fm_depth × voice_freq × osc1_mult.
+        // Using voice_freq × osc1_mult keeps the modulation index pitch-independent.
         let osc0 = {
-            let c0 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][0])
+            let fm = var(&state.fm_tap[vi]) * var(&state.fm_depth)
+                * var(vf) * var(&state.osc_freq_mult[0]);
+            let c0 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][0]) + fm.clone()
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32, 0.0 / 5.0,
-                    SyncRole::Master { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&sync_gen) })))
+                    SyncRole::Master { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&sync_gen) }, None)))
                 * var(&state.osc_unison_vol[0][0]);
-            let c1 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][1])
-                >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32, 1.0 / 5.0, SyncRole::None)))
+            let c1 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][1]) + fm.clone()
+                >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32, 1.0 / 5.0, SyncRole::None, None)))
                 * var(&state.osc_unison_vol[0][1]);
-            let c2 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][2])
-                >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32, 2.0 / 5.0, SyncRole::None)))
+            let c2 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][2]) + fm.clone()
+                >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32, 2.0 / 5.0, SyncRole::None, None)))
                 * var(&state.osc_unison_vol[0][2]);
-            let c3 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][3])
-                >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32, 3.0 / 5.0, SyncRole::None)))
+            let c3 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][3]) + fm.clone()
+                >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32, 3.0 / 5.0, SyncRole::None, None)))
                 * var(&state.osc_unison_vol[0][3]);
-            let c4 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][4])
-                >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32, 4.0 / 5.0, SyncRole::None)))
+            let c4 = (var(vf) * var(&state.osc_freq_mult[0]) * var(&state.osc_unison_detune[0][4]) + fm
+                >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[0]), state.osc_pulse_width[0].clone(), sr as f32, 4.0 / 5.0, SyncRole::None, None)))
                 * var(&state.osc_unison_vol[0][4]);
             (c0 + c1 + c2 + c3 + c4) * var(&state.osc_vol[0])
         };
         let osc1 = {
+            // Copy 0 writes its raw output to fm_tap[vi] for OSC 1's FM input.
             let c0 = (var(vf) * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][0])
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[1]), state.osc_pulse_width[1].clone(), sr as f32, 0.0 / 5.0,
-                    SyncRole::Slave { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&sync_gen), last_gen: 0 })))
+                    SyncRole::Slave { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&sync_gen), last_gen: 0 },
+                    Some(state.fm_tap[vi].clone()))))
                 * var(&state.osc_unison_vol[1][0]);
             let c1 = (var(vf) * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][1])
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[1]), state.osc_pulse_width[1].clone(), sr as f32, 1.0 / 5.0,
-                    SyncRole::Slave { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&sync_gen), last_gen: 0 })))
+                    SyncRole::Slave { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&sync_gen), last_gen: 0 }, None)))
                 * var(&state.osc_unison_vol[1][1]);
             let c2 = (var(vf) * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][2])
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[1]), state.osc_pulse_width[1].clone(), sr as f32, 2.0 / 5.0,
-                    SyncRole::Slave { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&sync_gen), last_gen: 0 })))
+                    SyncRole::Slave { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&sync_gen), last_gen: 0 }, None)))
                 * var(&state.osc_unison_vol[1][2]);
             let c3 = (var(vf) * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][3])
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[1]), state.osc_pulse_width[1].clone(), sr as f32, 3.0 / 5.0,
-                    SyncRole::Slave { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&sync_gen), last_gen: 0 })))
+                    SyncRole::Slave { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&sync_gen), last_gen: 0 }, None)))
                 * var(&state.osc_unison_vol[1][3]);
             let c4 = (var(vf) * var(&state.osc_freq_mult[1]) * var(&state.osc_unison_detune[1][4])
                 >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[1]), state.osc_pulse_width[1].clone(), sr as f32, 4.0 / 5.0,
-                    SyncRole::Slave { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&sync_gen), last_gen: 0 })))
+                    SyncRole::Slave { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&sync_gen), last_gen: 0 }, None)))
                 * var(&state.osc_unison_vol[1][4]);
             (c0 + c1 + c2 + c3 + c4) * var(&state.osc_vol[1])
         };
         let osc2 = {
             let c0 = (var(vf) * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][0])
-                >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32, 0.0 / 5.0, SyncRole::None)))
+                >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32, 0.0 / 5.0, SyncRole::None, None)))
                 * var(&state.osc_unison_vol[2][0]);
             let c1 = (var(vf) * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][1])
-                >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32, 1.0 / 5.0, SyncRole::None)))
+                >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32, 1.0 / 5.0, SyncRole::None, None)))
                 * var(&state.osc_unison_vol[2][1]);
             let c2 = (var(vf) * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][2])
-                >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32, 2.0 / 5.0, SyncRole::None)))
+                >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32, 2.0 / 5.0, SyncRole::None, None)))
                 * var(&state.osc_unison_vol[2][2]);
             let c3 = (var(vf) * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][3])
-                >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32, 3.0 / 5.0, SyncRole::None)))
+                >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32, 3.0 / 5.0, SyncRole::None, None)))
                 * var(&state.osc_unison_vol[2][3]);
             let c4 = (var(vf) * var(&state.osc_freq_mult[2]) * var(&state.osc_unison_detune[2][4])
-                >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32, 4.0 / 5.0, SyncRole::None)))
+                >> An(MultiWaveOsc::with_sync(Arc::clone(&state.osc_wave[2]), state.osc_pulse_width[2].clone(), sr as f32, 4.0 / 5.0, SyncRole::None, None)))
                 * var(&state.osc_unison_vol[2][4]);
             (c0 + c1 + c2 + c3 + c4) * var(&state.osc_vol[2])
         };

@@ -96,6 +96,68 @@ The generation counter approach avoids the need to clear a flag — each slave i
 
 ---
 
+## FM — Frequency Modulation (OSC 2 → OSC 1)
+
+Audio-rate FM: OSC 2's output waveform is fed into OSC 1's frequency input instead of (or alongside) the audio mixer. OSC 2 is now wiggling OSC 1's pitch thousands of times per second. At low depths this adds subtle warmth and harmonic complexity. At high depths you get metallic, bell-like, inharmonic timbres similar to a DX7.
+
+This is distinct from the LFO pitch destination — that is also FM, but at sub-audio rate (< 20 Hz). Below ~20 Hz the ear hears pitch wobble (vibrato). Above ~20 Hz the ear stops tracking individual cycles and hears new timbres instead.
+
+| Control | Range | Default | Notes |
+|---|---|---|---|
+| FM | toggle | off | On OSC 1 panel only, blue = active |
+| Depth | 0.0 … 10.0 | 1.0 | FM index — higher = more sideband energy |
+
+**How depth works:** The frequency deviation applied to OSC 1 is:
+
+```
+deviation (Hz) = osc2_sample × depth × voice_freq × osc1_freq_mult
+```
+
+Scaling by `voice_freq × osc1_freq_mult` keeps the modulation index constant across the keyboard — the same depth setting sounds consistent whether you play C2 or C5.
+
+**Modulator ratio and timbre:**
+
+The ratio of OSC 2's frequency to OSC 1's frequency (the *modulator ratio*) determines where the sidebands land:
+
+| OSC 2 relative pitch | Ratio | Timbre |
+|---|---|---|
+| Same octave, no detune | 1:1 | Adds odd harmonics, thickens timbre |
+| Octave +1 | 2:1 | Bright, adds even harmonics |
+| Octave +1 + 7 semitones (+702 ¢) | 3:1 | Brassy, trumpet-like |
+| Octave +1 + large detune | irrational | Metallic, bell, inharmonic |
+
+**Depth guide:**
+
+| Depth | Character |
+|---|---|
+| 0.1 – 0.5 | Subtle warmth, slight edge |
+| 1 – 2 | Noticeable harmonic complexity |
+| 3 – 5 | DX7-style electric piano / bell |
+| 6 – 10 | Aggressive, metallic, chaotic sidebands |
+
+**OSC 2 volume in the mixer:** You can mute OSC 2 in the mixer (vol = 0) while FM is active. The tap runs independently of the audio path — OSC 2 still modulates OSC 1 even when its own output is silent. This is useful when you want pure FM timbre without OSC 2 adding to the mix directly.
+
+### FM signal flow
+
+```mermaid
+flowchart LR
+    VF([voice freq Hz])
+    M1["× osc1_freq_mult\n(oct + detune)"]
+    FM_ADD["+ fm_tap × depth\n× voice_freq × osc1_mult"]
+    OSC1["OSC 1\nMultiWaveOsc"]
+    OUT1([audio out])
+
+    OSC2C0["OSC 2 copy 0\nMultiWaveOsc"]
+    TAP["fm_tap\nShared f32\nper voice"]
+
+    VF --> M1 --> FM_ADD --> OSC1 --> OUT1
+    OSC2C0 -->|"raw sample\n(1-sample delay)"| TAP --> FM_ADD
+```
+
+The 1-sample delay (≈ 22 µs at 44.1 kHz) is inaudible. Only OSC 2 copy 0 drives the tap; unison copies do not contribute to avoid frequency-scaled summation artifacts.
+
+---
+
 ## Signal flow (per OSC slot)
 
 ```mermaid

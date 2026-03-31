@@ -102,6 +102,8 @@ pub enum SyncRole {
 /// Waveform is selected at runtime via an `Arc<AtomicU8>` — no graph rebuild needed.
 /// Saw and square use PolyBLEP band-limiting; triangle and sine are alias-free.
 /// Supports hard sync via a generation counter shared between master and slave instances.
+/// Optionally writes each output sample to `fm_tap` so another oscillator can read it
+/// for audio-rate FM (1-sample delay, inaudible at audio rates).
 #[derive(Clone)]
 pub struct MultiWaveOsc {
     wave: Arc<AtomicU8>,
@@ -109,12 +111,13 @@ pub struct MultiWaveOsc {
     phase: f32,
     sr: f32,
     sync: SyncRole,
+    fm_tap: Option<Shared>,
 }
 
 impl MultiWaveOsc {
     #[allow(dead_code)]
     pub fn new(wave: Arc<AtomicU8>, pulse_width: Shared, sr: f32) -> Self {
-        Self::with_sync(wave, pulse_width, sr, 0.0, SyncRole::None)
+        Self::with_sync(wave, pulse_width, sr, 0.0, SyncRole::None, None)
     }
 
     pub fn with_sync(
@@ -123,6 +126,7 @@ impl MultiWaveOsc {
         sr: f32,
         initial_phase: f32,
         sync: SyncRole,
+        fm_tap: Option<Shared>,
     ) -> Self {
         Self {
             wave,
@@ -130,6 +134,7 @@ impl MultiWaveOsc {
             phase: initial_phase % 1.0,
             sr,
             sync,
+            fm_tap,
         }
     }
 }
@@ -172,7 +177,13 @@ impl AudioNode for MultiWaveOsc {
 
         let _ = prev_phase;
         let shape = WaveShape::from_u8(self.wave.load(Ordering::Relaxed));
-        [shape.sample(self.phase, dt, pw)].into()
+        let sample = shape.sample(self.phase, dt, pw);
+        // Write to FM tap if this oscillator is the FM modulator source.
+        // 1-sample delay is inaudible at audio rates (< 23 µs at 44.1 kHz).
+        if let Some(tap) = &self.fm_tap {
+            tap.set(sample);
+        }
+        [sample].into()
     }
 
     fn reset(&mut self) {
