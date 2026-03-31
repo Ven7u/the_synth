@@ -13,6 +13,9 @@ The synth has 3 independent oscillators per voice. Each is a direct digital synt
 | Octave | −2 … +2 | 0 | Relative to played note |
 | Detune | −100 … +100 ¢ | 0 | Fine pitch offset in cents |
 | Volume | 0.0 … 1.0 | OSC1: 0.5, OSC2: 0.5, OSC3: 0.3 | In the mixer panel |
+| PW on/off | toggle (Sqr only) | off | Pulse width control |
+| Uni on/off | toggle | off | Unison / spread |
+| Sync→2 | toggle (OSC 1 only) | off | Hard sync OSC 1 → OSC 2 |
 
 ---
 
@@ -58,6 +61,38 @@ Runs multiple detuned copies of the oscillator simultaneously, summed and normal
 | Spread (¢) | 0 … 50 ¢ | 20 | Total pitch spread across all copies |
 
 Copies are spread symmetrically. With 3 voices at 20¢: −10¢, 0¢, +10¢. The centre copy (when count is odd) is always at 0 detune so the fundamental pitch stays anchored. All 5 graph nodes are always present in the DSP — inactive copies have volume 0.0, so there is no graph rebuild when toggling.
+
+---
+
+## Hard Sync (OSC 1 → OSC 2)
+
+Every time OSC 1 completes a full cycle, it forces OSC 2 to restart its phase from zero — regardless of where OSC 2 is in its own cycle. The result is a complex, harmonically rich timbre whose character changes dramatically as OSC 2's pitch is swept relative to OSC 1. Classic sound on Moog leads and the intro of "Jump" (Van Halen).
+
+| Control | Range | Default | Notes |
+|---|---|---|---|
+| Sync→2 | toggle | off | On OSC 1 panel only, amber = active |
+
+**How to use:** Enable OSC 2, set it to a higher pitch than OSC 1 (e.g. octave +1 or large detune), then engage `Sync→2`. Sweeping OSC 2's pitch while sync is on produces the characteristic hard sync sweep sound.
+
+**Works with unison:** All 5 unison copies of OSC 2 are slaves — they all reset in the same sample when OSC 1's master copy wraps.
+
+### Hard sync signal flow
+
+```mermaid
+flowchart LR
+    OSC1["OSC 1 copy 0\n(Master)"]
+    GEN["sync_gen\nAtomicU8\nper voice"]
+    OSC2_0["OSC 2 copy 0\n(Slave)"]
+    OSC2_1["OSC 2 copy 1\n(Slave)"]
+    OSC2_N["OSC 2 copy …\n(Slave)"]
+
+    OSC1 -->|"phase wrap\n→ gen++"| GEN
+    GEN -->|"gen changed?\n→ reset phase"| OSC2_0
+    GEN -->|"gen changed?\n→ reset phase"| OSC2_1
+    GEN -->|"gen changed?\n→ reset phase"| OSC2_N
+```
+
+The generation counter approach avoids the need to clear a flag — each slave independently compares its `last_gen` to the shared counter every sample. When `Sync→2` is off, master and slaves skip all sync logic with no CPU overhead.
 
 ---
 

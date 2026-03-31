@@ -15,7 +15,7 @@ Status of all planned features, in implementation order.
 | Pulse width (Square) | ✅ Done | With PolyBLEP at variable duty cycle |
 | Unison / spread | ✅ Done | Up to 5 voices, 0–50¢ spread |
 | PWM (LFO → pulse width) | 🔲 Planned | MultiWaveOsc gains 2nd input; LFO routed in |
-| Hard sync (OSC1 resets OSC2) | 🔲 Planned | Needs Arc<AtomicBool> sync flag across nodes |
+| Hard sync (OSC1 resets OSC2) | ✅ Done | Generation counter per voice; all OSC2 unison copies are slaves |
 | FM (OSC2 → OSC1 frequency) | 🔲 Planned | Graph wiring only, no node changes |
 | Ring modulation (OSC1 × OSC2) | 🔲 Planned | One multiply node instead of sum |
 | Triangle PolyBLEP | 🔲 Low priority | Aliasing only audible above C6 |

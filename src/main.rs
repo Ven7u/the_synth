@@ -50,6 +50,7 @@ struct SynthApp {
     osc_unison_enabled: [bool; 3],
     osc_unison_count: [usize; 3], // 2..5
     osc_unison_spread: [f32; 3],  // 0..50 cents total
+    hard_sync: bool,              // OSC 1 → OSC 2 hard sync
 
     // Noise
     noise_vol: f32,
@@ -96,6 +97,11 @@ struct SynthApp {
     seq_current_step: usize,
     seq_last_tick: std::time::Instant,
     seq_prev_midi: Option<u8>,
+
+    // Oscilloscope
+    scope_height: f32,
+    scope_x_scale: f32,
+    scope_y_scale: f32,
 }
 
 impl SynthApp {
@@ -113,6 +119,7 @@ impl SynthApp {
             osc_unison_enabled: [false, false, false],
             osc_unison_count: [2, 2, 2],
             osc_unison_spread: [20.0, 20.0, 20.0],
+            hard_sync: false,
             noise_vol: 0.0,
             lfo_rate: 2.0,
             lfo_depth: 0.0,
@@ -141,6 +148,9 @@ impl SynthApp {
             seq_current_step: 0,
             seq_last_tick: std::time::Instant::now(),
             seq_prev_midi: None,
+            scope_height: 90.0,
+            scope_x_scale: 1.0,
+            scope_y_scale: 1.0,
         }
     }
 }
@@ -270,8 +280,7 @@ impl eframe::App for SynthApp {
             draw_latency_bar(ui, &self.state, self.amp_adsr[0]);
 
             // Oscilloscope footer
-            let buf = self.state.osc_buffer.lock().unwrap().clone();
-            draw_oscilloscope(ui, &buf, 70.0);
+            self.ui_oscilloscope(ui);
         });
 
         ctx.request_repaint();
@@ -407,6 +416,20 @@ impl SynthApp {
                     }
                 });
             });
+
+            // Hard sync toggle — only shown on OSC 1 (the master)
+            if i == 0 {
+                ui.horizontal(|ui| {
+                    let on = self.hard_sync;
+                    let label = egui::RichText::new("Sync→2").small()
+                        .color(if on { Color32::from_rgb(255, 180, 0) } else { Color32::GRAY });
+                    if ui.button(label).clicked() {
+                        self.hard_sync = !on;
+                        self.state.hard_sync_enabled.store(self.hard_sync, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    ui.label(egui::RichText::new("OSC1 → OSC2").weak().small());
+                });
+            }
         });
     }
 
@@ -1094,36 +1117,120 @@ fn draw_peak_meter(ui: &mut egui::Ui, level: f32, peak_hold: f32) {
     );
 }
 
-fn draw_oscilloscope(ui: &mut egui::Ui, buffer: &[f32], height: f32) {
-    let (resp, painter) =
-        ui.allocate_painter(Vec2::new(ui.available_width(), height), Sense::hover());
-    let rect = resp.rect;
-    painter.rect_filled(rect, Rounding::same(4.0), Color32::from_rgb(10, 15, 20));
-    if buffer.is_empty() {
-        return;
-    }
 
-    let mid_y = rect.center().y;
-    let half_h = rect.height() * 0.45;
-    let step = rect.width() / buffer.len() as f32;
+// ---------------------------------------------------------------------------
+// Oscilloscope
+// ---------------------------------------------------------------------------
 
-    painter.line_segment(
-        [
-            Pos2::new(rect.left(), mid_y),
-            Pos2::new(rect.right(), mid_y),
-        ],
-        Stroke::new(1.0, Color32::from_rgb(30, 40, 50)),
-    );
-    let points: Vec<Pos2> = buffer
-        .iter()
-        .enumerate()
-        .map(|(i, &s)| Pos2::new(rect.left() + i as f32 * step, mid_y - s * half_h))
-        .collect();
-    for w in points.windows(2) {
-        painter.line_segment(
-            [w[0], w[1]],
-            Stroke::new(1.5, Color32::from_rgb(0, 220, 160)),
-        );
+impl SynthApp {
+    fn ui_oscilloscope(&mut self, ui: &mut egui::Ui) {
+        // Controls row
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("SCOPE")
+                    .small()
+                    .color(Color32::from_rgb(60, 100, 80)),
+            );
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("X").small().color(Color32::from_rgb(100, 180, 140)));
+            ui.add(
+                egui::DragValue::new(&mut self.scope_x_scale)
+                    .speed(0.02)
+                    .range(0.25_f32..=8.0)
+                    .suffix("×"),
+            );
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("Y").small().color(Color32::from_rgb(100, 180, 140)));
+            ui.add(
+                egui::DragValue::new(&mut self.scope_y_scale)
+                    .speed(0.02)
+                    .range(0.25_f32..=8.0)
+                    .suffix("×"),
+            );
+        });
+
+        let buf = self.state.osc_buffer.lock().unwrap().clone();
+        let width = ui.available_width();
+
+        // Main scope area
+        let (resp, painter) =
+            ui.allocate_painter(Vec2::new(width, self.scope_height), Sense::hover());
+        let rect = resp.rect;
+
+        // CRT background
+        painter.rect_filled(rect, Rounding::same(4.0), Color32::from_rgb(4, 10, 7));
+
+        if !buf.is_empty() {
+            // Scanlines
+            let mut sy = rect.top() + 2.0;
+            while sy < rect.bottom() {
+                painter.line_segment(
+                    [Pos2::new(rect.left(), sy), Pos2::new(rect.right(), sy)],
+                    Stroke::new(1.0, Color32::from_rgba_premultiplied(0, 0, 0, 22)),
+                );
+                sy += 3.0;
+            }
+
+            let mid_y = rect.center().y;
+            let half_h = rect.height() * 0.45;
+
+            // Zero line
+            painter.line_segment(
+                [Pos2::new(rect.left(), mid_y), Pos2::new(rect.right(), mid_y)],
+                Stroke::new(1.0, Color32::from_rgb(12, 28, 18)),
+            );
+
+            // X scale: how many samples to show
+            let samples_to_show =
+                ((buf.len() as f32 / self.scope_x_scale) as usize).clamp(16, buf.len());
+            let buf_slice = &buf[..samples_to_show];
+            let step = rect.width() / buf_slice.len() as f32;
+            let y_scale = self.scope_y_scale;
+
+            let points: Vec<Pos2> = buf_slice
+                .iter()
+                .enumerate()
+                .map(|(i, &s)| {
+                    let amp = (s * half_h * y_scale).clamp(-half_h, half_h);
+                    Pos2::new(rect.left() + i as f32 * step, mid_y - amp)
+                })
+                .collect();
+
+            // CRT phosphor glow: outer → inner → core
+            for &(stroke_w, color) in &[
+                (5.0_f32, Color32::from_rgba_premultiplied(0, 160, 90, 14)),
+                (3.0_f32, Color32::from_rgba_premultiplied(0, 210, 130, 45)),
+                (1.2_f32, Color32::from_rgba_premultiplied(55, 255, 165, 230)),
+            ] {
+                for w in points.windows(2) {
+                    painter.line_segment([w[0], w[1]], Stroke::new(stroke_w, color));
+                }
+            }
+        }
+
+        // Drag-to-resize handle
+        let (handle_resp, handle_painter) =
+            ui.allocate_painter(Vec2::new(width, 7.0), Sense::drag());
+        if handle_resp.dragged() {
+            self.scope_height = (self.scope_height + handle_resp.drag_delta().y).max(40.0);
+        }
+        // Cursor hint
+        if handle_resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+        }
+        let grip_color = if handle_resp.hovered() || handle_resp.dragged() {
+            Color32::from_rgba_premultiplied(80, 220, 140, 140)
+        } else {
+            Color32::from_rgba_premultiplied(25, 65, 40, 100)
+        };
+        let cx = handle_resp.rect.center();
+        for dx in [-12.0_f32, -6.0, 0.0, 6.0, 12.0] {
+            let x = cx.x + dx;
+            handle_painter.line_segment(
+                [Pos2::new(x, cx.y - 1.5), Pos2::new(x, cx.y + 1.5)],
+                Stroke::new(2.0, grip_color),
+            );
+        }
     }
 }
 

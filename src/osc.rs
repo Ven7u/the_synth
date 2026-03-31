@@ -5,7 +5,7 @@
 //! that reads the active shape from an `Arc<AtomicU8>` with no graph rebuild.
 
 use fundsp::prelude32::*;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -80,35 +80,56 @@ fn poly_blep(t: f32, dt: f32) -> f32 {
 // MultiWaveOsc
 // ---------------------------------------------------------------------------
 
+/// Hard sync role for an oscillator instance.
+#[derive(Clone)]
+pub enum SyncRole {
+    /// Not participating in hard sync.
+    None,
+    /// Master: increments the generation counter on every phase wrap.
+    Master {
+        sync_enabled: Arc<AtomicBool>,
+        gen: Arc<AtomicU8>,
+    },
+    /// Slave: resets phase when it sees a new generation from the master.
+    Slave {
+        sync_enabled: Arc<AtomicBool>,
+        gen: Arc<AtomicU8>,
+        last_gen: u8,
+    },
+}
+
 /// Single oscillator fundsp node: 1 input (freq Hz) → 1 output (audio).
 /// Waveform is selected at runtime via an `Arc<AtomicU8>` — no graph rebuild needed.
 /// Saw and square use PolyBLEP band-limiting; triangle and sine are alias-free.
+/// Supports hard sync via a generation counter shared between master and slave instances.
 #[derive(Clone)]
 pub struct MultiWaveOsc {
     wave: Arc<AtomicU8>,
     pulse_width: Shared,
     phase: f32,
     sr: f32,
+    sync: SyncRole,
 }
 
 impl MultiWaveOsc {
+    #[allow(dead_code)]
     pub fn new(wave: Arc<AtomicU8>, pulse_width: Shared, sr: f32) -> Self {
-        Self::with_phase(wave, pulse_width, sr, 0.0)
+        Self::with_sync(wave, pulse_width, sr, 0.0, SyncRole::None)
     }
 
-    /// Create oscillator with specific initial phase offset (0.0..1.0).
-    /// Used for unison to avoid phase coherence between detuned copies.
-    pub fn with_phase(
+    pub fn with_sync(
         wave: Arc<AtomicU8>,
         pulse_width: Shared,
         sr: f32,
         initial_phase: f32,
+        sync: SyncRole,
     ) -> Self {
         Self {
             wave,
             pulse_width,
             phase: initial_phase % 1.0,
             sr,
+            sync,
         }
     }
 }
@@ -123,14 +144,42 @@ impl AudioNode for MultiWaveOsc {
         let freq = input[0].max(0.0);
         let dt = freq / self.sr;
         let pw = self.pulse_width.value();
+
+        // Slave: reset phase if master has wrapped since our last tick.
+        if let SyncRole::Slave { sync_enabled, gen, last_gen } = &mut self.sync {
+            if sync_enabled.load(Ordering::Relaxed) {
+                let current_gen = gen.load(Ordering::Relaxed);
+                if current_gen != *last_gen {
+                    self.phase = 0.0;
+                    *last_gen = current_gen;
+                }
+            }
+        }
+
+        let prev_phase = self.phase;
         self.phase += dt;
+        let wrapped = self.phase >= 1.0;
         self.phase -= self.phase.floor();
+
+        // Master: signal slaves when phase wraps.
+        if wrapped {
+            if let SyncRole::Master { sync_enabled, gen } = &self.sync {
+                if sync_enabled.load(Ordering::Relaxed) {
+                    gen.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+
+        let _ = prev_phase;
         let shape = WaveShape::from_u8(self.wave.load(Ordering::Relaxed));
         [shape.sample(self.phase, dt, pw)].into()
     }
 
     fn reset(&mut self) {
         self.phase = 0.0;
+        if let SyncRole::Slave { last_gen, gen, .. } = &mut self.sync {
+            *last_gen = gen.load(Ordering::Relaxed);
+        }
     }
 
     fn set_sample_rate(&mut self, sr: f64) {
