@@ -6,11 +6,16 @@
 mod audio;
 mod envelope;
 mod osc;
+mod sequencer;
 
 use audio::{AudioEngine, AudioState, VOICE_COUNT};
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, Rounding, Sense, Stroke, Vec2};
 use fundsp::prelude::midi_hz;
+use sequencer::{
+    ChordKbState, ChordSeqState, NoteSeqState, SeqMode, ScaleType,
+    NOTE_NAMES, DEGREE_LABELS, chord_name, chord_quality,
+};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -98,14 +103,18 @@ struct SynthApp {
     limiter_enabled: bool,
     limiter_threshold: f32,
 
-    // Sequencer
+    // Sequencer — shared timing
     seq_playing: bool,
     seq_bpm: u32,
-    seq_steps: [bool; 8],
-    seq_notes: [u8; 8],
     seq_current_step: usize,
     seq_last_tick: std::time::Instant,
-    seq_prev_midi: Option<u8>,
+    seq_prev_notes: Vec<u8>, // notes playing from last step (supports chords)
+
+    // Sequencer — mode + per-mode state
+    seq_mode: SeqMode,
+    note_seq: NoteSeqState,
+    chord_seq: ChordSeqState,
+    chord_kb: ChordKbState,
 
     // Oscilloscope
     scope_height: f32,
@@ -159,11 +168,13 @@ impl SynthApp {
             limiter_threshold: 0.95,
             seq_playing: false,
             seq_bpm: 120,
-            seq_steps: [true, false, true, false, true, true, false, true],
-            seq_notes: [60, 62, 64, 67, 69, 72, 67, 64],
             seq_current_step: 0,
             seq_last_tick: std::time::Instant::now(),
-            seq_prev_midi: None,
+            seq_prev_notes: Vec::new(),
+            seq_mode: SeqMode::NoteSeq,
+            note_seq: NoteSeqState::new(),
+            chord_seq: ChordSeqState::new(),
+            chord_kb: ChordKbState::new(),
             scope_height: 140.0,
             scope_x_scale: 1.0,
             scope_y_scale: 2.5,
@@ -247,16 +258,36 @@ impl SynthApp {
         }
         self.seq_last_tick = std::time::Instant::now();
 
-        // Release previous step note
-        if let Some(m) = self.seq_prev_midi.take() {
-            self.voice_off(m);
-        }
+        // Release all notes from the previous step
+        let prev: Vec<u8> = self.seq_prev_notes.drain(..).collect();
+        for m in prev { self.voice_off(m); }
 
-        self.seq_current_step = (self.seq_current_step + 1) % 8;
-        if self.seq_steps[self.seq_current_step] {
-            let midi = self.seq_notes[self.seq_current_step];
-            self.voice_on(midi);
-            self.seq_prev_midi = Some(midi);
+        let seq_length = match self.seq_mode {
+            SeqMode::NoteSeq  => self.note_seq.length,
+            SeqMode::ChordSeq => self.chord_seq.length,
+            SeqMode::ChordKb  => return, // ChordKb has no sequencer tick
+        };
+        self.seq_current_step = (self.seq_current_step + 1) % seq_length;
+
+        let notes_to_play: Vec<u8> = match self.seq_mode {
+            SeqMode::NoteSeq => {
+                let i = self.seq_current_step;
+                if self.note_seq.steps[i] { vec![self.note_seq.notes[i]] } else { vec![] }
+            }
+            SeqMode::ChordSeq => {
+                let i = self.seq_current_step;
+                if self.chord_seq.steps[i] {
+                    self.chord_seq.step_notes(i).to_vec()
+                } else {
+                    vec![]
+                }
+            }
+            SeqMode::ChordKb => vec![],
+        };
+
+        for m in notes_to_play {
+            self.voice_on(m);
+            self.seq_prev_notes.push(m);
         }
         ctx.request_repaint_after(step_dur);
     }
@@ -302,15 +333,22 @@ impl eframe::App for SynthApp {
 
             ui.add_space(4.0);
 
-            // Row 3: Keyboard + Sequencer
+            // Row 3: Keyboard
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("KEYBOARD & SEQUENCER").strong().small());
+                ui.label(egui::RichText::new("KEYBOARD").strong().small());
             });
             egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.columns(2, |cols| {
-                    self.ui_keyboard_panel(&mut cols[0]);
-                    self.ui_sequencer_panel(&mut cols[1]);
-                });
+                self.ui_keyboard_panel(ui);
+            });
+
+            ui.add_space(4.0);
+
+            // Row 4: Sequencer (full width)
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("SEQUENCER").strong().small());
+            });
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                self.ui_sequencer_panel(ui);
             });
 
             ui.add_space(4.0);
@@ -927,37 +965,71 @@ impl SynthApp {
             if ui.button("+").clicked() && self.piano_octave < 7 {
                 self.piano_octave += 1;
             }
-            ui.label(
-                egui::RichText::new("  a–l = white keys, w e t y u = sharps")
-                    .weak()
-                    .small(),
-            );
+            let hint = if self.seq_mode == SeqMode::ChordKb {
+                "  a s d f g h j = chords I–VII"
+            } else {
+                "  a–l = white keys, w e t y u = sharps"
+            };
+            ui.label(egui::RichText::new(hint).weak().small());
         });
 
-        // Keyboard input
-        let mut current_held = std::collections::HashSet::<u8>::new();
-        ui.input(|inp| {
-            for &(key, semitone) in KEY_MAP {
-                if inp.key_down(key) {
-                    current_held.insert((self.piano_octave * 12 + semitone) as u8);
+        // Keyboard input — white keys A S D F G H J map to scale degrees I–VII in ChordKb mode,
+        // or to chromatic semitones in Note/ChordSeq mode.
+        // WHITE_KEYS_ORDERED lists the 7 white-key entries from KEY_MAP in degree order.
+        const WHITE_KEYS: &[egui::Key] = &[
+            egui::Key::A, egui::Key::S, egui::Key::D, egui::Key::F,
+            egui::Key::G, egui::Key::H, egui::Key::J,
+        ];
+
+        if self.seq_mode == SeqMode::ChordKb {
+            let mut current_degrees = std::collections::HashSet::<usize>::new();
+            ui.input(|inp| {
+                for (degree, &key) in WHITE_KEYS.iter().enumerate() {
+                    if inp.key_down(key) { current_degrees.insert(degree); }
+                }
+            });
+            // Press new degrees
+            for &deg in &current_degrees {
+                if !self.chord_kb.kb_held.contains(&deg) {
+                    for m in self.chord_kb.chord_notes(deg) { self.voice_on(m); }
                 }
             }
-        });
-        for &midi in &current_held {
-            if !self.piano_held_midi.contains(&midi) {
-                self.voice_on(midi);
+            // Release removed degrees
+            let released: Vec<usize> = self.chord_kb.kb_held.iter()
+                .filter(|&&d| !current_degrees.contains(&d))
+                .copied().collect();
+            for deg in released {
+                for m in self.chord_kb.chord_notes(deg) { self.voice_off(m); }
             }
+            self.chord_kb.kb_held = current_degrees;
+            // Also clear piano_held_midi so notes don't leak when switching modes
+            let prev_midi: Vec<u8> = self.piano_held_midi.drain().collect();
+            for m in prev_midi { self.voice_off(m); }
+        } else {
+            // Normal note mode — release any chord KB notes held from previous mode
+            if !self.chord_kb.kb_held.is_empty() {
+                let held: Vec<usize> = self.chord_kb.kb_held.drain().collect();
+                for deg in held {
+                    for m in self.chord_kb.chord_notes(deg) { self.voice_off(m); }
+                }
+            }
+            let mut current_held = std::collections::HashSet::<u8>::new();
+            ui.input(|inp| {
+                for &(key, semitone) in KEY_MAP {
+                    if inp.key_down(key) {
+                        current_held.insert((self.piano_octave * 12 + semitone) as u8);
+                    }
+                }
+            });
+            for &midi in &current_held {
+                if !self.piano_held_midi.contains(&midi) { self.voice_on(midi); }
+            }
+            let released: Vec<u8> = self.piano_held_midi.iter()
+                .filter(|&&m| !current_held.contains(&m))
+                .copied().collect();
+            for midi in released { self.voice_off(midi); }
+            self.piano_held_midi = current_held;
         }
-        let released: Vec<u8> = self
-            .piano_held_midi
-            .iter()
-            .filter(|&&m| !current_held.contains(&m))
-            .copied()
-            .collect();
-        for midi in released {
-            self.voice_off(midi);
-        }
-        self.piano_held_midi = current_held;
 
         self.draw_piano(ui);
     }
@@ -1046,96 +1118,318 @@ impl SynthApp {
 }
 
 // ---------------------------------------------------------------------------
-// Sequencer panel
+// Sequencer panel — dispatches to per-mode UI
 // ---------------------------------------------------------------------------
 
-const SEQ_SCALE: &[u8] = &[60, 62, 64, 67, 69, 72, 74, 76];
+// Full chromatic range C2–C6 for note sequencer.
+const SEQ_CHROMATIC: &[u8] = &[
+    36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
+    48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
+    60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71,
+    72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83,
+    84,
+];
 
 impl SynthApp {
     fn ui_sequencer_panel(&mut self, ui: &mut egui::Ui) {
+        // --- Shared toolbar ---
         ui.horizontal(|ui| {
-            let btn = if self.seq_playing {
-                "⏹ Stop"
-            } else {
-                "▶ Play"
-            };
-            if ui.button(btn).clicked() {
-                self.seq_playing = !self.seq_playing;
-                if !self.seq_playing {
-                    if let Some(m) = self.seq_prev_midi.take() {
-                        self.voice_off(m);
+            // Mode tabs
+            for &mode in &[SeqMode::NoteSeq, SeqMode::ChordSeq, SeqMode::ChordKb] {
+                let active = self.seq_mode == mode;
+                let label = egui::RichText::new(mode.label())
+                    .color(if active { Color32::from_rgb(0, 220, 160) } else { Color32::GRAY })
+                    .strong();
+                if ui.button(label).clicked() && !active {
+                    // Stop playback when switching modes
+                    let prev: Vec<u8> = self.seq_prev_notes.drain(..).collect();
+                    for m in prev { self.voice_off(m); }
+                    self.seq_playing = false;
+                    self.seq_current_step = 0;
+                    self.seq_mode = mode;
+                }
+            }
+
+            ui.separator();
+
+            // Play/Stop — only for sequencer modes
+            if self.seq_mode != SeqMode::ChordKb {
+                let btn = if self.seq_playing { "⏹ Stop" } else { "▶ Play" };
+                if ui.button(btn).clicked() {
+                    self.seq_playing = !self.seq_playing;
+                    if !self.seq_playing {
+                        let prev: Vec<u8> = self.seq_prev_notes.drain(..).collect();
+                        for m in prev { self.voice_off(m); }
+                    }
+                }
+                ui.label("BPM:");
+                ui.add(egui::Slider::new(&mut self.seq_bpm, 40..=600));
+
+                // Step length selector
+                let cur_length = match self.seq_mode {
+                    SeqMode::NoteSeq  => &mut self.note_seq.length,
+                    SeqMode::ChordSeq => &mut self.chord_seq.length,
+                    SeqMode::ChordKb  => unreachable!(),
+                };
+                ui.label("Steps:");
+                for &len in &[8usize, 16, 24] {
+                    let active = *cur_length == len;
+                    let label = egui::RichText::new(format!("{len}"))
+                        .color(if active { Color32::from_rgb(0, 200, 130) } else { Color32::GRAY });
+                    if ui.button(label).clicked() {
+                        *cur_length = len;
+                        if self.seq_current_step >= len { self.seq_current_step = 0; }
+                    }
+                }
+
+                // Random fill
+                if ui.button("🎲").clicked() {
+                    use std::collections::hash_map::DefaultHasher;
+                    use std::hash::{Hash, Hasher};
+                    let mut h = DefaultHasher::new();
+                    std::time::SystemTime::now().hash(&mut h);
+                    let seed = h.finish();
+                    match self.seq_mode {
+                        SeqMode::NoteSeq => {
+                            let len = self.note_seq.length;
+                            for i in 0..len {
+                                self.note_seq.steps[i] = seed.wrapping_shr(i as u32) & 1 == 1;
+                                self.note_seq.notes[i] = SEQ_CHROMATIC[
+                                    (seed.wrapping_shr((i * 3) as u32) & 0xff) as usize
+                                    % SEQ_CHROMATIC.len()
+                                ];
+                            }
+                        }
+                        SeqMode::ChordSeq => {
+                            let len = self.chord_seq.length;
+                            for i in 0..len {
+                                self.chord_seq.steps[i] = seed.wrapping_shr(i as u32) & 1 == 1;
+                                self.chord_seq.degrees[i] =
+                                    (seed.wrapping_shr((i * 4) as u32) & 0xff) as usize % 7;
+                            }
+                        }
+                        SeqMode::ChordKb => {}
                     }
                 }
             }
-            ui.label("BPM:");
-            ui.add(egui::Slider::new(&mut self.seq_bpm, 40..=200));
-            if ui.button("🎲").clicked() {
-                use std::collections::hash_map::DefaultHasher;
-                use std::hash::{Hash, Hasher};
-                let mut h = DefaultHasher::new();
-                std::time::SystemTime::now().hash(&mut h);
-                let seed = h.finish();
-                for i in 0..8 {
-                    self.seq_steps[i] = (seed >> i) & 1 == 1;
-                    self.seq_notes[i] =
-                        SEQ_SCALE[((seed >> (i * 3)) & 7) as usize % SEQ_SCALE.len()];
+
+            // Chord key/scale selector (ChordSeq and ChordKb)
+            if self.seq_mode == SeqMode::ChordSeq || self.seq_mode == SeqMode::ChordKb {
+                ui.separator();
+                let (root, scale) = match self.seq_mode {
+                    SeqMode::ChordSeq => (&mut self.chord_seq.root, &mut self.chord_seq.scale),
+                    SeqMode::ChordKb  => (&mut self.chord_kb.root,  &mut self.chord_kb.scale),
+                    _ => unreachable!(),
+                };
+                ui.label("Key:");
+                egui::ComboBox::from_id_salt("chord_root")
+                    .selected_text(NOTE_NAMES[*root as usize])
+                    .show_ui(ui, |ui| {
+                        for (i, name) in NOTE_NAMES.iter().enumerate() {
+                            ui.selectable_value(root, i as u8, *name);
+                        }
+                    });
+                ui.label("Scale:");
+                for &sc in &[ScaleType::Major, ScaleType::Minor] {
+                    let active = *scale == sc;
+                    let label = egui::RichText::new(sc.label())
+                        .color(if active { Color32::from_rgb(0, 200, 130) } else { Color32::GRAY });
+                    if ui.button(label).clicked() { *scale = sc; }
                 }
             }
         });
 
         ui.add_space(4.0);
+
+        match self.seq_mode {
+            SeqMode::NoteSeq  => self.ui_note_seq(ui),
+            SeqMode::ChordSeq => self.ui_chord_seq(ui),
+            SeqMode::ChordKb  => self.ui_chord_kb(ui),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Note sequencer grid
+    // -----------------------------------------------------------------------
+    fn ui_note_seq(&mut self, ui: &mut egui::Ui) {
+        let bar_area_h = 64.0;
+        let step_w = (ui.available_width() / self.note_seq.length as f32).max(28.0);
+        let midi_min = *SEQ_CHROMATIC.first().unwrap() as f32;
+        let midi_max = *SEQ_CHROMATIC.last().unwrap() as f32;
+
         ui.horizontal(|ui| {
-            for i in 0..8 {
+            for i in 0..self.note_seq.length {
                 ui.vertical(|ui| {
-                    ui.set_width(52.0);
-                    if ui.small_button("▲").clicked() {
-                        let pos = SEQ_SCALE
-                            .iter()
-                            .position(|&n| n == self.seq_notes[i])
-                            .unwrap_or(0);
-                        self.seq_notes[i] = SEQ_SCALE[(pos + 1).min(SEQ_SCALE.len() - 1)];
-                    }
-                    ui.label(
-                        egui::RichText::new(midi_note_name(self.seq_notes[i]))
-                            .monospace()
-                            .small(),
-                    );
-
+                    ui.set_width(step_w);
                     let is_current = self.seq_playing && self.seq_current_step == i;
-                    let is_on = self.seq_steps[i];
-                    let fill = if is_current {
-                        Color32::from_rgb(255, 200, 50)
-                    } else if is_on {
-                        Color32::from_rgb(0, 180, 120)
-                    } else {
-                        Color32::from_rgb(40, 40, 55)
-                    };
-                    let (r, painter) = ui.allocate_painter(Vec2::splat(40.0), Sense::click());
-                    painter.rect_filled(r.rect, Rounding::same(5.0), fill);
-                    painter.rect_stroke(
-                        r.rect,
-                        Rounding::same(5.0),
-                        Stroke::new(
-                            1.0,
-                            if is_current {
-                                Color32::WHITE
-                            } else {
-                                Color32::GRAY
-                            },
-                        ),
-                    );
-                    if r.clicked() {
-                        self.seq_steps[i] = !self.seq_steps[i];
-                    }
+                    let is_on = self.note_seq.steps[i];
+                    let note = self.note_seq.notes[i] as f32;
 
-                    if ui.small_button("▼").clicked() {
-                        let pos = SEQ_SCALE
-                            .iter()
-                            .position(|&n| n == self.seq_notes[i])
-                            .unwrap_or(0);
-                        self.seq_notes[i] = SEQ_SCALE[pos.saturating_sub(1)];
+                    // Pitch bar
+                    let (bar_resp, painter) = ui.allocate_painter(
+                        Vec2::new(step_w, bar_area_h), Sense::click_and_drag());
+                    let r = bar_resp.rect;
+                    painter.rect_filled(r, Rounding::same(4.0), Color32::from_rgb(25, 25, 35));
+                    let t = (note - midi_min) / (midi_max - midi_min);
+                    let bar_h = (t * (bar_area_h - 4.0)).max(4.0);
+                    let bar_rect = egui::Rect::from_min_size(
+                        egui::pos2(r.min.x + 2.0, r.max.y - bar_h - 2.0),
+                        Vec2::new(step_w - 4.0, bar_h),
+                    );
+                    let bar_color = if is_current { Color32::from_rgb(255, 210, 60) }
+                        else if is_on { Color32::from_rgb(0, 120, 80) }
+                        else { Color32::from_rgb(40, 50, 55) };
+                    painter.rect_filled(bar_rect, Rounding::same(3.0), bar_color);
+                    painter.text(r.center(), egui::Align2::CENTER_CENTER,
+                        midi_note_name(self.note_seq.notes[i]),
+                        egui::FontId::monospace(10.0),
+                        if is_on { Color32::WHITE } else { Color32::GRAY });
+
+                    if bar_resp.dragged() {
+                        self.note_seq.drag_accum[i] -= bar_resp.drag_delta().y;
+                        let steps = self.note_seq.drag_accum[i] as i32;
+                        if steps != 0 {
+                            self.note_seq.drag_accum[i] -= steps as f32;
+                            let pos = SEQ_CHROMATIC.iter()
+                                .position(|&n| n == self.note_seq.notes[i]).unwrap_or(0) as i32;
+                            let new_pos = (pos + steps).clamp(0, SEQ_CHROMATIC.len() as i32 - 1) as usize;
+                            self.note_seq.notes[i] = SEQ_CHROMATIC[new_pos];
+                        }
                     }
+                    if bar_resp.drag_stopped() { self.note_seq.drag_accum[i] = 0.0; }
+
+                    // Step button
+                    let fill = if is_current { Color32::from_rgb(255, 200, 50) }
+                        else if is_on { Color32::from_rgb(0, 180, 120) }
+                        else { Color32::from_rgb(40, 40, 55) };
+                    let (r, painter) = ui.allocate_painter(Vec2::new(step_w, 28.0), Sense::click());
+                    painter.rect_filled(r.rect, Rounding::same(5.0), fill);
+                    painter.rect_stroke(r.rect, Rounding::same(5.0),
+                        Stroke::new(1.0, if is_current { Color32::WHITE } else { Color32::GRAY }));
+                    if r.clicked() { self.note_seq.steps[i] = !self.note_seq.steps[i]; }
                 });
+            }
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // Chord sequencer grid
+    // -----------------------------------------------------------------------
+    fn ui_chord_seq(&mut self, ui: &mut egui::Ui) {
+        let bar_area_h = 64.0;
+        let step_w = (ui.available_width() / self.chord_seq.length as f32).max(28.0);
+
+        ui.horizontal(|ui| {
+            for i in 0..self.chord_seq.length {
+                ui.vertical(|ui| {
+                    ui.set_width(step_w);
+                    let is_current = self.seq_playing && self.seq_current_step == i;
+                    let is_on = self.chord_seq.steps[i];
+                    let degree = self.chord_seq.degrees[i];
+
+                    // Chord bar — height = degree / 6
+                    let (bar_resp, painter) = ui.allocate_painter(
+                        Vec2::new(step_w, bar_area_h), Sense::click_and_drag());
+                    let r = bar_resp.rect;
+                    painter.rect_filled(r, Rounding::same(4.0), Color32::from_rgb(25, 25, 35));
+                    let t = degree as f32 / 6.0;
+                    let bar_h = (t * (bar_area_h - 4.0)).max(4.0);
+                    let bar_rect = egui::Rect::from_min_size(
+                        egui::pos2(r.min.x + 2.0, r.max.y - bar_h - 2.0),
+                        Vec2::new(step_w - 4.0, bar_h),
+                    );
+                    // Color by chord quality
+                    let quality = chord_quality(self.chord_seq.scale, degree);
+                    let bar_color = if is_current { Color32::from_rgb(255, 210, 60) }
+                        else if !is_on { Color32::from_rgb(40, 50, 55) }
+                        else if quality == "m" { Color32::from_rgb(60, 80, 140) }
+                        else if quality == "°" { Color32::from_rgb(120, 50, 50) }
+                        else { Color32::from_rgb(0, 100, 70) };
+                    painter.rect_filled(bar_rect, Rounding::same(3.0), bar_color);
+
+                    // Chord name + roman numeral
+                    let cname = chord_name(self.chord_seq.root, self.chord_seq.scale, degree);
+                    painter.text(egui::pos2(r.center().x, r.center().y - 6.0),
+                        egui::Align2::CENTER_CENTER, &cname,
+                        egui::FontId::monospace(9.0),
+                        if is_on { Color32::WHITE } else { Color32::GRAY });
+                    painter.text(egui::pos2(r.center().x, r.center().y + 7.0),
+                        egui::Align2::CENTER_CENTER, DEGREE_LABELS[degree],
+                        egui::FontId::monospace(8.0),
+                        if is_on { Color32::from_rgb(180, 180, 180) } else { Color32::from_rgb(80,80,80) });
+
+                    if bar_resp.dragged() {
+                        self.chord_seq.drag_accum[i] -= bar_resp.drag_delta().y;
+                        let steps = self.chord_seq.drag_accum[i] as i32;
+                        if steps != 0 {
+                            self.chord_seq.drag_accum[i] -= steps as f32;
+                            self.chord_seq.degrees[i] =
+                                (degree as i32 + steps).clamp(0, 6) as usize;
+                        }
+                    }
+                    if bar_resp.drag_stopped() { self.chord_seq.drag_accum[i] = 0.0; }
+
+                    // Step button
+                    let fill = if is_current { Color32::from_rgb(255, 200, 50) }
+                        else if is_on { Color32::from_rgb(0, 180, 120) }
+                        else { Color32::from_rgb(40, 40, 55) };
+                    let (r, painter) = ui.allocate_painter(Vec2::new(step_w, 28.0), Sense::click());
+                    painter.rect_filled(r.rect, Rounding::same(5.0), fill);
+                    painter.rect_stroke(r.rect, Rounding::same(5.0),
+                        Stroke::new(1.0, if is_current { Color32::WHITE } else { Color32::GRAY }));
+                    if r.clicked() { self.chord_seq.steps[i] = !self.chord_seq.steps[i]; }
+                });
+            }
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // Chord keyboard — 7 big buttons (I–VII), click/hold to play chord
+    // -----------------------------------------------------------------------
+    fn ui_chord_kb(&mut self, ui: &mut egui::Ui) {
+        let btn_w = (ui.available_width() / 7.0).max(40.0);
+        let btn_h = 90.0;
+
+        ui.horizontal(|ui| {
+            for degree in 0..7 {
+                let (resp, painter) = ui.allocate_painter(
+                    Vec2::new(btn_w, btn_h), Sense::click_and_drag());
+                let r = resp.rect;
+
+                let is_held = self.chord_kb.held_degree == Some(degree)
+                    || self.chord_kb.kb_held.contains(&degree);
+                let quality = chord_quality(self.chord_kb.scale, degree);
+                let bg = if is_held { Color32::from_rgb(255, 210, 60) }
+                    else if quality == "m" { Color32::from_rgb(40, 55, 100) }
+                    else if quality == "°" { Color32::from_rgb(80, 35, 35) }
+                    else { Color32::from_rgb(30, 80, 55) };
+                painter.rect_filled(r, Rounding::same(8.0), bg);
+                painter.rect_stroke(r, Rounding::same(8.0),
+                    Stroke::new(if is_held { 2.0 } else { 1.0 },
+                    if is_held { Color32::WHITE } else { Color32::from_gray(80) }));
+
+                let cname = chord_name(self.chord_kb.root, self.chord_kb.scale, degree);
+                painter.text(egui::pos2(r.center().x, r.center().y - 10.0),
+                    egui::Align2::CENTER_CENTER, &cname,
+                    egui::FontId::proportional(14.0), Color32::WHITE);
+                painter.text(egui::pos2(r.center().x, r.center().y + 10.0),
+                    egui::Align2::CENTER_CENTER, DEGREE_LABELS[degree],
+                    egui::FontId::monospace(10.0), Color32::from_gray(180));
+
+                // Press
+                if resp.is_pointer_button_down_on() && !is_held {
+                    // Release previous chord if any
+                    if let Some(prev) = self.chord_kb.held_degree {
+                        for m in self.chord_kb.chord_notes(prev) { self.voice_off(m); }
+                    }
+                    self.chord_kb.held_degree = Some(degree);
+                    for m in self.chord_kb.chord_notes(degree) { self.voice_on(m); }
+                }
+                // Release
+                if !resp.is_pointer_button_down_on() && is_held {
+                    self.chord_kb.held_degree = None;
+                    for m in self.chord_kb.chord_notes(degree) { self.voice_off(m); }
+                }
             }
         });
     }
