@@ -125,6 +125,7 @@ Build the graph once with all possible paths present. Use `Shared` values (volum
 | Smoothing UI-rate params redundantly | Wasted CPU, potential instability | Only smooth if modulated at audio rate |
 | Graph rebuild on audio thread | Clicks, dropouts, silence | Use static graph + Shared params |
 | Relying on output tanh() for mixing | Compressed, mushy sound | Fix gain staging upstream |
+| Audio-rate modulation via Shared + var() inside BlockRateAdapter graph | Buzz/noise at medium-high mod rates | Apply per-sample in callback after get_stereo(), not inside graph |
 
 ---
 
@@ -151,6 +152,28 @@ Use `Shared` + `var()` for any parameter that changes at runtime (volume, freque
 ### `BlockRateAdapter` reduces per-sample overhead
 
 Wrap the entire graph in `BlockRateAdapter` for the audio callback. This processes samples in blocks instead of one-at-a-time, which is significantly faster for large graphs. Already used in this project — do not remove it.
+
+### `BlockRateAdapter` quantises `Shared` reads to block boundaries
+
+`BlockRateAdapter` processes the graph in blocks of 64 samples. A `var(&shared)` node inside the graph reads its `Shared` value **once per block**, not once per sample. This means any parameter written from outside the graph (e.g., from the audio callback) will only update at 64-sample intervals (~1.4 ms at 44.1 kHz).
+
+**This is fine for:** slow parameters (cutoff, volume, ADSR times), pitch values, UI-rate changes.
+
+**This breaks:** any modulation signal that needs to change smoothly at audio rate. At a 10 Hz LFO rate the error is inaudible. At 50–200 Hz the stepped updates become an audible buzz, because the amplitude or frequency jumps every 64 samples instead of every sample.
+
+**Rule:** Do not route audio-rate modulation through `Shared` + `var()` inside the graph. Instead, apply it **directly to the output samples** in the callback loop, after `graph.get_stereo()`:
+
+```rust
+// WRONG — LFO applied via Shared inside graph (64-sample steps = buzz)
+filtered * env * var(&state.lfo_amp_mult)
+
+// RIGHT — apply per-sample in callback, after graph output
+let (raw_l, raw_r) = graph.get_stereo();
+let l = raw_l.tanh() * lfo_amp;   // lfo_amp computed fresh each sample
+let r = raw_r.tanh() * lfo_amp;
+```
+
+The same rule applies to any other audio-rate modulator (tremolo, ring mod applied post-filter, etc.) that you might be tempted to wire through a `Shared`.
 
 ### `adsr_live` requires a continuous gate signal
 
