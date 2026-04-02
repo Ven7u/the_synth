@@ -11,6 +11,7 @@ use fundsp::prelude32::*;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8};
 use std::sync::Arc;
 
+use crate::envelope::LiveAdsr;
 use crate::osc::{MultiWaveOsc, SyncRole};
 
 pub const VOICE_COUNT: usize = 6;
@@ -71,6 +72,11 @@ pub struct AudioState {
     pub adsr_sustain: Shared,
     pub adsr_release: Shared,
 
+    // ADSR cursors — written by LiveAdsr each sample, read by UI for visualizer
+    // Encoding: 0=idle, 1.x=attack, 2.x=decay, 3.0=sustain, 4.x=release (frac=progress)
+    pub amp_cursors:  Vec<Shared>, // one per voice
+    pub fenv_cursors: Vec<Shared>, // one per voice
+
     // Glide
     pub glide_time: Shared, // 0.0..0.5 s
 
@@ -112,7 +118,7 @@ impl AudioState {
     pub fn new() -> Self {
         Self {
             osc_wave: [
-                Arc::new(AtomicU8::new(0)),
+                Arc::new(AtomicU8::new(1)), // OSC1: saw — needed for filter to have audible effect
                 Arc::new(AtomicU8::new(0)),
                 Arc::new(AtomicU8::new(0)),
             ],
@@ -172,7 +178,7 @@ impl AudioState {
             filter_env_amount: shared(0.3),
             fenv_attack: shared(0.01),
             fenv_decay: shared(0.3),
-            fenv_sustain: shared(0.6),
+            fenv_sustain: shared(0.0), // matches UI default fenv_adsr[2]
             fenv_release: shared(0.2),
             lfo_rate: shared(2.0),
             lfo_depth: shared(0.0),
@@ -184,6 +190,8 @@ impl AudioState {
             adsr_decay: shared(0.15),
             adsr_sustain: shared(0.7),
             adsr_release: shared(0.4),
+            amp_cursors:  (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
+            fenv_cursors: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
             glide_time: shared(0.0),
             master_vol: shared(0.4),
             hard_sync_enabled: Arc::new(AtomicBool::new(false)),
@@ -239,14 +247,6 @@ impl AudioEngine {
 /// Build the unified 6-voice poly graph.
 /// Each voice: 3 OSCs + noise → lowpass(effective_cutoff) → amp ADSR
 fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Send> {
-    let a  = state.adsr_attack.value();
-    let d  = state.adsr_decay.value();
-    let s  = state.adsr_sustain.value();
-    let r  = state.adsr_release.value();
-    let fa = state.fenv_attack.value();
-    let fd = state.fenv_decay.value();
-    let fs = state.fenv_sustain.value();
-    let fr = state.fenv_release.value();
     let scale = 1.0 / VOICE_COUNT as f32;
 
     let make_voice = |vi: usize| {
@@ -333,16 +333,25 @@ fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Send> {
         let ring = var(&state.ring_tap[vi]) * var(&state.fm_tap[vi]) * var(&state.ring_depth);
         let osc = osc0 + osc1 + osc2 + ring;
 
-        // Moog lowpass filter with per-voice filter ADSR.
-        // dyn_cutoff = effective_cutoff (base + LFO) + fenv × env_amount × base_cutoff.
-        // Note: fa/fd/fs/fr are baked in at graph build time (same as amp ADSR).
-        let fenv = var(vg) >> adsr_live(fa, fd, fs, fr);
+        // Moog lowpass filter with per-voice filter ADSR (fully live-parametric).
+        let fenv = var(vg) >> An(LiveAdsr::new(
+            state.fenv_attack.clone(), state.fenv_decay.clone(),
+            state.fenv_sustain.clone(), state.fenv_release.clone(),
+            Some(state.fenv_cursors[vi].clone()), sr as f32,
+        ));
+        // Filter env sweep: additive in Hz with a fixed max range so the sweep covers
+        // musically useful territory regardless of base cutoff.
+        // env_amount=1.0 adds up to 12 kHz above base (≈2–3 octaves); at 0.3 it adds ~3.6 kHz.
         let dyn_cutoff = var(&state.effective_cutoff)
-            + fenv * var(&state.filter_env_amount) * var(&state.cutoff);
+            + fenv * var(&state.filter_env_amount) * dc(12000.0_f32);
         let filtered = (osc | dyn_cutoff | var(&state.resonance)) >> moog();
 
-        // Amp ADSR envelope.
-        let env = var(vg) >> adsr_live(a, d, s, r);
+        // Amp ADSR envelope (fully live-parametric).
+        let env = var(vg) >> An(LiveAdsr::new(
+            state.adsr_attack.clone(), state.adsr_decay.clone(),
+            state.adsr_sustain.clone(), state.adsr_release.clone(),
+            Some(state.amp_cursors[vi].clone()), sr as f32,
+        ));
         filtered * env
     };
 

@@ -4,6 +4,7 @@
 #![allow(clippy::precedence)]
 
 mod audio;
+mod envelope;
 mod osc;
 
 use audio::{AudioEngine, AudioState, VOICE_COUNT};
@@ -117,7 +118,7 @@ impl SynthApp {
         Self {
             _audio: audio,
             state,
-            osc_wave: [0, 0, 0], // sine x3 — default until filter is in place
+            osc_wave: [1, 0, 0], // OSC1=saw, OSC2=sine, OSC3=sine
             osc_octave: [0, 0, 0],
             osc_detune: [0.0, 0.0, 0.0],
             osc_vol: [0.4, 0.3, 0.5],
@@ -176,13 +177,20 @@ impl SynthApp {
 
 impl SynthApp {
     fn voice_on(&mut self, midi: u8) {
-        if self.piano_voice_notes.iter().any(|&n| n == Some(midi)) {
+        // If this note is already playing at full gate, ignore (key repeat).
+        // If it's still in the slot but releasing (gate=0), fall through and retrigger it.
+        if self.piano_voice_notes.iter().enumerate().any(|(slot, &n)| {
+            n == Some(midi) && self.state.voice_gates[slot].value() > 0.5
+        }) {
             return;
         }
+        // Prefer the existing slot for this note (retrigger from release),
+        // then a free slot, then steal the oldest.
         let slot = self
             .piano_voice_notes
             .iter()
-            .position(|n| n.is_none())
+            .position(|&n| n == Some(midi))
+            .or_else(|| self.piano_voice_notes.iter().position(|n| n.is_none()))
             .unwrap_or_else(|| {
                 let s = self.piano_steal_idx % VOICE_COUNT;
                 self.piano_steal_idx += 1;
@@ -201,9 +209,24 @@ impl SynthApp {
     fn voice_off(&mut self, midi: u8) {
         for (slot, note) in self.piano_voice_notes.iter_mut().enumerate() {
             if *note == Some(midi) {
-                *note = None;
+                // Set gate to 0 to start release, but keep the slot occupied so it
+                // isn't stolen before the release finishes. The slot is freed in
+                // tick_release_cleanup() once the envelope cursor returns to idle.
                 self.state.voice_gates[slot].set(0.0);
                 return;
+            }
+        }
+    }
+
+    /// Free voice slots whose envelopes have finished releasing (cursor == 0.0).
+    fn tick_release_cleanup(&mut self) {
+        for (slot, note) in self.piano_voice_notes.iter_mut().enumerate() {
+            if note.is_some() && self.state.voice_gates[slot].value() < 0.5 {
+                let cursor = self.state.amp_cursors[slot].value();
+                if cursor < 0.5 {
+                    // Envelope is idle — safe to free the slot
+                    *note = None;
+                }
             }
         }
     }
@@ -246,6 +269,7 @@ impl SynthApp {
 impl eframe::App for SynthApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.tick_sequencer(ctx);
+        self.tick_release_cleanup();
 
         egui::CentralPanel::default().show(ctx, |ui| {
             // Row 1: OSC bank + mixer
@@ -790,7 +814,7 @@ impl SynthApp {
             ui.horizontal(|ui| {
                 ui.label("Env:").on_hover_text("Filter envelope amount — how much the filter ADSR envelope opens the filter above the base cutoff on each note.");
                 if ui.add(egui::Slider::new(&mut self.filter_env_amount, 0.0..=1.0))
-                    .on_hover_text("0 = envelope has no effect. 1 = envelope fully sweeps from cutoff to 2× cutoff. Set a fast attack + decay for a pluck effect.")
+                    .on_hover_text("0 = envelope has no effect. 1 = envelope sweeps up to +12 kHz above base cutoff. For 'pew': low cutoff, env=1, fast attack, short decay, sustain=0.")
                     .changed()
                 {
                     self.state.filter_env_amount.set(self.filter_env_amount);
@@ -857,6 +881,14 @@ impl SynthApp {
                 });
             }
         });
+
+        // Collect cursor values from all voices
+        let cursors: Vec<f32> = if is_filter {
+            self.state.fenv_cursors.iter().map(|s| s.value()).collect()
+        } else {
+            self.state.amp_cursors.iter().map(|s| s.value()).collect()
+        };
+        draw_adsr_visualizer(ui, adsr, &cursors);
     }
 }
 
@@ -1362,6 +1394,102 @@ impl SynthApp {
                 Stroke::new(2.0, grip_color),
             );
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ADSR visualizer
+// ---------------------------------------------------------------------------
+
+fn draw_adsr_visualizer(ui: &mut egui::Ui, adsr: &[f32; 4], cursors: &[f32]) {
+    let height = 48.0;
+    let (resp, painter) =
+        ui.allocate_painter(Vec2::new(ui.available_width(), height), Sense::hover());
+    let rect = resp.rect;
+
+    painter.rect_filled(rect, Rounding::same(3.0), Color32::from_rgb(8, 14, 10));
+
+    let a = adsr[0];
+    let d = adsr[1];
+    let s = adsr[2];
+    let r = adsr[3];
+
+    // Give sustain a fixed visual width proportional to total time
+    let total = a + d + r;
+    let s_vis = total * 0.35;
+    let span  = a + d + s_vis + r;
+
+    let w = rect.width();
+    let h = rect.height();
+    let pad_y = 4.0;
+    let usable_h = h - pad_y * 2.0;
+
+    // Map time position → x, level → y
+    let tx = |t: f32| rect.left() + (t / span) * w;
+    let ly = |level: f32| rect.bottom() - pad_y - level * usable_h;
+
+    // 5 key points
+    let p0 = Pos2::new(rect.left(),    ly(0.0));
+    let p1 = Pos2::new(tx(a),          ly(1.0));
+    let p2 = Pos2::new(tx(a + d),      ly(s));
+    let p3 = Pos2::new(tx(a + d + s_vis), ly(s));
+    let p4 = Pos2::new(rect.right(),   ly(0.0));
+
+    // Filled shape
+    let fill_pts = vec![
+        p0, p1, p2, p3, p4,
+        Pos2::new(rect.right(), rect.bottom() - pad_y),
+        Pos2::new(rect.left(),  rect.bottom() - pad_y),
+    ];
+    painter.add(egui::Shape::convex_polygon(
+        fill_pts,
+        Color32::from_rgba_premultiplied(0, 160, 100, 30),
+        Stroke::NONE,
+    ));
+
+    // Outline
+    let pts = vec![p0, p1, p2, p3, p4];
+    let stroke = Stroke::new(1.5, Color32::from_rgb(0, 200, 130));
+    for w in pts.windows(2) {
+        painter.line_segment([w[0], w[1]], stroke);
+    }
+
+    // Stage labels
+    let label_color = Color32::from_rgba_premultiplied(80, 160, 110, 180);
+    let small = egui::FontId::proportional(9.0);
+    for (label, x) in [
+        ("A", tx(a * 0.5)),
+        ("D", tx(a + d * 0.5)),
+        ("S", tx(a + d + s_vis * 0.5)),
+        ("R", tx(a + d + s_vis + r * 0.5)),
+    ] {
+        painter.text(
+            Pos2::new(x, rect.bottom() - pad_y - 2.0),
+            egui::Align2::CENTER_BOTTOM,
+            label,
+            small.clone(),
+            label_color,
+        );
+    }
+
+    // Live cursor dots — one per voice
+    for &cursor in cursors {
+        if cursor < 0.5 { continue; } // idle
+
+        let phase    = cursor as u8;
+        let progress = cursor.fract();
+
+        let pos = match phase {
+            1 => Pos2::new(tx(a * progress),                              ly(progress)),
+            2 => Pos2::new(tx(a + d * progress),                          ly(1.0 - (1.0 - s) * progress)),
+            3 => Pos2::new(tx(a + d + s_vis * 0.5),                       ly(s)),
+            4 => Pos2::new(tx(a + d + s_vis + r * progress),              ly(s * (1.0 - progress))),
+            _ => continue,
+        };
+
+        // Glow + core dot
+        painter.circle_filled(pos, 5.0, Color32::from_rgba_premultiplied(0, 255, 160, 40));
+        painter.circle_filled(pos, 2.5, Color32::from_rgb(0, 255, 160));
     }
 }
 

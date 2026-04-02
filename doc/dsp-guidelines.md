@@ -126,6 +126,7 @@ Build the graph once with all possible paths present. Use `Shared` values (volum
 | Graph rebuild on audio thread | Clicks, dropouts, silence | Use static graph + Shared params |
 | Relying on output tanh() for mixing | Compressed, mushy sound | Fix gain staging upstream |
 | Audio-rate modulation via Shared + var() inside BlockRateAdapter graph | Buzz/noise at medium-high mod rates | Apply per-sample in callback after get_stereo(), not inside graph |
+| Envelope stage transition resets level to 0 or sustain | Click/pop on retrigger or early release | Snapshot start_level at transition, interpolate from there |
 
 ---
 
@@ -174,6 +175,30 @@ let r = raw_r.tanh() * lfo_amp;
 ```
 
 The same rule applies to any other audio-rate modulator (tremolo, ring mod applied post-filter, etc.) that you might be tempted to wire through a `Shared`.
+
+### Envelope stage transitions must never jump level
+
+When an envelope changes stage (gate-on retrigger, early release), the output level must continue smoothly from wherever it currently is. A naive implementation that resets `level = 0` on attack or `level = sustain` on release will produce a hard discontinuity — audible as a click or pop.
+
+**Rule:** snapshot `start_level = self.level` at every stage transition, then interpolate from `start_level` to the target:
+
+```rust
+// Gate-on: ramp from current level → 1.0 (not from 0.0)
+AdsrStage::Attack => {
+    self.level = start_level + (1.0 - start_level) * progress;
+}
+
+// Gate-off: ramp from current level → 0.0 (not from sustain)
+AdsrStage::Release => {
+    self.level = start_level * (1.0 - progress);
+}
+```
+
+This matters especially for:
+- **Rapid retriggers** (staccato playing, sequencer) — the envelope is still in sustain or release when the next gate arrives
+- **Early release** — the key is released before attack or decay finishes; level is not yet at sustain
+
+The decay stage (`1.0 → sustain`) is less critical because it always starts from the same point (end of attack = 1.0), but the same pattern applies if you want to be safe.
 
 ### `adsr_live` requires a continuous gate signal
 
