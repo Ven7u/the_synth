@@ -20,7 +20,7 @@ fn main() -> eframe::Result {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1400.0, 740.0])
+            .with_inner_size([1400.0, 860.0])
             .with_title("The Synth"),
         ..Default::default()
     };
@@ -164,9 +164,9 @@ impl SynthApp {
             seq_current_step: 0,
             seq_last_tick: std::time::Instant::now(),
             seq_prev_midi: None,
-            scope_height: 90.0,
+            scope_height: 140.0,
             scope_x_scale: 1.0,
-            scope_y_scale: 1.0,
+            scope_y_scale: 2.5,
         }
     }
 }
