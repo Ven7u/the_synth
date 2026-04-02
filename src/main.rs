@@ -20,7 +20,7 @@ fn main() -> eframe::Result {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1100.0, 740.0])
+            .with_inner_size([1400.0, 740.0])
             .with_title("The Synth"),
         ..Default::default()
     };
