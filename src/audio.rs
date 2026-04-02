@@ -61,7 +61,6 @@ pub struct AudioState {
     pub lfo_dest: Arc<AtomicU8>,  // 0=pitch 1=filter 2=amp
     // Written by callback each buffer; read by graph
     pub lfo_pitch_mult: Shared,   // frequency multiplier (1.0 = no pitch mod)
-    pub lfo_amp_mult: Shared,     // amplitude multiplier (1.0 = no amp mod)
 
     // Voice target frequencies — UI writes here; callback smooths to voice_freqs for glide
     pub voice_freq_targets: Vec<Shared>,
@@ -180,7 +179,6 @@ impl AudioState {
             lfo_shape: Arc::new(AtomicU8::new(0)), // sine
             lfo_dest: Arc::new(AtomicU8::new(1)),  // filter
             lfo_pitch_mult: shared(1.0),
-            lfo_amp_mult: shared(1.0),
             voice_freq_targets: (0..VOICE_COUNT).map(|_| shared(440.0)).collect(),
             adsr_attack: shared(0.01),
             adsr_decay: shared(0.15),
@@ -343,9 +341,9 @@ fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Send> {
             + fenv * var(&state.filter_env_amount) * var(&state.cutoff);
         let filtered = (osc | dyn_cutoff | var(&state.resonance)) >> moog();
 
-        // Amp ADSR × LFO amplitude modulation (lfo_amp_mult = 1.0 when LFO dest != amp).
+        // Amp ADSR envelope.
         let env = var(vg) >> adsr_live(a, d, s, r);
-        filtered * env * var(&state.lfo_amp_mult)
+        filtered * env
     };
 
     let v0 = make_voice(0);
@@ -430,42 +428,17 @@ where
                 buffer_size_captured = true;
             }
 
-            // --- LFO ---
+            // Read per-buffer params once (cheap; avoids repeated atomic loads per sample)
             let frames = data.len() / channels;
             let sr_f = sr as f32;
             let lfo_rate  = state.lfo_rate.value();
             let lfo_depth = state.lfo_depth.value();
             let lfo_shape = state.lfo_shape.load(std::sync::atomic::Ordering::Relaxed);
             let lfo_dest  = state.lfo_dest.load(std::sync::atomic::Ordering::Relaxed);
-            lfo_phase += lfo_rate * frames as f32 / sr_f;
-            while lfo_phase >= 1.0 { lfo_phase -= 1.0; }
-            let lfo_raw = match lfo_shape {
-                1 => if lfo_phase < 0.5 { 4.0*lfo_phase-1.0 } else { 3.0-4.0*lfo_phase }, // tri
-                2 => 2.0 * lfo_phase - 1.0,                                                  // saw
-                _ => (lfo_phase * std::f32::consts::TAU).sin(),                              // sin
-            };
-            let lfo_out = lfo_raw * lfo_depth;
+            let lfo_dt    = lfo_rate / sr_f; // phase increment per sample
             let base_cutoff = state.cutoff.value().clamp(80.0, 18000.0);
-            match lfo_dest {
-                0 => { // pitch: ±2 semitones at depth=1
-                    state.lfo_pitch_mult.set(2_f32.powf(lfo_out * 2.0 / 12.0));
-                    state.lfo_amp_mult.set(1.0);
-                    state.effective_cutoff.set(base_cutoff);
-                }
-                2 => { // amp: tremolo
-                    state.lfo_pitch_mult.set(1.0);
-                    state.lfo_amp_mult.set((1.0 + lfo_out).max(0.0));
-                    state.effective_cutoff.set(base_cutoff);
-                }
-                _ => { // filter (default=1)
-                    state.lfo_pitch_mult.set(1.0);
-                    state.lfo_amp_mult.set(1.0);
-                    state.effective_cutoff.set(
-                        (base_cutoff + lfo_out * base_cutoff * 0.5).clamp(80.0, 18000.0));
-                }
-            }
 
-            // --- Glide: smooth voice_freq_targets → voice_freqs ---
+            // --- Glide: smooth voice_freq_targets → voice_freqs once per buffer ---
             let glide_time = state.glide_time.value();
             for vi in 0..VOICE_COUNT {
                 let target = state.voice_freq_targets[vi].value();
@@ -501,6 +474,37 @@ where
             let mut peak_r_local: f32 = 0.0;
 
             for (frame_i, frame) in data.chunks_mut(channels).enumerate() {
+                // --- LFO: advance phase and write Shared params every sample ---
+                lfo_phase += lfo_dt;
+                if lfo_phase >= 1.0 { lfo_phase -= 1.0; }
+                let lfo_raw = match lfo_shape {
+                    1 => if lfo_phase < 0.5 { 4.0*lfo_phase-1.0 } else { 3.0-4.0*lfo_phase },
+                    2 => 2.0 * lfo_phase - 1.0,
+                    _ => (lfo_phase * std::f32::consts::TAU).sin(),
+                };
+                let lfo_out = lfo_raw * lfo_depth;
+                // lfo_amp is applied directly to output samples below (not via graph)
+                // so it is truly sample-accurate and bypasses BlockRateAdapter quantisation.
+                let lfo_amp = match lfo_dest {
+                    2 => 1.0 - lfo_depth * (1.0 - lfo_raw) * 0.5, // tremolo: 1-depth … 1.0
+                    _ => 1.0,
+                };
+                match lfo_dest {
+                    0 => {
+                        state.lfo_pitch_mult.set(2_f32.powf(lfo_out * 2.0 / 12.0));
+                        state.effective_cutoff.set(base_cutoff);
+                    }
+                    2 => {
+                        state.lfo_pitch_mult.set(1.0);
+                        state.effective_cutoff.set(base_cutoff);
+                    }
+                    _ => {
+                        state.lfo_pitch_mult.set(1.0);
+                        state.effective_cutoff.set(
+                            (base_cutoff + lfo_out * base_cutoff * 0.5).clamp(80.0, 18000.0));
+                    }
+                }
+
                 let (mut raw_l, mut raw_r) = graph.get_stereo();
 
                 // Peak metering: track pre-clip level
@@ -536,8 +540,9 @@ where
                 }
 
                 // Gentle soft clip for occasional overshoots.
-                let l = raw_l.tanh();
-                let r_out = raw_r.tanh();
+                // Apply tremolo after limiter so the limiter doesn't fight the modulation.
+                let l = raw_l.tanh() * lfo_amp;
+                let r_out = raw_r.tanh() * lfo_amp;
 
                 if let Some(buf) = scope_buf.as_mut() {
                     // Downsample scope writes to reduce callback pressure.
