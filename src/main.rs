@@ -1033,6 +1033,8 @@ impl SynthApp {
             }
             let hint = if self.seq_mode == SeqMode::ChordKb {
                 "  a s d f g h j = chords I–VII"
+            } else if self.seq_mode == SeqMode::ChordSeq && self.seq_playing {
+                "  any key = set root note (live transpose)"
             } else {
                 "  a–l = white keys, w e t y u = sharps"
             };
@@ -1047,7 +1049,26 @@ impl SynthApp {
             egui::Key::G, egui::Key::H, egui::Key::J,
         ];
 
-        if self.seq_mode == SeqMode::ChordKb {
+        if self.seq_mode == SeqMode::ChordSeq && self.seq_playing {
+            // While chord sequencer is playing, keyboard keys change the root key live.
+            // Any key press is interpreted as a new tonic — semitone only, octave ignored.
+            // This lets you transpose the sequence in real time while it plays.
+            let mut pressed_semitone: Option<u8> = None;
+            ui.input(|inp| {
+                for &(key, semitone) in KEY_MAP {
+                    if inp.key_pressed(key) {
+                        pressed_semitone = Some((semitone % 12) as u8);
+                    }
+                }
+            });
+            if let Some(semi) = pressed_semitone {
+                self.chord_seq.root = semi;
+                // Mirror to the toolbar combo so the UI stays in sync
+            }
+            // Clear held midi so notes don't bleed if mode was previously normal
+            let prev: Vec<u8> = self.piano_held_midi.drain().collect();
+            for m in prev { self.voice_off(m); }
+        } else if self.seq_mode == SeqMode::ChordKb {
             let mut current_degrees = std::collections::HashSet::<usize>::new();
             ui.input(|inp| {
                 for (degree, &key) in WHITE_KEYS.iter().enumerate() {
@@ -1319,7 +1340,9 @@ impl SynthApp {
     // -----------------------------------------------------------------------
     fn ui_note_seq(&mut self, ui: &mut egui::Ui) {
         let bar_area_h = 64.0;
-        let step_w = (ui.available_width() / self.note_seq.length as f32).max(28.0);
+        let n = self.note_seq.length as f32;
+        let spacing = ui.spacing().item_spacing.x;
+        let step_w = ((ui.available_width() - spacing * (n - 1.0)) / n).max(28.0);
         let midi_min = *SEQ_CHROMATIC.first().unwrap() as f32;
         let midi_max = *SEQ_CHROMATIC.last().unwrap() as f32;
 
@@ -1383,7 +1406,9 @@ impl SynthApp {
     // -----------------------------------------------------------------------
     fn ui_chord_seq(&mut self, ui: &mut egui::Ui) {
         let bar_area_h = 64.0;
-        let step_w = (ui.available_width() / self.chord_seq.length as f32).max(28.0);
+        let n = self.chord_seq.length as f32;
+        let spacing = ui.spacing().item_spacing.x;
+        let step_w = ((ui.available_width() - spacing * (n - 1.0)) / n).max(28.0);
 
         ui.horizontal(|ui| {
             for i in 0..self.chord_seq.length {
@@ -1453,7 +1478,8 @@ impl SynthApp {
     // Chord keyboard — 7 big buttons (I–VII), click/hold to play chord
     // -----------------------------------------------------------------------
     fn ui_chord_kb(&mut self, ui: &mut egui::Ui) {
-        let btn_w = (ui.available_width() / 7.0).max(40.0);
+        let spacing = ui.spacing().item_spacing.x;
+        let btn_w = ((ui.available_width() - spacing * 6.0) / 7.0).max(40.0);
         let btn_h = 90.0;
 
         ui.horizontal(|ui| {
@@ -1462,8 +1488,9 @@ impl SynthApp {
                     Vec2::new(btn_w, btn_h), Sense::click_and_drag());
                 let r = resp.rect;
 
-                let is_held = self.chord_kb.held_degree == Some(degree)
-                    || self.chord_kb.kb_held.contains(&degree);
+                let is_held_mouse = self.chord_kb.held_degree == Some(degree);
+                let is_held_kb    = self.chord_kb.kb_held.contains(&degree);
+                let is_held = is_held_mouse || is_held_kb;
                 let quality = chord_quality(self.chord_kb.scale, degree);
                 let bg = if is_held { Color32::from_rgb(255, 210, 60) }
                     else if quality == "m" { Color32::from_rgb(40, 55, 100) }
@@ -1482,17 +1509,17 @@ impl SynthApp {
                     egui::Align2::CENTER_CENTER, DEGREE_LABELS[degree],
                     egui::FontId::monospace(10.0), Color32::from_gray(180));
 
-                // Press
-                if resp.is_pointer_button_down_on() && !is_held {
-                    // Release previous chord if any
+                // Mouse press — only trigger if mouse (not keyboard) activated it
+                if resp.is_pointer_button_down_on() && !is_held_mouse {
+                    // Release previous mouse-held chord if any
                     if let Some(prev) = self.chord_kb.held_degree {
                         for m in self.chord_kb.chord_notes(prev) { self.voice_off(m); }
                     }
                     self.chord_kb.held_degree = Some(degree);
                     for m in self.chord_kb.chord_notes(degree) { self.voice_on(m); }
                 }
-                // Release
-                if !resp.is_pointer_button_down_on() && is_held {
+                // Mouse release — only fires if the mouse was the one holding this chord
+                if !resp.is_pointer_button_down_on() && is_held_mouse {
                     self.chord_kb.held_degree = None;
                     for m in self.chord_kb.chord_notes(degree) { self.voice_off(m); }
                 }
