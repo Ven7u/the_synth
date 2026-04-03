@@ -5,10 +5,12 @@
 
 mod audio;
 mod envelope;
+mod midi;
 mod osc;
 mod sequencer;
 
 use audio::{AudioEngine, AudioState, VOICE_COUNT};
+use midi::{MidiEngine, MidiEvent};
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, Rounding, Sense, Stroke, Vec2};
 use fundsp::prelude::midi_hz;
@@ -44,6 +46,7 @@ fn main() -> eframe::Result {
 struct SynthApp {
     _audio: AudioEngine, // keeps cpal stream alive
     state: Arc<AudioState>,
+    midi: MidiEngine,
 
     // OSC bank
     osc_wave: [usize; 3], // 0=sine 1=saw 2=square 3=triangle
@@ -124,9 +127,12 @@ struct SynthApp {
 
 impl SynthApp {
     fn new(state: Arc<AudioState>, audio: AudioEngine) -> Self {
+        let mut midi = MidiEngine::new();
+        midi.list_ports(); // populate port list at startup
         Self {
             _audio: audio,
             state,
+            midi,
             osc_wave: [1, 0, 0], // OSC1=saw, OSC2=sine, OSC3=sine
             osc_octave: [0, 0, 0],
             osc_detune: [0.0, 0.0, 0.0],
@@ -244,6 +250,61 @@ impl SynthApp {
 }
 
 // ---------------------------------------------------------------------------
+// MIDI tick — drain events from the MIDI thread each frame
+// ---------------------------------------------------------------------------
+
+impl SynthApp {
+    fn tick_midi(&mut self) {
+        let events = self.midi.drain();
+        for ev in events {
+            match ev {
+                MidiEvent::NoteOn { note, velocity, .. } => {
+                    // Scale velocity to master volume modulation is left for later.
+                    // For now just trigger the note.
+                    let _ = velocity;
+                    self.voice_on(note);
+                }
+                MidiEvent::NoteOff { note, .. } => {
+                    self.voice_off(note);
+                }
+                MidiEvent::CC { cc, value, .. } => {
+                    // Normalised 0..1 value for most CCs
+                    let v = value as f32 / 127.0;
+                    match cc {
+                        1  => { // Mod wheel → LFO depth
+                            self.lfo_depth = v;
+                            self.state.lfo_depth.set(v);
+                        }
+                        7  => { // Volume → master vol
+                            self.master_vol = v;
+                            self.state.master_vol.set(v);
+                        }
+                        71 => { // Resonance
+                            let q = v * 0.95;
+                            self.filter_q = q;
+                            self.state.resonance.set(q);
+                        }
+                        74 => { // Cutoff (brightness)
+                            let hz = 80.0 * (18000.0_f32 / 80.0).powf(v);
+                            self.filter_cutoff = hz;
+                            self.state.cutoff.set(hz);
+                        }
+                        64 => { // Sustain pedal — hold all notes (simple: ignore for now)
+                        }
+                        _ => {}
+                    }
+                }
+                MidiEvent::PitchBend { value, .. } => {
+                    // ±2 semitones pitch bend — applied as LFO pitch mult for simplicity
+                    let semitones = value * 2.0;
+                    self.state.lfo_pitch_mult.set(2_f32.powf(semitones / 12.0));
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Sequencer tick
 // ---------------------------------------------------------------------------
 
@@ -299,6 +360,7 @@ impl SynthApp {
 
 impl eframe::App for SynthApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.tick_midi();
         self.tick_sequencer(ctx);
         self.tick_release_cleanup();
 
@@ -353,8 +415,12 @@ impl eframe::App for SynthApp {
 
             ui.add_space(4.0);
 
-            // Latency indicator
-            draw_latency_bar(ui, &self.state, self.amp_adsr[0]);
+            // MIDI + Latency row
+            ui.horizontal(|ui| {
+                self.ui_midi_panel(ui);
+                ui.separator();
+                draw_latency_bar(ui, &self.state, self.amp_adsr[0]);
+            });
 
             // Oscilloscope footer
             self.ui_oscilloscope(ui);
@@ -1574,6 +1640,65 @@ fn draw_peak_meter(ui: &mut egui::Ui, level: f32, peak_hold: f32) {
     );
 }
 
+
+// ---------------------------------------------------------------------------
+// Oscilloscope
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// MIDI panel
+// ---------------------------------------------------------------------------
+
+impl SynthApp {
+    fn ui_midi_panel(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("MIDI").strong().small());
+
+        // Refresh port list button
+        if ui.small_button("⟳").on_hover_text("Refresh MIDI device list").clicked() {
+            self.midi.list_ports();
+        }
+
+        if self.midi.port_names.is_empty() {
+            ui.label(egui::RichText::new("No MIDI devices found").weak().small());
+            return;
+        }
+
+        // Device selector
+        let connected = self.midi.connected_port;
+        let current_label = connected
+            .and_then(|i| self.midi.port_names.get(i))
+            .map(|s| s.as_str())
+            .unwrap_or("— disconnected —");
+
+        egui::ComboBox::from_id_salt("midi_port")
+            .selected_text(egui::RichText::new(current_label).small())
+            .show_ui(ui, |ui| {
+                // Disconnect option
+                let selected = connected.is_none();
+                if ui.selectable_label(selected, "— disconnected —").clicked() {
+                    self.midi.disconnect();
+                }
+                // One entry per port
+                let names: Vec<String> = self.midi.port_names.clone();
+                for (i, name) in names.iter().enumerate() {
+                    let selected = connected == Some(i);
+                    if ui.selectable_label(selected, name).clicked() && !selected {
+                        if let Err(e) = self.midi.connect(i) {
+                            eprintln!("MIDI connect error: {e}");
+                        }
+                    }
+                }
+            });
+
+        // Status dot
+        let (color, label) = if connected.is_some() {
+            (Color32::from_rgb(0, 220, 120), "●")
+        } else {
+            (Color32::from_gray(80), "○")
+        };
+        ui.label(egui::RichText::new(label).color(color).small());
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Oscilloscope

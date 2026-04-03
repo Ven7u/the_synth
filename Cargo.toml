@@ -9,6 +9,7 @@ cpal    = "0.15"
 anyhow  = "1"
 eframe  = "0.29"
 egui    = "0.29"
+midir   = "0.9"
 
 [profile.dev]
 opt-level = 2
