@@ -137,9 +137,13 @@ struct SynthApp {
     fx_overdrive_on: bool,
     fx_overdrive_drive: f32,
     fx_overdrive_mix: f32,
+    fx_overdrive_tone: f32,
+    fx_overdrive_asym: f32,
     fx_distortion_on: bool,
     fx_distortion_drive: f32,
     fx_distortion_mix: f32,
+    fx_distortion_tone: f32,
+    fx_distortion_pre: f32,
     fx_chorus_on: bool,
     fx_chorus_rate: f32,
     fx_chorus_depth: f32,
@@ -223,9 +227,13 @@ impl SynthApp {
             fx_overdrive_on: false,
             fx_overdrive_drive: 3.0,
             fx_overdrive_mix: 0.5,
+            fx_overdrive_tone: 0.8,
+            fx_overdrive_asym: 0.0,
             fx_distortion_on: false,
             fx_distortion_drive: 8.0,
             fx_distortion_mix: 0.5,
+            fx_distortion_tone: 0.8,
+            fx_distortion_pre: 0.0,
             fx_chorus_on: false,
             fx_chorus_rate: 0.8,
             fx_chorus_depth: 0.008,
@@ -1828,9 +1836,13 @@ impl SynthApp {
             fx_overdrive_on:    self.fx_overdrive_on,
             fx_overdrive_drive: self.fx_overdrive_drive,
             fx_overdrive_mix:   self.fx_overdrive_mix,
+            fx_overdrive_tone:  self.fx_overdrive_tone,
+            fx_overdrive_asym:  self.fx_overdrive_asym,
             fx_distortion_on:   self.fx_distortion_on,
             fx_distortion_drive: self.fx_distortion_drive,
             fx_distortion_mix:  self.fx_distortion_mix,
+            fx_distortion_tone: self.fx_distortion_tone,
+            fx_distortion_pre:  self.fx_distortion_pre,
             fx_chorus_on:       self.fx_chorus_on,
             fx_chorus_rate:     self.fx_chorus_rate,
             fx_chorus_depth:    self.fx_chorus_depth,
@@ -1913,9 +1925,13 @@ impl SynthApp {
         self.fx_overdrive_on    = p.fx_overdrive_on;
         self.fx_overdrive_drive = p.fx_overdrive_drive;
         self.fx_overdrive_mix   = p.fx_overdrive_mix;
+        self.fx_overdrive_tone  = p.fx_overdrive_tone;
+        self.fx_overdrive_asym  = p.fx_overdrive_asym;
         self.fx_distortion_on   = p.fx_distortion_on;
         self.fx_distortion_drive = p.fx_distortion_drive;
         self.fx_distortion_mix  = p.fx_distortion_mix;
+        self.fx_distortion_tone = p.fx_distortion_tone;
+        self.fx_distortion_pre  = p.fx_distortion_pre;
         self.fx_chorus_on       = p.fx_chorus_on;
         self.fx_chorus_rate     = p.fx_chorus_rate;
         self.fx_chorus_depth    = p.fx_chorus_depth;
@@ -1930,8 +1946,12 @@ impl SynthApp {
         self.fx_reverb_mix      = p.fx_reverb_mix;
         s.fx_overdrive_drive.set_value(self.fx_overdrive_drive);
         s.fx_overdrive_mix.set_value(if self.fx_overdrive_on { self.fx_overdrive_mix } else { 0.0 });
+        s.fx_overdrive_tone.set_value(self.fx_overdrive_tone);
+        s.fx_overdrive_asym.set_value(self.fx_overdrive_asym);
         s.fx_distortion_drive.set_value(self.fx_distortion_drive);
         s.fx_distortion_mix.set_value(if self.fx_distortion_on { self.fx_distortion_mix } else { 0.0 });
+        s.fx_distortion_tone.set_value(self.fx_distortion_tone);
+        s.fx_distortion_pre.set_value(self.fx_distortion_pre);
         s.fx_chorus_rate.set_value(self.fx_chorus_rate);
         s.fx_chorus_depth.set_value(self.fx_chorus_depth);
         s.fx_chorus_mix.set_value(if self.fx_chorus_on { self.fx_chorus_mix } else { 0.0 });
@@ -2396,12 +2416,19 @@ impl SynthApp {
                     }
                     ui.add(egui::Slider::new(&mut self.fx_overdrive_drive, 1.0_f32..=10.0)
                         .text("Drive").clamp_to_range(true))
-                        .on_hover_text("Drive amount — higher values push more signal into saturation.");
+                        .on_hover_text("Drive — how hard the signal is pushed into tanh saturation.");
+                    ui.add(egui::Slider::new(&mut self.fx_overdrive_tone, 0.0_f32..=1.0)
+                        .text("Tone").clamp_to_range(true))
+                        .on_hover_text("Tone — post-clipper low-pass: 0 = dark (400 Hz), 1 = bright (18 kHz).");
+                    ui.add(egui::Slider::new(&mut self.fx_overdrive_asym, 0.0_f32..=1.0)
+                        .text("Asym").clamp_to_range(true))
+                        .on_hover_text("Asymmetry — DC bias before clipping adds even harmonics for a warmer, tube-like character.");
                     ui.add(egui::Slider::new(&mut self.fx_overdrive_mix, 0.0_f32..=1.0)
                         .text("Mix").clamp_to_range(true))
                         .on_hover_text("Wet/dry mix: 0 = dry, 1 = fully overdriven.");
-                    // Push live values
                     self.state.fx_overdrive_drive.set_value(self.fx_overdrive_drive);
+                    self.state.fx_overdrive_tone.set_value(self.fx_overdrive_tone);
+                    self.state.fx_overdrive_asym.set_value(self.fx_overdrive_asym);
                     if self.fx_overdrive_on {
                         self.state.fx_overdrive_mix.set_value(self.fx_overdrive_mix);
                     }
@@ -2421,11 +2448,19 @@ impl SynthApp {
                     }
                     ui.add(egui::Slider::new(&mut self.fx_distortion_drive, 1.0_f32..=20.0)
                         .text("Drive").clamp_to_range(true))
-                        .on_hover_text("Clipping threshold — higher values give more aggressive distortion.");
+                        .on_hover_text("Drive — pre-gain before hard clipping. Higher = more of the wave is squared off.");
+                    ui.add(egui::Slider::new(&mut self.fx_distortion_pre, 0.0_f32..=1.0)
+                        .text("Pre").clamp_to_range(true))
+                        .on_hover_text("Pre — high-pass before clipper (0 = all bass in, 1 = 800 Hz cut). Removes mud from low-end distortion.");
+                    ui.add(egui::Slider::new(&mut self.fx_distortion_tone, 0.0_f32..=1.0)
+                        .text("Tone").clamp_to_range(true))
+                        .on_hover_text("Tone — post-clipper low-pass: 0 = dark (400 Hz), 1 = bright (18 kHz). Rolls off harsh high harmonics.");
                     ui.add(egui::Slider::new(&mut self.fx_distortion_mix, 0.0_f32..=1.0)
                         .text("Mix").clamp_to_range(true))
                         .on_hover_text("Wet/dry mix: 0 = dry, 1 = fully distorted.");
                     self.state.fx_distortion_drive.set_value(self.fx_distortion_drive);
+                    self.state.fx_distortion_pre.set_value(self.fx_distortion_pre);
+                    self.state.fx_distortion_tone.set_value(self.fx_distortion_tone);
                     if self.fx_distortion_on {
                         self.state.fx_distortion_mix.set_value(self.fx_distortion_mix);
                     }

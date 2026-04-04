@@ -116,8 +116,12 @@ pub struct AudioState {
     // FX chain (post-mix, pre-output) — all wet/dry 0.0 = bypass
     pub fx_overdrive_drive: Shared, // 1.0..10.0
     pub fx_overdrive_mix:   Shared, // 0.0..1.0
+    pub fx_overdrive_tone:  Shared, // 0.0..1.0 — post-clipper LP (0=dark, 1=bright)
+    pub fx_overdrive_asym:  Shared, // 0.0..1.0 — asymmetric bias (0=sym, 1=full asym)
     pub fx_distortion_drive: Shared, // 1.0..20.0
     pub fx_distortion_mix:   Shared,
+    pub fx_distortion_tone:  Shared, // 0.0..1.0 — post-clipper LP
+    pub fx_distortion_pre:   Shared, // 0.0..1.0 — pre-clipper HP (controls bass going in)
     pub fx_chorus_rate:  Shared, // 0.1..5.0 Hz
     pub fx_chorus_depth: Shared, // 0.0..0.02 (seconds of modulation)
     pub fx_chorus_mix:   Shared,
@@ -229,8 +233,12 @@ impl AudioState {
             limiter_threshold: shared(0.95),
             fx_overdrive_drive: shared(3.0),
             fx_overdrive_mix:   shared(0.0),
+            fx_overdrive_tone:  shared(0.8),
+            fx_overdrive_asym:  shared(0.0),
             fx_distortion_drive: shared(8.0),
             fx_distortion_mix:   shared(0.0),
+            fx_distortion_tone:  shared(0.8),
+            fx_distortion_pre:   shared(0.0),
             fx_chorus_rate:  shared(0.8),
             fx_chorus_depth: shared(0.008),
             fx_chorus_mix:   shared(0.0),
@@ -497,9 +505,14 @@ impl SmoothedParam {
 /// Each effect blends dry/wet: out = dry + mix*(wet−dry). mix=0 → bypass.
 #[derive(Clone)]
 struct FxChain {
-    // Memoryless params — plain Shared, no smoothing needed
-    od_drive:     Shared,
-    dist_drive:   Shared,
+    // Plain Shared — no smoothing needed (tone/asym affect filter coefficients gradually)
+    od_tone:      Shared,
+    od_asym:      Shared,
+    dist_tone:    Shared,
+    dist_pre:     Shared,
+    // Smoothed — prevents zipper noise when moving sliders live
+    od_drive:     SmoothedParam,
+    dist_drive:   SmoothedParam,
     cho_rate:     Shared,
     cho_depth:    Shared,
     del_feedback: Shared,
@@ -513,11 +526,14 @@ struct FxChain {
     rev_damp: SmoothedParam, // 50 ms
     rev_mix:  SmoothedParam, // 5 ms
     // Internal state
-    cho_phase: f32,
-    del_buf:   Vec<f32>,
-    del_pos:   usize,
-    rev:       ReverbState,
-    sr:        f32,
+    cho_phase:   f32,
+    del_buf:     Vec<f32>,
+    del_pos:     usize,
+    od_tone_z:   f32, // one-pole LP state — OD post-filter
+    dist_tone_z: f32, // one-pole LP state — DIST post-filter
+    dist_pre_z:  f32, // one-pole LP state for HP = input - LP
+    rev:         ReverbState,
+    sr:          f32,
 }
 
 impl FxChain {
@@ -527,8 +543,12 @@ impl FxChain {
         const REV_TAU:  f32 = 0.050; // 50 ms — reverb room/damp, smooth tail changes
         let buf_len = (sr * 1.1) as usize;
         Self {
-            od_drive:     state.fx_overdrive_drive.clone(),
-            dist_drive:   state.fx_distortion_drive.clone(),
+            od_tone:    state.fx_overdrive_tone.clone(),
+            od_asym:    state.fx_overdrive_asym.clone(),
+            dist_tone:  state.fx_distortion_tone.clone(),
+            dist_pre:   state.fx_distortion_pre.clone(),
+            od_drive:   SmoothedParam::new(state.fx_overdrive_drive.clone(),  DEL_TAU, sr),
+            dist_drive: SmoothedParam::new(state.fx_distortion_drive.clone(), DEL_TAU, sr),
             cho_rate:     state.fx_chorus_rate.clone(),
             cho_depth:    state.fx_chorus_depth.clone(),
             del_feedback: state.fx_delay_feedback.clone(),
@@ -540,10 +560,13 @@ impl FxChain {
             rev_size: SmoothedParam::new(state.fx_reverb_size.clone(),    REV_TAU, sr),
             rev_damp: SmoothedParam::new(state.fx_reverb_damp.clone(),    REV_TAU, sr),
             rev_mix:  SmoothedParam::new(state.fx_reverb_mix.clone(),     MIX_TAU, sr),
-            cho_phase: 0.0,
-            del_buf:   vec![0.0f32; buf_len],
-            del_pos:   0,
-            rev:       ReverbState::new(sr),
+            cho_phase:   0.0,
+            del_buf:     vec![0.0f32; buf_len],
+            del_pos:     0,
+            od_tone_z:   0.0,
+            dist_tone_z: 0.0,
+            dist_pre_z:  0.0,
+            rev:         ReverbState::new(sr),
             sr,
         }
     }
@@ -558,8 +581,9 @@ impl AudioNode for FxChain {
         self.cho_phase = 0.0;
         self.del_buf.fill(0.0);
         self.del_pos = 0;
-        self.od_mix.reset();   self.dist_mix.reset(); self.cho_mix.reset();
-        self.del_time.reset(); self.del_mix.reset();
+        self.od_drive.reset(); self.od_mix.reset();
+        self.dist_drive.reset(); self.dist_mix.reset();
+        self.cho_mix.reset();  self.del_time.reset(); self.del_mix.reset();
         self.rev_size.reset(); self.rev_damp.reset(); self.rev_mix.reset();
         self.rev = ReverbState::new(self.sr);
     }
@@ -569,7 +593,8 @@ impl AudioNode for FxChain {
         let buf_len = (self.sr * 1.1) as usize;
         self.del_buf = vec![0.0f32; buf_len];
         self.del_pos = 0;
-        self.od_mix.set_sample_rate(self.sr);   self.dist_mix.set_sample_rate(self.sr);
+        self.od_drive.set_sample_rate(self.sr); self.od_mix.set_sample_rate(self.sr);
+        self.dist_drive.set_sample_rate(self.sr); self.dist_mix.set_sample_rate(self.sr);
         self.cho_mix.set_sample_rate(self.sr);  self.del_time.set_sample_rate(self.sr);
         self.del_mix.set_sample_rate(self.sr);  self.rev_size.set_sample_rate(self.sr);
         self.rev_damp.set_sample_rate(self.sr); self.rev_mix.set_sample_rate(self.sr);
@@ -581,20 +606,44 @@ impl AudioNode for FxChain {
         let dry = input[0];
 
         // ── Overdrive (tanh soft clip) ──────────────────────────────────────
-        // Fixed pre-gain brings the signal up into tanh's nonlinear zone.
-        // Drive knob = pre-gain multiplier. Wet is intentionally louder/warmer —
-        // the mix knob blends back to dry, limiter handles peaks.
-        let od_drive = self.od_drive.value().max(1.0) as f32;
+        let od_drive = self.od_drive.next().max(1.0);
         let od_mix   = self.od_mix.next();
-        let od_wet   = (dry * od_drive * 5.0).tanh();
+        let od_tone  = self.od_tone.value() as f32;
+        let od_asym  = self.od_asym.value() as f32;
+        let od_wet = if od_mix > 0.0001 {
+            // Asymmetric bias: DC offset before clipper adds even harmonics (warmer).
+            // Subtract the clipped bias value to re-center the output.
+            let bias     = od_asym * 0.4;
+            let biased   = dry * od_drive * 5.0 + bias;
+            let clipped  = biased.tanh() - bias.tanh();
+            // Post-clipper tone LP: maps 0→1 to 400 Hz → 18 kHz (exponential)
+            let fc       = 400.0_f32 * (18000.0_f32 / 400.0).powf(od_tone);
+            let lp_coeff = (-std::f32::consts::TAU * fc / self.sr).exp();
+            self.od_tone_z = (1.0 - lp_coeff) * clipped + lp_coeff * self.od_tone_z;
+            self.od_tone_z
+        } else { dry };
         let s1 = dry + od_mix * (od_wet - dry);
 
         // ── Distortion (hard clip) ──────────────────────────────────────────
-        // High fixed pre-gain drives signal well past the ±1 clip threshold.
-        // At low drive only peaks clip; at high drive it's near-square wave.
-        let dist_drive = self.dist_drive.value().max(1.0) as f32;
+        let dist_drive = self.dist_drive.next().max(1.0);
         let dist_mix   = self.dist_mix.next();
-        let dist_wet   = (s1 * dist_drive * 10.0).clamp(-1.0, 1.0);
+        let dist_tone  = self.dist_tone.value() as f32;
+        let dist_pre   = self.dist_pre.value() as f32;
+        let dist_wet = if dist_mix > 0.0001 {
+            // Pre-clipper HP: removes bass before clipping to avoid mud.
+            // Maps 0→1 to 20 Hz → 800 Hz. HP = input - LP(input).
+            let hp_fc     = 20.0_f32 + dist_pre * 780.0;
+            let hp_coeff  = (-std::f32::consts::TAU * hp_fc / self.sr).exp();
+            self.dist_pre_z = (1.0 - hp_coeff) * s1 + hp_coeff * self.dist_pre_z;
+            let hp_out    = s1 - self.dist_pre_z;
+            // Hard clip
+            let clipped   = (hp_out * dist_drive * 10.0).clamp(-1.0, 1.0);
+            // Post-clipper tone LP: rolls off harsh high harmonics
+            let fc        = 400.0_f32 * (18000.0_f32 / 400.0).powf(dist_tone);
+            let lp_coeff  = (-std::f32::consts::TAU * fc / self.sr).exp();
+            self.dist_tone_z = (1.0 - lp_coeff) * clipped + lp_coeff * self.dist_tone_z;
+            self.dist_tone_z
+        } else { s1 };
         let s2 = s1 + dist_mix * (dist_wet - s1);
 
         // ── Chorus (LFO-modulated short delay) ─────────────────────────────

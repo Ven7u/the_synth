@@ -64,9 +64,13 @@ pub struct Patch {
     #[serde(default)] pub fx_overdrive_on:    bool,
     #[serde(default = "default_overdrive_drive")] pub fx_overdrive_drive: f32,
     #[serde(default)] pub fx_overdrive_mix:   f32,
+    #[serde(default = "default_tone")] pub fx_overdrive_tone: f32,
+    #[serde(default)] pub fx_overdrive_asym:  f32,
     #[serde(default)] pub fx_distortion_on:   bool,
     #[serde(default = "default_distortion_drive")] pub fx_distortion_drive: f32,
     #[serde(default)] pub fx_distortion_mix:  f32,
+    #[serde(default = "default_tone")] pub fx_distortion_tone: f32,
+    #[serde(default)] pub fx_distortion_pre:  f32,
     #[serde(default)] pub fx_chorus_on:       bool,
     #[serde(default = "default_chorus_rate")]  pub fx_chorus_rate:  f32,
     #[serde(default = "default_chorus_depth")] pub fx_chorus_depth: f32,
@@ -83,6 +87,7 @@ pub struct Patch {
 
 fn default_overdrive_drive()  -> f32 { 3.0 }
 fn default_distortion_drive() -> f32 { 8.0 }
+fn default_tone()             -> f32 { 0.8 }
 fn default_chorus_rate()      -> f32 { 0.8 }
 fn default_chorus_depth()     -> f32 { 0.008 }
 fn default_delay_time()       -> f32 { 0.35 }
