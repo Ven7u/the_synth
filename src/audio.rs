@@ -331,7 +331,8 @@ fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Send> {
 
         // Ring mod: OSC1 × OSC2 added to the mix.
         let ring = var(&state.ring_tap[vi]) * var(&state.fm_tap[vi]) * var(&state.ring_depth);
-        let osc = osc0 + osc1 + osc2 + ring;
+        let noise = noise() * var(&state.noise_vol);
+        let osc = osc0 + osc1 + osc2 + ring + noise;
 
         // Moog lowpass filter with per-voice filter ADSR (fully live-parametric).
         let fenv = var(vg) >> An(LiveAdsr::new(

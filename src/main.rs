@@ -722,6 +722,7 @@ impl SynthApp {
                                 .vertical()
                                 .text(format!("{}", i + 1)),
                         )
+                        .on_hover_text(format!("OSC {} volume in the mix.", i + 1))
                         .changed()
                     {
                         // Only push to DSP if the oscillator is enabled; otherwise
@@ -740,6 +741,7 @@ impl SynthApp {
                             .vertical()
                             .text("N"),
                     )
+                    .on_hover_text("White noise volume. Adds breathiness, air, or full noise textures.")
                     .changed()
                 {
                     self.state.noise_vol.set(self.noise_vol);
@@ -749,18 +751,20 @@ impl SynthApp {
 
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.label("Vol:");
+            ui.label("Vol:").on_hover_text("Master output volume.");
             if ui
                 .add(egui::Slider::new(&mut self.master_vol, 0.0..=1.0))
+                .on_hover_text("Master output volume.")
                 .changed()
             {
                 self.state.master_vol.set(self.master_vol);
             }
         });
         ui.horizontal(|ui| {
-            ui.label("Glide:");
+            ui.label("Glide:").on_hover_text("Portamento — glide pitch from previous note to next. 0 = instant.");
             if ui
                 .add(egui::Slider::new(&mut self.glide_time, 0.0..=0.5).text("s"))
+                .on_hover_text("Glide time in seconds. Higher = slower pitch slide between notes.")
                 .changed()
             {
                 self.state.glide_time.set(self.glide_time);
@@ -775,7 +779,10 @@ impl SynthApp {
             } else {
                 egui::RichText::new("LIM").color(Color32::GRAY)
             };
-            if ui.button(label).clicked() {
+            if ui.button(label)
+                .on_hover_text("Limiter — prevents the output from clipping. Enable when the mix is too loud.")
+                .clicked()
+            {
                 self.limiter_enabled = !self.limiter_enabled;
                 self.state
                     .limiter_enabled
@@ -784,7 +791,7 @@ impl SynthApp {
             ui.add_enabled(
                 self.limiter_enabled,
                 egui::Slider::new(&mut self.limiter_threshold, 0.5..=1.0).text("Thr"),
-            );
+            ).on_hover_text("Threshold at which limiting kicks in. Lower = more compression.");
             if self.limiter_enabled {
                 self.state.limiter_threshold.set(self.limiter_threshold);
             }
@@ -971,6 +978,12 @@ impl SynthApp {
             &mut self.amp_adsr
         };
         let labels = ["A", "D", "S", "R"];
+        let tips = [
+            "Attack — time to reach full level after a note is pressed.",
+            "Decay — time to fall from peak to sustain level.",
+            "Sustain — level held while key is held (0 = silent, 1 = full).",
+            "Release — time to fade out after key is released.",
+        ];
         let ranges: [std::ops::RangeInclusive<f32>; 4] =
             [0.001..=2.0, 0.001..=2.0, 0.0..=1.0, 0.001..=4.0];
 
@@ -986,6 +999,7 @@ impl SynthApp {
                                 .logarithmic(log)
                                 .text(labels[i]),
                         )
+                        .on_hover_text(tips[i])
                         .changed();
                     if changed {
                         let v = adsr[i];
@@ -1046,12 +1060,12 @@ const KEY_MAP: &[(egui::Key, i32)] = &[
 impl SynthApp {
     fn ui_keyboard_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label("Octave:");
-            if ui.button("−").clicked() && self.piano_octave > 1 {
+            ui.label("Octave:").on_hover_text("Keyboard octave range (1–7). Shifts all keys up or down by one octave.");
+            if ui.button("−").on_hover_text("One octave down").clicked() && self.piano_octave > 1 {
                 self.piano_octave -= 1;
             }
-            ui.label(format!("{}", self.piano_octave));
-            if ui.button("+").clicked() && self.piano_octave < 7 {
+            ui.label(format!("{}", self.piano_octave)).on_hover_text("Current keyboard octave.");
+            if ui.button("+").on_hover_text("One octave up").clicked() && self.piano_octave < 7 {
                 self.piano_octave += 1;
             }
             let hint = if self.seq_mode == SeqMode::ChordKb {
@@ -1250,7 +1264,12 @@ impl SynthApp {
                 let label = egui::RichText::new(mode.label())
                     .color(if active { Color32::from_rgb(0, 220, 160) } else { Color32::GRAY })
                     .strong();
-                if ui.button(label).clicked() && !active {
+                let tip = match mode {
+                    SeqMode::NoteSeq  => "Note Sequencer — step-sequence individual notes.",
+                    SeqMode::ChordSeq => "Chord Sequencer — step-sequence chords from a diatonic scale.",
+                    SeqMode::ChordKb  => "Chord Keyboard — play chords live via keyboard keys (A–J = degrees I–VII).",
+                };
+                if ui.button(label).on_hover_text(tip).clicked() && !active {
                     // Stop playback when switching modes
                     let prev: Vec<u8> = self.seq_prev_notes.drain(..).collect();
                     for m in prev { self.voice_off(m); }
@@ -1265,15 +1284,16 @@ impl SynthApp {
             // Play/Stop — only for sequencer modes
             if self.seq_mode != SeqMode::ChordKb {
                 let btn = if self.seq_playing { "⏹ Stop" } else { "▶ Play" };
-                if ui.button(btn).clicked() {
+                if ui.button(btn).on_hover_text("Start or stop the sequencer.").clicked() {
                     self.seq_playing = !self.seq_playing;
                     if !self.seq_playing {
                         let prev: Vec<u8> = self.seq_prev_notes.drain(..).collect();
                         for m in prev { self.voice_off(m); }
                     }
                 }
-                ui.label("BPM:");
-                ui.add(egui::Slider::new(&mut self.seq_bpm, 40..=600));
+                ui.label("BPM:").on_hover_text("Sequencer tempo in beats per minute.");
+                ui.add(egui::Slider::new(&mut self.seq_bpm, 40..=600))
+                    .on_hover_text("Sequencer tempo (40–600 BPM).");
 
                 // Step length selector
                 let cur_length = match self.seq_mode {
@@ -1281,19 +1301,19 @@ impl SynthApp {
                     SeqMode::ChordSeq => &mut self.chord_seq.length,
                     SeqMode::ChordKb  => unreachable!(),
                 };
-                ui.label("Steps:");
+                ui.label("Steps:").on_hover_text("Number of steps in the sequencer pattern.");
                 for &len in &[8usize, 16, 24] {
                     let active = *cur_length == len;
                     let label = egui::RichText::new(format!("{len}"))
                         .color(if active { Color32::from_rgb(0, 200, 130) } else { Color32::GRAY });
-                    if ui.button(label).clicked() {
+                    if ui.button(label).on_hover_text(format!("Set pattern length to {len} steps.")).clicked() {
                         *cur_length = len;
                         if self.seq_current_step >= len { self.seq_current_step = 0; }
                     }
                 }
 
                 // Random fill
-                if ui.button("🎲").clicked() {
+                if ui.button("🎲").on_hover_text("Randomly fill all steps with notes.").clicked() {
                     use std::collections::hash_map::DefaultHasher;
                     use std::hash::{Hash, Hasher};
                     let mut h = DefaultHasher::new();
@@ -1331,7 +1351,7 @@ impl SynthApp {
                     SeqMode::ChordKb  => (&mut self.chord_kb.root,  &mut self.chord_kb.scale),
                     _ => unreachable!(),
                 };
-                ui.label("Key:");
+                ui.label("Key:").on_hover_text("Root note for the chord scale.");
                 egui::ComboBox::from_id_salt("chord_root")
                     .selected_text(NOTE_NAMES[*root as usize])
                     .show_ui(ui, |ui| {
@@ -1339,12 +1359,15 @@ impl SynthApp {
                             ui.selectable_value(root, i as u8, *name);
                         }
                     });
-                ui.label("Scale:");
+                ui.label("Scale:").on_hover_text("Diatonic scale used to build chords (Major = bright, Minor = dark).");
                 for &sc in &[ScaleType::Major, ScaleType::Minor] {
                     let active = *scale == sc;
                     let label = egui::RichText::new(sc.label())
                         .color(if active { Color32::from_rgb(0, 200, 130) } else { Color32::GRAY });
-                    if ui.button(label).clicked() { *scale = sc; }
+                    if ui.button(label).on_hover_text(match sc {
+                        ScaleType::Major => "Major scale — bright, happy feel.",
+                        ScaleType::Minor => "Minor scale — dark, moody feel.",
+                    }).clicked() { *scale = sc; }
                 }
             }
         });
@@ -1815,10 +1838,11 @@ impl SynthApp {
         ui.label(egui::RichText::new("PATCH").strong().small());
 
         // Patch name
-        ui.add(egui::TextEdit::singleline(&mut self.patch_name).desired_width(120.0));
+        ui.add(egui::TextEdit::singleline(&mut self.patch_name).desired_width(120.0))
+            .on_hover_text("Patch name. Used as filename when saving.");
 
         // Save to file
-        if ui.button("💾 Save").clicked() {
+        if ui.button("💾 Save").on_hover_text("Save current patch to a JSON file.").clicked() {
             let p = self.capture_patch();
             if let Some(path) = rfd::FileDialog::new()
                 .set_file_name(&format!("{}.json", p.name))
@@ -1832,7 +1856,7 @@ impl SynthApp {
         }
 
         // Load from file
-        if ui.button("📂 Load").clicked() {
+        if ui.button("📂 Load").on_hover_text("Load a patch from a JSON file.").clicked() {
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter("Patch", &["json"])
                 .pick_file()
@@ -1848,7 +1872,7 @@ impl SynthApp {
         // Library browser toggle
         let browser_label = egui::RichText::new("📚 Library")
             .color(if self.patch_browser_open { Color32::from_rgb(0, 220, 160) } else { Color32::WHITE });
-        if ui.button(browser_label).clicked() {
+        if ui.button(browser_label).on_hover_text("Browse and load factory patches organized by category and synth model.").clicked() {
             self.patch_browser_open = !self.patch_browser_open;
         }
     }
@@ -1988,14 +2012,18 @@ impl SynthApp {
             .show_ui(ui, |ui| {
                 // Disconnect option
                 let selected = connected.is_none();
-                if ui.selectable_label(selected, "— disconnected —").clicked() {
+                if ui.selectable_label(selected, "— disconnected —")
+                    .on_hover_text("Disconnect from all MIDI devices.")
+                    .clicked() {
                     self.midi.disconnect();
                 }
                 // One entry per port
                 let names: Vec<String> = self.midi.port_names.clone();
                 for (i, name) in names.iter().enumerate() {
                     let selected = connected == Some(i);
-                    if ui.selectable_label(selected, name).clicked() && !selected {
+                    if ui.selectable_label(selected, name)
+                        .on_hover_text(format!("Connect to MIDI device: {name}"))
+                        .clicked() && !selected {
                         if let Err(e) = self.midi.connect(i) {
                             eprintln!("MIDI connect error: {e}");
                         }
@@ -2027,21 +2055,23 @@ impl SynthApp {
                     .color(Color32::from_rgb(60, 100, 80)),
             );
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("X").small().color(Color32::from_rgb(100, 180, 140)));
+            ui.label(egui::RichText::new("X").small().color(Color32::from_rgb(100, 180, 140)))
+                .on_hover_text("Horizontal zoom — drag to stretch or compress the waveform in time.");
             ui.add(
                 egui::DragValue::new(&mut self.scope_x_scale)
                     .speed(0.02)
                     .range(0.25_f32..=8.0)
                     .suffix("×"),
-            );
+            ).on_hover_text("Horizontal zoom (0.25–8×). Drag left/right to adjust.");
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("Y").small().color(Color32::from_rgb(100, 180, 140)));
+            ui.label(egui::RichText::new("Y").small().color(Color32::from_rgb(100, 180, 140)))
+                .on_hover_text("Vertical zoom — drag to scale the waveform amplitude.");
             ui.add(
                 egui::DragValue::new(&mut self.scope_y_scale)
                     .speed(0.02)
                     .range(0.25_f32..=8.0)
                     .suffix("×"),
-            );
+            ).on_hover_text("Vertical zoom (0.25–8×). Drag left/right to adjust.");
         });
 
         let buf = self.state.osc_buffer.lock().unwrap().clone();
