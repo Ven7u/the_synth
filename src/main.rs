@@ -132,6 +132,28 @@ struct SynthApp {
     patch_browser_open: bool,
     patch_browser_category: String,
     patch_browser_model: String,
+
+    // FX chain — per-effect enable + saved mix value
+    fx_overdrive_on: bool,
+    fx_overdrive_drive: f32,
+    fx_overdrive_mix: f32,
+    fx_distortion_on: bool,
+    fx_distortion_drive: f32,
+    fx_distortion_mix: f32,
+    fx_chorus_on: bool,
+    fx_chorus_rate: f32,
+    fx_chorus_depth: f32,
+    fx_chorus_mix: f32,
+    fx_delay_on: bool,
+    fx_delay_time: f32,
+    fx_delay_feedback: f32,
+    fx_delay_mix: f32,
+    fx_delay_sync: bool,        // if true, delay_time is derived from BPM
+    fx_delay_division: usize,   // index into DELAY_DIVISIONS
+    fx_reverb_on: bool,
+    fx_reverb_size: f32,
+    fx_reverb_damp: f32,
+    fx_reverb_mix: f32,
 }
 
 impl SynthApp {
@@ -198,6 +220,26 @@ impl SynthApp {
             patch_browser_open: false,
             patch_browser_category: "All".into(),
             patch_browser_model: "All".into(),
+            fx_overdrive_on: false,
+            fx_overdrive_drive: 3.0,
+            fx_overdrive_mix: 0.5,
+            fx_distortion_on: false,
+            fx_distortion_drive: 8.0,
+            fx_distortion_mix: 0.5,
+            fx_chorus_on: false,
+            fx_chorus_rate: 0.8,
+            fx_chorus_depth: 0.008,
+            fx_chorus_mix: 0.4,
+            fx_delay_on: false,
+            fx_delay_time: 0.35,
+            fx_delay_feedback: 0.4,
+            fx_delay_mix: 0.4,
+            fx_delay_sync: false,
+            fx_delay_division: 2, // default: 1/4 note
+            fx_reverb_on: false,
+            fx_reverb_size: 0.6,
+            fx_reverb_damp: 0.5,
+            fx_reverb_mix: 0.4,
         }
     }
 }
@@ -438,6 +480,16 @@ impl eframe::App for SynthApp {
 
             ui.add_space(4.0);
 
+            // Row 5: FX Chain
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("FX CHAIN").strong().small());
+            });
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                self.ui_fx_chain(ui);
+            });
+
+            ui.add_space(4.0);
+
             // MIDI + Latency row
             ui.horizontal(|ui| {
                 self.ui_midi_panel(ui);
@@ -458,6 +510,18 @@ impl eframe::App for SynthApp {
 // ---------------------------------------------------------------------------
 
 const WAVE_LABELS: &[&str] = &["Sin", "Saw", "Sqr", "Tri"];
+
+/// Delay note divisions: (label, beats relative to a quarter-note pulse).
+/// beats = 1.0 → quarter note, 0.5 → eighth note, etc.
+const DELAY_DIVISIONS: &[(&str, f32)] = &[
+    ("1/1",  4.0),
+    ("1/2",  2.0),
+    ("1/4",  1.0),
+    ("1/8",  0.5),
+    ("1/16", 0.25),
+    ("3/8",  1.5),  // dotted quarter
+    ("3/16", 0.75), // dotted eighth
+];
 
 impl SynthApp {
     fn ui_osc_panel(&mut self, ui: &mut egui::Ui, i: usize) {
@@ -1761,6 +1825,24 @@ impl SynthApp {
             glide_time:         self.glide_time,
             master_vol:         self.master_vol,
             synth_model:        String::new(),
+            fx_overdrive_on:    self.fx_overdrive_on,
+            fx_overdrive_drive: self.fx_overdrive_drive,
+            fx_overdrive_mix:   self.fx_overdrive_mix,
+            fx_distortion_on:   self.fx_distortion_on,
+            fx_distortion_drive: self.fx_distortion_drive,
+            fx_distortion_mix:  self.fx_distortion_mix,
+            fx_chorus_on:       self.fx_chorus_on,
+            fx_chorus_rate:     self.fx_chorus_rate,
+            fx_chorus_depth:    self.fx_chorus_depth,
+            fx_chorus_mix:      self.fx_chorus_mix,
+            fx_delay_on:        self.fx_delay_on,
+            fx_delay_time:      self.fx_delay_time,
+            fx_delay_feedback:  self.fx_delay_feedback,
+            fx_delay_mix:       self.fx_delay_mix,
+            fx_reverb_on:       self.fx_reverb_on,
+            fx_reverb_size:     self.fx_reverb_size,
+            fx_reverb_damp:     self.fx_reverb_damp,
+            fx_reverb_mix:      self.fx_reverb_mix,
         }
     }
 
@@ -1826,6 +1908,39 @@ impl SynthApp {
         s.adsr_release.set(self.amp_adsr[3]);
         s.glide_time.set(self.glide_time);
         s.master_vol.set(self.master_vol);
+
+        // FX chain
+        self.fx_overdrive_on    = p.fx_overdrive_on;
+        self.fx_overdrive_drive = p.fx_overdrive_drive;
+        self.fx_overdrive_mix   = p.fx_overdrive_mix;
+        self.fx_distortion_on   = p.fx_distortion_on;
+        self.fx_distortion_drive = p.fx_distortion_drive;
+        self.fx_distortion_mix  = p.fx_distortion_mix;
+        self.fx_chorus_on       = p.fx_chorus_on;
+        self.fx_chorus_rate     = p.fx_chorus_rate;
+        self.fx_chorus_depth    = p.fx_chorus_depth;
+        self.fx_chorus_mix      = p.fx_chorus_mix;
+        self.fx_delay_on        = p.fx_delay_on;
+        self.fx_delay_time      = p.fx_delay_time;
+        self.fx_delay_feedback  = p.fx_delay_feedback;
+        self.fx_delay_mix       = p.fx_delay_mix;
+        self.fx_reverb_on       = p.fx_reverb_on;
+        self.fx_reverb_size     = p.fx_reverb_size;
+        self.fx_reverb_damp     = p.fx_reverb_damp;
+        self.fx_reverb_mix      = p.fx_reverb_mix;
+        s.fx_overdrive_drive.set_value(self.fx_overdrive_drive);
+        s.fx_overdrive_mix.set_value(if self.fx_overdrive_on { self.fx_overdrive_mix } else { 0.0 });
+        s.fx_distortion_drive.set_value(self.fx_distortion_drive);
+        s.fx_distortion_mix.set_value(if self.fx_distortion_on { self.fx_distortion_mix } else { 0.0 });
+        s.fx_chorus_rate.set_value(self.fx_chorus_rate);
+        s.fx_chorus_depth.set_value(self.fx_chorus_depth);
+        s.fx_chorus_mix.set_value(if self.fx_chorus_on { self.fx_chorus_mix } else { 0.0 });
+        s.fx_delay_time.set_value(self.fx_delay_time);
+        s.fx_delay_feedback.set_value(self.fx_delay_feedback);
+        s.fx_delay_mix.set_value(if self.fx_delay_on { self.fx_delay_mix } else { 0.0 });
+        s.fx_reverb_size.set_value(self.fx_reverb_size);
+        s.fx_reverb_damp.set_value(self.fx_reverb_damp);
+        s.fx_reverb_mix.set_value(if self.fx_reverb_on { self.fx_reverb_mix } else { 0.0 });
     }
 }
 
@@ -2252,6 +2367,189 @@ fn draw_adsr_visualizer(ui: &mut egui::Ui, adsr: &[f32; 4], cursors: &[f32]) {
         // Glow + core dot
         painter.circle_filled(pos, 5.0, Color32::from_rgba_premultiplied(0, 255, 160, 40));
         painter.circle_filled(pos, 2.5, Color32::from_rgb(0, 255, 160));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FX chain panel
+// ---------------------------------------------------------------------------
+
+impl SynthApp {
+    fn ui_fx_chain(&mut self, ui: &mut egui::Ui) {
+        let col_od   = Color32::from_rgb(255, 140,  60); // orange
+        let col_dist = Color32::from_rgb(220,  60,  60); // red
+        let col_cho  = Color32::from_rgb( 80, 200, 140); // green
+        let col_dly  = Color32::from_rgb( 80, 160, 255); // blue
+        let col_rev  = Color32::from_rgb(170,  90, 240); // purple
+
+        ui.horizontal(|ui| {
+            // ---- Overdrive ----
+            ui.group(|ui| {
+                ui.set_min_width(110.0);
+                ui.vertical(|ui| {
+                    let on = &mut self.fx_overdrive_on;
+                    let label = egui::RichText::new("OVERDRIVE").small().strong()
+                        .color(if *on { col_od } else { Color32::GRAY });
+                    if ui.button(label).on_hover_text("Toggle overdrive (soft-clip / tanh saturation).").clicked() {
+                        *on = !*on;
+                        self.state.fx_overdrive_mix.set_value(if *on { self.fx_overdrive_mix } else { 0.0 });
+                    }
+                    ui.add(egui::Slider::new(&mut self.fx_overdrive_drive, 1.0_f32..=10.0)
+                        .text("Drive").clamp_to_range(true))
+                        .on_hover_text("Drive amount — higher values push more signal into saturation.");
+                    ui.add(egui::Slider::new(&mut self.fx_overdrive_mix, 0.0_f32..=1.0)
+                        .text("Mix").clamp_to_range(true))
+                        .on_hover_text("Wet/dry mix: 0 = dry, 1 = fully overdriven.");
+                    // Push live values
+                    self.state.fx_overdrive_drive.set_value(self.fx_overdrive_drive);
+                    if self.fx_overdrive_on {
+                        self.state.fx_overdrive_mix.set_value(self.fx_overdrive_mix);
+                    }
+                });
+            });
+
+            // ---- Distortion ----
+            ui.group(|ui| {
+                ui.set_min_width(110.0);
+                ui.vertical(|ui| {
+                    let on = &mut self.fx_distortion_on;
+                    let label = egui::RichText::new("DISTORTION").small().strong()
+                        .color(if *on { col_dist } else { Color32::GRAY });
+                    if ui.button(label).on_hover_text("Toggle distortion (hard clipping).").clicked() {
+                        *on = !*on;
+                        self.state.fx_distortion_mix.set_value(if *on { self.fx_distortion_mix } else { 0.0 });
+                    }
+                    ui.add(egui::Slider::new(&mut self.fx_distortion_drive, 1.0_f32..=20.0)
+                        .text("Drive").clamp_to_range(true))
+                        .on_hover_text("Clipping threshold — higher values give more aggressive distortion.");
+                    ui.add(egui::Slider::new(&mut self.fx_distortion_mix, 0.0_f32..=1.0)
+                        .text("Mix").clamp_to_range(true))
+                        .on_hover_text("Wet/dry mix: 0 = dry, 1 = fully distorted.");
+                    self.state.fx_distortion_drive.set_value(self.fx_distortion_drive);
+                    if self.fx_distortion_on {
+                        self.state.fx_distortion_mix.set_value(self.fx_distortion_mix);
+                    }
+                });
+            });
+
+            // ---- Chorus ----
+            ui.group(|ui| {
+                ui.set_min_width(130.0);
+                ui.vertical(|ui| {
+                    let on = &mut self.fx_chorus_on;
+                    let label = egui::RichText::new("CHORUS").small().strong()
+                        .color(if *on { col_cho } else { Color32::GRAY });
+                    if ui.button(label).on_hover_text("Toggle chorus (LFO-modulated delay for width/shimmer).").clicked() {
+                        *on = !*on;
+                        self.state.fx_chorus_mix.set_value(if *on { self.fx_chorus_mix } else { 0.0 });
+                    }
+                    ui.add(egui::Slider::new(&mut self.fx_chorus_rate, 0.1_f32..=5.0)
+                        .text("Rate").suffix(" Hz").clamp_to_range(true))
+                        .on_hover_text("LFO rate in Hz — how fast the chorus modulates.");
+                    ui.add(egui::Slider::new(&mut self.fx_chorus_depth, 0.0_f32..=0.02)
+                        .text("Depth").clamp_to_range(true))
+                        .on_hover_text("Depth of LFO modulation in seconds (0–20 ms).");
+                    ui.add(egui::Slider::new(&mut self.fx_chorus_mix, 0.0_f32..=1.0)
+                        .text("Mix").clamp_to_range(true))
+                        .on_hover_text("Wet/dry mix.");
+                    self.state.fx_chorus_rate.set_value(self.fx_chorus_rate);
+                    self.state.fx_chorus_depth.set_value(self.fx_chorus_depth);
+                    if self.fx_chorus_on {
+                        self.state.fx_chorus_mix.set_value(self.fx_chorus_mix);
+                    }
+                });
+            });
+
+            // ---- Delay ----
+            ui.group(|ui| {
+                ui.set_min_width(160.0);
+                ui.vertical(|ui| {
+                    // Enable toggle
+                    let on = &mut self.fx_delay_on;
+                    let label = egui::RichText::new("DELAY").small().strong()
+                        .color(if *on { col_dly } else { Color32::GRAY });
+                    if ui.button(label).on_hover_text("Toggle delay (echo effect with feedback).").clicked() {
+                        *on = !*on;
+                        self.state.fx_delay_mix.set_value(if *on { self.fx_delay_mix } else { 0.0 });
+                    }
+
+                    // BPM sync toggle
+                    ui.horizontal(|ui| {
+                        let sync_label = egui::RichText::new(if self.fx_delay_sync { "BPM sync: ON" } else { "BPM sync: OFF" })
+                            .small()
+                            .color(if self.fx_delay_sync { col_dly } else { Color32::GRAY });
+                        if ui.button(sync_label).on_hover_text("Sync delay time to the sequencer BPM.").clicked() {
+                            self.fx_delay_sync = !self.fx_delay_sync;
+                        }
+                    });
+
+                    if self.fx_delay_sync {
+                        // Note division selector
+                        let bpm = self.seq_bpm as f32;
+                        let beat_sec = 60.0 / bpm;
+                        ui.horizontal_wrapped(|ui| {
+                            for (i, (name, _)) in DELAY_DIVISIONS.iter().enumerate() {
+                                let active = self.fx_delay_division == i;
+                                let btn_label = egui::RichText::new(*name).small()
+                                    .color(if active { col_dly } else { Color32::GRAY });
+                                if ui.button(btn_label).on_hover_text(format!("Set delay to {} note ({:.0} BPM → {:.3}s)", name, bpm, beat_sec * DELAY_DIVISIONS[i].1)).clicked() {
+                                    self.fx_delay_division = i;
+                                }
+                            }
+                        });
+                        // Compute and display synced time
+                        let synced_time = (beat_sec * DELAY_DIVISIONS[self.fx_delay_division].1).clamp(0.01, 1.0);
+                        self.fx_delay_time = synced_time;
+                        ui.label(egui::RichText::new(format!("{:.3} s  @{}BPM", synced_time, self.seq_bpm)).small().color(Color32::DARK_GRAY))
+                            .on_hover_text("Current delay time computed from BPM and selected note division.");
+                    } else {
+                        ui.add(egui::Slider::new(&mut self.fx_delay_time, 0.01_f32..=1.0)
+                            .text("Time").suffix(" s").clamp_to_range(true))
+                            .on_hover_text("Delay time in seconds (10 ms – 1 s).");
+                    }
+
+                    ui.add(egui::Slider::new(&mut self.fx_delay_feedback, 0.0_f32..=0.95)
+                        .text("Feedback").clamp_to_range(true))
+                        .on_hover_text("Feedback amount — how much of the delayed signal repeats.");
+                    ui.add(egui::Slider::new(&mut self.fx_delay_mix, 0.0_f32..=1.0)
+                        .text("Mix").clamp_to_range(true))
+                        .on_hover_text("Wet/dry mix.");
+                    self.state.fx_delay_time.set_value(self.fx_delay_time);
+                    self.state.fx_delay_feedback.set_value(self.fx_delay_feedback);
+                    if self.fx_delay_on {
+                        self.state.fx_delay_mix.set_value(self.fx_delay_mix);
+                    }
+                });
+            });
+
+            // ---- Reverb ----
+            ui.group(|ui| {
+                ui.set_min_width(130.0);
+                ui.vertical(|ui| {
+                    let on = &mut self.fx_reverb_on;
+                    let label = egui::RichText::new("REVERB").small().strong()
+                        .color(if *on { col_rev } else { Color32::GRAY });
+                    if ui.button(label).on_hover_text("Toggle reverb (Schroeder plate-style reverb).").clicked() {
+                        *on = !*on;
+                        self.state.fx_reverb_mix.set_value(if *on { self.fx_reverb_mix } else { 0.0 });
+                    }
+                    ui.add(egui::Slider::new(&mut self.fx_reverb_size, 0.0_f32..=1.0)
+                        .text("Size").clamp_to_range(true))
+                        .on_hover_text("Room size — controls reverb decay time.");
+                    ui.add(egui::Slider::new(&mut self.fx_reverb_damp, 0.0_f32..=1.0)
+                        .text("Damp").clamp_to_range(true))
+                        .on_hover_text("High-frequency damping — 0 = bright, 1 = dark/muffled.");
+                    ui.add(egui::Slider::new(&mut self.fx_reverb_mix, 0.0_f32..=1.0)
+                        .text("Mix").clamp_to_range(true))
+                        .on_hover_text("Wet/dry mix.");
+                    self.state.fx_reverb_size.set_value(self.fx_reverb_size);
+                    self.state.fx_reverb_damp.set_value(self.fx_reverb_damp);
+                    if self.fx_reverb_on {
+                        self.state.fx_reverb_mix.set_value(self.fx_reverb_mix);
+                    }
+                });
+            });
+        });
     }
 }
 

@@ -112,6 +112,21 @@ pub struct AudioState {
     // Master limiter (envelope-follower, runs in callback before tanh)
     pub limiter_enabled: Arc<AtomicBool>,
     pub limiter_threshold: Shared, // 0.5..1.0
+
+    // FX chain (post-mix, pre-output) — all wet/dry 0.0 = bypass
+    pub fx_overdrive_drive: Shared, // 1.0..10.0
+    pub fx_overdrive_mix:   Shared, // 0.0..1.0
+    pub fx_distortion_drive: Shared, // 1.0..20.0
+    pub fx_distortion_mix:   Shared,
+    pub fx_chorus_rate:  Shared, // 0.1..5.0 Hz
+    pub fx_chorus_depth: Shared, // 0.0..0.02 (seconds of modulation)
+    pub fx_chorus_mix:   Shared,
+    pub fx_delay_time:     Shared, // 0.0..1.0 s
+    pub fx_delay_feedback: Shared, // 0.0..0.95
+    pub fx_delay_mix:      Shared,
+    pub fx_reverb_size:    Shared, // 0.0..1.0 (room size)
+    pub fx_reverb_damp:    Shared, // 0.0..1.0 (high-freq damping)
+    pub fx_reverb_mix:     Shared,
 }
 
 impl AudioState {
@@ -212,6 +227,19 @@ impl AudioState {
             peak_r: Arc::new(AtomicU32::new(0)),
             limiter_enabled: Arc::new(AtomicBool::new(true)),
             limiter_threshold: shared(0.95),
+            fx_overdrive_drive: shared(3.0),
+            fx_overdrive_mix:   shared(0.0),
+            fx_distortion_drive: shared(8.0),
+            fx_distortion_mix:   shared(0.0),
+            fx_chorus_rate:  shared(0.8),
+            fx_chorus_depth: shared(0.008),
+            fx_chorus_mix:   shared(0.0),
+            fx_delay_time:     shared(0.35),
+            fx_delay_feedback: shared(0.4),
+            fx_delay_mix:      shared(0.0),
+            fx_reverb_size:    shared(0.6),
+            fx_reverb_damp:    shared(0.5),
+            fx_reverb_mix:     shared(0.0),
         }
     }
 }
@@ -363,11 +391,259 @@ fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Send> {
     let v4 = make_voice(4);
     let v5 = make_voice(5);
 
+    let voice_mix = (v0 + v1 + v2 + v3 + v4 + v5) * scale;
+
+    let chain = voice_mix >> An(FxChain::new(state, sr as f32));
+
     let mut g: Box<dyn AudioUnit + Send> =
-        Box::new((v0 + v1 + v2 + v3 + v4 + v5) * var(&state.master_vol) * scale >> pan(0.0));
+        Box::new(chain * var(&state.master_vol) >> pan(0.0));
     g.set_sample_rate(sr);
     g.allocate();
     g
+}
+
+// ---------------------------------------------------------------------------
+// FX chain — custom AudioNode (tick-based, plain f32)
+// ---------------------------------------------------------------------------
+
+/// Schroeder reverb: 4 parallel comb filters → 2 serial allpass filters.
+#[derive(Clone)]
+struct ReverbState {
+    comb_buf:  [Vec<f32>; 4],
+    comb_pos:  [usize;    4],
+    comb_feed: [f32;      4], // one-pole LP state per comb (damping)
+    ap_buf:    [Vec<f32>; 2],
+    ap_pos:    [usize;    2],
+}
+
+impl ReverbState {
+    fn new(sr: f32) -> Self {
+        let scale = sr / 44100.0;
+        let comb_delays: [usize; 4] = [1557, 1617, 1491, 1422];
+        let ap_delays:   [usize; 2] = [225, 556];
+        Self {
+            comb_buf:  comb_delays.map(|d| vec![0.0; std::cmp::max((d as f32 * scale) as usize, 1)]),
+            comb_pos:  [0; 4],
+            comb_feed: [0.0; 4],
+            ap_buf:    ap_delays.map(|d| vec![0.0; std::cmp::max((d as f32 * scale) as usize, 1)]),
+            ap_pos:    [0; 2],
+        }
+    }
+
+    fn tick(&mut self, input: f32, room: f32, damp: f32) -> f32 {
+        let feed = 0.7 + room * 0.28; // 0.7..0.98 decay
+        let d    = damp * 0.4;        // HF rolloff coefficient
+
+        let mut out = 0.0f32;
+        for i in 0..4 {
+            let len = self.comb_buf[i].len();
+            let pos = self.comb_pos[i];
+            let delayed = self.comb_buf[i][pos];
+            self.comb_feed[i] = delayed * (1.0 - d) + self.comb_feed[i] * d;
+            self.comb_buf[i][pos] = input + self.comb_feed[i] * feed;
+            self.comb_pos[i] = (pos + 1) % len;
+            out += delayed;
+        }
+        out *= 0.25;
+
+        for i in 0..2 {
+            let len = self.ap_buf[i].len();
+            let pos = self.ap_pos[i];
+            let buf = self.ap_buf[i][pos];
+            let v = out + buf * 0.5;
+            self.ap_buf[i][pos] = v;
+            self.ap_pos[i] = (pos + 1) % len;
+            out = buf - v * 0.5;
+        }
+        out
+    }
+}
+
+/// One-pole exponential smoother wrapping a `Shared` parameter.
+/// Prevents audio artifacts (clicks/pops) when a parameter is changed live.
+/// `tau_s` is the smoothing time constant in seconds (63% convergence time).
+#[derive(Clone)]
+struct SmoothedParam {
+    shared:  Shared,
+    current: f32,
+    coeff:   f32, // recomputed on sample-rate change
+    tau_s:   f32,
+}
+
+impl SmoothedParam {
+    fn new(shared: Shared, tau_s: f32, sr: f32) -> Self {
+        let current = shared.value() as f32;
+        let coeff   = (-1.0_f32 / (tau_s * sr)).exp();
+        Self { shared, current, coeff, tau_s }
+    }
+
+    fn set_sample_rate(&mut self, sr: f32) {
+        self.coeff = (-1.0_f32 / (self.tau_s * sr)).exp();
+    }
+
+    fn reset(&mut self) {
+        self.current = self.shared.value() as f32;
+    }
+
+    #[inline]
+    fn next(&mut self) -> f32 {
+        let target   = self.shared.value() as f32;
+        self.current = target + self.coeff * (self.current - target);
+        self.current
+    }
+}
+
+/// All five effects in a single sample-accurate node.
+/// Each effect blends dry/wet: out = dry + mix*(wet−dry). mix=0 → bypass.
+#[derive(Clone)]
+struct FxChain {
+    // Memoryless params — plain Shared, no smoothing needed
+    od_drive:     Shared,
+    dist_drive:   Shared,
+    cho_rate:     Shared,
+    cho_depth:    Shared,
+    del_feedback: Shared,
+    // Smoothed params — use SmoothedParam to prevent clicks/artifacts
+    od_mix:   SmoothedParam, // 5 ms — pop-free toggle
+    dist_mix: SmoothedParam, // 5 ms
+    cho_mix:  SmoothedParam, // 5 ms
+    del_time: SmoothedParam, // 20 ms — prevents pitch-jump noise on slider move
+    del_mix:  SmoothedParam, // 5 ms
+    rev_size: SmoothedParam, // 50 ms — smooth reverb tail transitions
+    rev_damp: SmoothedParam, // 50 ms
+    rev_mix:  SmoothedParam, // 5 ms
+    // Internal state
+    cho_phase: f32,
+    del_buf:   Vec<f32>,
+    del_pos:   usize,
+    rev:       ReverbState,
+    sr:        f32,
+}
+
+impl FxChain {
+    fn new(state: &AudioState, sr: f32) -> Self {
+        const MIX_TAU:  f32 = 0.005; // 5 ms — pop-free mix/toggle transitions
+        const DEL_TAU:  f32 = 0.020; // 20 ms — delay time, prevents pitch-jump noise
+        const REV_TAU:  f32 = 0.050; // 50 ms — reverb room/damp, smooth tail changes
+        let buf_len = (sr * 1.1) as usize;
+        Self {
+            od_drive:     state.fx_overdrive_drive.clone(),
+            dist_drive:   state.fx_distortion_drive.clone(),
+            cho_rate:     state.fx_chorus_rate.clone(),
+            cho_depth:    state.fx_chorus_depth.clone(),
+            del_feedback: state.fx_delay_feedback.clone(),
+            od_mix:   SmoothedParam::new(state.fx_overdrive_mix.clone(),  MIX_TAU, sr),
+            dist_mix: SmoothedParam::new(state.fx_distortion_mix.clone(), MIX_TAU, sr),
+            cho_mix:  SmoothedParam::new(state.fx_chorus_mix.clone(),     MIX_TAU, sr),
+            del_time: SmoothedParam::new(state.fx_delay_time.clone(),     DEL_TAU, sr),
+            del_mix:  SmoothedParam::new(state.fx_delay_mix.clone(),      MIX_TAU, sr),
+            rev_size: SmoothedParam::new(state.fx_reverb_size.clone(),    REV_TAU, sr),
+            rev_damp: SmoothedParam::new(state.fx_reverb_damp.clone(),    REV_TAU, sr),
+            rev_mix:  SmoothedParam::new(state.fx_reverb_mix.clone(),     MIX_TAU, sr),
+            cho_phase: 0.0,
+            del_buf:   vec![0.0f32; buf_len],
+            del_pos:   0,
+            rev:       ReverbState::new(sr),
+            sr,
+        }
+    }
+}
+
+impl AudioNode for FxChain {
+    const ID: u64 = 0x7468655F_78636861; // "the_xcha"
+    type Inputs  = U1;
+    type Outputs = U1;
+
+    fn reset(&mut self) {
+        self.cho_phase = 0.0;
+        self.del_buf.fill(0.0);
+        self.del_pos = 0;
+        self.od_mix.reset();   self.dist_mix.reset(); self.cho_mix.reset();
+        self.del_time.reset(); self.del_mix.reset();
+        self.rev_size.reset(); self.rev_damp.reset(); self.rev_mix.reset();
+        self.rev = ReverbState::new(self.sr);
+    }
+
+    fn set_sample_rate(&mut self, sr: f64) {
+        self.sr = sr as f32;
+        let buf_len = (self.sr * 1.1) as usize;
+        self.del_buf = vec![0.0f32; buf_len];
+        self.del_pos = 0;
+        self.od_mix.set_sample_rate(self.sr);   self.dist_mix.set_sample_rate(self.sr);
+        self.cho_mix.set_sample_rate(self.sr);  self.del_time.set_sample_rate(self.sr);
+        self.del_mix.set_sample_rate(self.sr);  self.rev_size.set_sample_rate(self.sr);
+        self.rev_damp.set_sample_rate(self.sr); self.rev_mix.set_sample_rate(self.sr);
+        self.rev = ReverbState::new(self.sr);
+    }
+
+    #[inline]
+    fn tick(&mut self, input: &Frame<f32, U1>) -> Frame<f32, U1> {
+        let dry = input[0];
+
+        // ── Overdrive (tanh soft clip) ──────────────────────────────────────
+        // Fixed pre-gain brings the signal up into tanh's nonlinear zone.
+        // Drive knob = pre-gain multiplier. Wet is intentionally louder/warmer —
+        // the mix knob blends back to dry, limiter handles peaks.
+        let od_drive = self.od_drive.value().max(1.0) as f32;
+        let od_mix   = self.od_mix.next();
+        let od_wet   = (dry * od_drive * 5.0).tanh();
+        let s1 = dry + od_mix * (od_wet - dry);
+
+        // ── Distortion (hard clip) ──────────────────────────────────────────
+        // High fixed pre-gain drives signal well past the ±1 clip threshold.
+        // At low drive only peaks clip; at high drive it's near-square wave.
+        let dist_drive = self.dist_drive.value().max(1.0) as f32;
+        let dist_mix   = self.dist_mix.next();
+        let dist_wet   = (s1 * dist_drive * 10.0).clamp(-1.0, 1.0);
+        let s2 = s1 + dist_mix * (dist_wet - s1);
+
+        // ── Chorus (LFO-modulated short delay) ─────────────────────────────
+        let cho_mix = self.cho_mix.next();
+        let buf_len = self.del_buf.len();
+        self.del_buf[self.del_pos] = s2;
+
+        let cho_wet = if cho_mix > 0.0001 {
+            let rate  = self.cho_rate.value() as f32;
+            let depth = self.cho_depth.value() as f32;
+            self.cho_phase = (self.cho_phase + rate / self.sr).fract();
+            let lfo = (self.cho_phase * std::f32::consts::TAU).sin();
+            let delay_smp = ((0.01 + depth * lfo) * self.sr).max(0.0);
+            let read = (self.del_pos as f32 - delay_smp).rem_euclid(buf_len as f32);
+            let i0 = read as usize % buf_len;
+            let i1 = (i0 + 1) % buf_len;
+            self.del_buf[i0] * (1.0 - read.fract()) + self.del_buf[i1] * read.fract()
+        } else { s2 };
+        let s3 = s2 + cho_mix * (cho_wet - s2);
+
+        // ── Delay ──────────────────────────────────────────────────────────
+        let del_mix      = self.del_mix.next();
+        let del_time     = self.del_time.next(); // smoothed — prevents pitch-jump noise
+        let del_feedback = self.del_feedback.value() as f32;
+        let del_feedback = del_feedback.clamp(0.0, 0.95);
+        let del_wet = if del_mix > 0.0001 {
+            let delay_smp = (del_time * self.sr).clamp(1.0, (buf_len - 2) as f32);
+            let read_f    = (self.del_pos as f32 - delay_smp).rem_euclid(buf_len as f32);
+            let i0 = read_f as usize % buf_len;
+            let i1 = (i0 + 1) % buf_len;
+            let delayed = self.del_buf[i0] * (1.0 - read_f.fract()) + self.del_buf[i1] * read_f.fract();
+            self.del_buf[self.del_pos] = s3 + delayed * del_feedback;
+            delayed
+        } else { s3 };
+        let s4 = s3 + del_mix * (del_wet - s3);
+
+        self.del_pos = (self.del_pos + 1) % buf_len;
+
+        // ── Reverb ─────────────────────────────────────────────────────────
+        let rev_mix  = self.rev_mix.next();
+        let rev_size = self.rev_size.next(); // smoothed — prevents tail surge on size change
+        let rev_damp = self.rev_damp.next(); // smoothed — prevents tail surge on damp change
+        let rev_wet = if rev_mix > 0.0001 {
+            self.rev.tick(s4, rev_size, rev_damp)
+        } else { s4 };
+        let s5 = s4 + rev_mix * (rev_wet - s4);
+
+        Frame::from([s5])
+    }
 }
 
 // ---------------------------------------------------------------------------
