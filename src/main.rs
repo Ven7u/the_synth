@@ -7,10 +7,12 @@ mod audio;
 mod envelope;
 mod midi;
 mod osc;
+mod patch;
 mod sequencer;
 
 use audio::{AudioEngine, AudioState, VOICE_COUNT};
 use midi::{MidiEngine, MidiEvent};
+use patch::{Patch, default_patches};
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, Rounding, Sense, Stroke, Vec2};
 use fundsp::prelude::midi_hz;
@@ -123,6 +125,13 @@ struct SynthApp {
     scope_height: f32,
     scope_x_scale: f32,
     scope_y_scale: f32,
+
+    // Patch system
+    patch_name: String,
+    patch_library: Vec<Patch>,
+    patch_browser_open: bool,
+    patch_browser_category: String,
+    patch_browser_model: String,
 }
 
 impl SynthApp {
@@ -184,6 +193,11 @@ impl SynthApp {
             scope_height: 140.0,
             scope_x_scale: 1.0,
             scope_y_scale: 2.5,
+            patch_name: "Init".into(),
+            patch_library: default_patches(),
+            patch_browser_open: false,
+            patch_browser_category: "All".into(),
+            patch_browser_model: "All".into(),
         }
     }
 }
@@ -364,7 +378,16 @@ impl eframe::App for SynthApp {
         self.tick_sequencer(ctx);
         self.tick_release_cleanup();
 
+        self.ui_patch_browser(ctx);
+
         egui::CentralPanel::default().show(ctx, |ui| {
+            // Patch bar
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| { self.ui_patch_bar(ui); });
+            });
+
+            ui.add_space(2.0);
+
             // Row 1: OSC bank + mixer
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("OSCILLATORS").strong().small());
@@ -1671,6 +1694,269 @@ fn draw_peak_meter(ui: &mut egui::Ui, level: f32, peak_hold: f32) {
 // ---------------------------------------------------------------------------
 // Oscilloscope
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// MIDI panel
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Patch capture / apply
+// ---------------------------------------------------------------------------
+
+impl SynthApp {
+    fn capture_patch(&self) -> Patch {
+        Patch {
+            name: self.patch_name.clone(),
+            category: "User".into(),
+            osc_wave:           self.osc_wave,
+            osc_octave:         self.osc_octave,
+            osc_detune:         self.osc_detune,
+            osc_vol:            self.osc_vol,
+            osc_enabled:        self.osc_enabled,
+            osc_pulse_width:    self.osc_pulse_width,
+            osc_pw_enabled:     self.osc_pw_enabled,
+            osc_unison_enabled: self.osc_unison_enabled,
+            osc_unison_count:   self.osc_unison_count,
+            osc_unison_spread:  self.osc_unison_spread,
+            hard_sync:          self.hard_sync,
+            fm_enabled:         self.fm_enabled,
+            fm_depth:           self.fm_depth,
+            ring_enabled:       self.ring_enabled,
+            ring_depth:         self.ring_depth,
+            noise_vol:          self.noise_vol,
+            lfo_enabled:        self.lfo_enabled,
+            lfo_rate:           self.lfo_rate,
+            lfo_depth:          self.lfo_depth,
+            lfo_shape:          self.lfo_shape,
+            lfo_dest:           self.lfo_dest,
+            filter_enabled:     self.filter_enabled,
+            filter_cutoff:      self.filter_cutoff,
+            filter_q:           self.filter_q,
+            filter_env_amount:  self.filter_env_amount,
+            fenv_adsr:          self.fenv_adsr,
+            amp_adsr:           self.amp_adsr,
+            glide_time:         self.glide_time,
+            master_vol:         self.master_vol,
+            synth_model:        String::new(),
+        }
+    }
+
+    fn apply_patch(&mut self, p: Patch) {
+        self.patch_name         = p.name;
+        self.osc_wave           = p.osc_wave;
+        self.osc_octave         = p.osc_octave;
+        self.osc_detune         = p.osc_detune;
+        self.osc_vol            = p.osc_vol;
+        self.osc_enabled        = p.osc_enabled;
+        self.osc_pulse_width    = p.osc_pulse_width;
+        self.osc_pw_enabled     = p.osc_pw_enabled;
+        self.osc_unison_enabled = p.osc_unison_enabled;
+        self.osc_unison_count   = p.osc_unison_count;
+        self.osc_unison_spread  = p.osc_unison_spread;
+        self.hard_sync          = p.hard_sync;
+        self.fm_enabled         = p.fm_enabled;
+        self.fm_depth           = p.fm_depth;
+        self.ring_enabled       = p.ring_enabled;
+        self.ring_depth         = p.ring_depth;
+        self.noise_vol          = p.noise_vol;
+        self.lfo_enabled        = p.lfo_enabled;
+        self.lfo_rate           = p.lfo_rate;
+        self.lfo_depth          = p.lfo_depth;
+        self.lfo_shape          = p.lfo_shape;
+        self.lfo_dest           = p.lfo_dest;
+        self.filter_enabled     = p.filter_enabled;
+        self.filter_cutoff      = p.filter_cutoff;
+        self.filter_q           = p.filter_q;
+        self.filter_env_amount  = p.filter_env_amount;
+        self.fenv_adsr          = p.fenv_adsr;
+        self.amp_adsr           = p.amp_adsr;
+        self.glide_time         = p.glide_time;
+        self.master_vol         = p.master_vol;
+
+        // Push everything to AudioState Shareds
+        let s = &self.state;
+        for i in 0..3 {
+            s.osc_wave[i].store(self.osc_wave[i] as u8, std::sync::atomic::Ordering::Relaxed);
+            s.osc_vol[i].set(if self.osc_enabled[i] { self.osc_vol[i] } else { 0.0 });
+            s.osc_pulse_width[i].set(self.osc_pulse_width[i]);
+            self.update_freq_mult(i);
+            self.update_unison(i);
+        }
+        s.hard_sync_enabled.store(self.hard_sync, std::sync::atomic::Ordering::Relaxed);
+        s.fm_depth.set(if self.fm_enabled { self.fm_depth } else { 0.0 });
+        s.ring_depth.set(if self.ring_enabled { self.ring_depth } else { 0.0 });
+        s.noise_vol.set(self.noise_vol);
+        s.lfo_rate.set(self.lfo_rate);
+        s.lfo_depth.set(if self.lfo_enabled { self.lfo_depth } else { 0.0 });
+        s.lfo_shape.store(self.lfo_shape as u8, std::sync::atomic::Ordering::Relaxed);
+        s.lfo_dest.store(self.lfo_dest as u8, std::sync::atomic::Ordering::Relaxed);
+        s.cutoff.set(if self.filter_enabled { self.filter_cutoff } else { 18000.0 });
+        s.resonance.set(if self.filter_enabled { self.filter_q } else { 0.0 });
+        s.filter_env_amount.set(self.filter_env_amount);
+        s.fenv_attack.set(self.fenv_adsr[0]);
+        s.fenv_decay.set(self.fenv_adsr[1]);
+        s.fenv_sustain.set(self.fenv_adsr[2]);
+        s.fenv_release.set(self.fenv_adsr[3]);
+        s.adsr_attack.set(self.amp_adsr[0]);
+        s.adsr_decay.set(self.amp_adsr[1]);
+        s.adsr_sustain.set(self.amp_adsr[2]);
+        s.adsr_release.set(self.amp_adsr[3]);
+        s.glide_time.set(self.glide_time);
+        s.master_vol.set(self.master_vol);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Patch UI — toolbar bar + browser panel
+// ---------------------------------------------------------------------------
+
+impl SynthApp {
+    fn ui_patch_bar(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("PATCH").strong().small());
+
+        // Patch name
+        ui.add(egui::TextEdit::singleline(&mut self.patch_name).desired_width(120.0));
+
+        // Save to file
+        if ui.button("💾 Save").clicked() {
+            let p = self.capture_patch();
+            if let Some(path) = rfd::FileDialog::new()
+                .set_file_name(&format!("{}.json", p.name))
+                .add_filter("Patch", &["json"])
+                .save_file()
+            {
+                if let Ok(json) = serde_json::to_string_pretty(&p) {
+                    let _ = std::fs::write(path, json);
+                }
+            }
+        }
+
+        // Load from file
+        if ui.button("📂 Load").clicked() {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Patch", &["json"])
+                .pick_file()
+            {
+                if let Ok(json) = std::fs::read_to_string(path) {
+                    if let Ok(p) = serde_json::from_str::<Patch>(&json) {
+                        self.apply_patch(p);
+                    }
+                }
+            }
+        }
+
+        // Library browser toggle
+        let browser_label = egui::RichText::new("📚 Library")
+            .color(if self.patch_browser_open { Color32::from_rgb(0, 220, 160) } else { Color32::WHITE });
+        if ui.button(browser_label).clicked() {
+            self.patch_browser_open = !self.patch_browser_open;
+        }
+    }
+
+    fn ui_patch_browser(&mut self, ctx: &egui::Context) {
+        if !self.patch_browser_open { return; }
+
+        let mut open = self.patch_browser_open;
+        egui::Window::new("Patch Library")
+            .open(&mut open)
+            .resizable(true)
+            .default_size([440.0, 520.0])
+            .show(ctx, |ui| {
+                // --- Category filter ---
+                let categories: Vec<String> = {
+                    let mut cats = vec!["All".to_string()];
+                    let mut seen = std::collections::HashSet::new();
+                    for p in &self.patch_library {
+                        if seen.insert(p.category.clone()) {
+                            cats.push(p.category.clone());
+                        }
+                    }
+                    cats
+                };
+                ui.label(egui::RichText::new("Category").weak().small());
+                ui.horizontal_wrapped(|ui| {
+                    for cat in &categories {
+                        let active = &self.patch_browser_category == cat;
+                        let label = egui::RichText::new(cat)
+                            .color(if active { Color32::from_rgb(0, 220, 160) } else { Color32::GRAY });
+                        if ui.button(label).clicked() {
+                            self.patch_browser_category = cat.clone();
+                        }
+                    }
+                });
+
+                ui.add_space(4.0);
+
+                // --- Synth model filter ---
+                // Collect models visible under the current category filter
+                let models: Vec<String> = {
+                    let cat_filter = &self.patch_browser_category;
+                    let mut models = vec!["All".to_string()];
+                    let mut seen = std::collections::HashSet::new();
+                    for p in &self.patch_library {
+                        if cat_filter != "All" && &p.category != cat_filter { continue; }
+                        let m = if p.synth_model.is_empty() { "Original".to_string() } else { p.synth_model.clone() };
+                        if seen.insert(m.clone()) {
+                            models.push(m);
+                        }
+                    }
+                    models
+                };
+                // Reset model filter if it's no longer visible
+                if !models.contains(&self.patch_browser_model) {
+                    self.patch_browser_model = "All".into();
+                }
+                ui.label(egui::RichText::new("Synth").weak().small());
+                ui.horizontal_wrapped(|ui| {
+                    for m in &models {
+                        let active = &self.patch_browser_model == m;
+                        let label = egui::RichText::new(m)
+                            .color(if active { Color32::from_rgb(100, 180, 255) } else { Color32::GRAY });
+                        if ui.button(label).clicked() {
+                            self.patch_browser_model = m.clone();
+                        }
+                    }
+                });
+
+                ui.separator();
+
+                // --- Patch list ---
+                let cat_filter  = self.patch_browser_category.clone();
+                let model_filter = self.patch_browser_model.clone();
+                let patches: Vec<(usize, String, String, String)> = self.patch_library.iter().enumerate()
+                    .filter(|(_, p)| {
+                        let cat_ok   = cat_filter == "All"   || p.category == cat_filter;
+                        let model_display = if p.synth_model.is_empty() { "Original" } else { &p.synth_model };
+                        let model_ok = model_filter == "All" || model_display == model_filter;
+                        cat_ok && model_ok
+                    })
+                    .map(|(i, p)| {
+                        let m = if p.synth_model.is_empty() { "Original".to_string() } else { p.synth_model.clone() };
+                        (i, p.name.clone(), p.category.clone(), m)
+                    })
+                    .collect();
+
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let mut load_idx: Option<usize> = None;
+                    for (idx, name, cat, model) in &patches {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(format!("[{cat}]")).weak().small().monospace());
+                            ui.label(egui::RichText::new(format!("{model}")).color(Color32::from_rgb(100, 180, 255)).small().monospace());
+                            if ui.selectable_label(false, name).clicked() {
+                                load_idx = Some(*idx);
+                            }
+                        });
+                    }
+                    if let Some(idx) = load_idx {
+                        let p = self.patch_library[idx].clone();
+                        self.apply_patch(p);
+                        self.patch_browser_open = false;
+                    }
+                });
+            });
+        self.patch_browser_open = open;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // MIDI panel

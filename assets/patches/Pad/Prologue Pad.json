@@ -1,0 +1,84 @@
+{
+  "name": "Prologue Pad",
+  "category": "Pad",
+  "synth_model": "Prologue",
+  "osc_wave": [
+    2,
+    1,
+    0
+  ],
+  "osc_octave": [
+    0,
+    -1,
+    0
+  ],
+  "osc_detune": [
+    0.0,
+    4.0,
+    0.0
+  ],
+  "osc_vol": [
+    0.5,
+    0.4,
+    0.0
+  ],
+  "osc_enabled": [
+    true,
+    true,
+    false
+  ],
+  "osc_pulse_width": [
+    0.4,
+    0.5,
+    0.5
+  ],
+  "osc_pw_enabled": [
+    true,
+    false,
+    false
+  ],
+  "osc_unison_enabled": [
+    true,
+    false,
+    false
+  ],
+  "osc_unison_count": [
+    3,
+    2,
+    2
+  ],
+  "osc_unison_spread": [
+    16.0,
+    20.0,
+    20.0
+  ],
+  "hard_sync": false,
+  "fm_enabled": false,
+  "fm_depth": 0.0,
+  "ring_enabled": false,
+  "ring_depth": 0.0,
+  "noise_vol": 0.0,
+  "lfo_enabled": true,
+  "lfo_rate": 0.35,
+  "lfo_depth": 0.12,
+  "lfo_shape": 0,
+  "lfo_dest": 1,
+  "filter_enabled": true,
+  "filter_cutoff": 1800.0,
+  "filter_q": 0.12,
+  "filter_env_amount": 0.22,
+  "fenv_adsr": [
+    0.7,
+    0.5,
+    0.7,
+    2.0
+  ],
+  "amp_adsr": [
+    0.6,
+    0.3,
+    0.8,
+    2.0
+  ],
+  "glide_time": 0.0,
+  "master_vol": 0.42
+}

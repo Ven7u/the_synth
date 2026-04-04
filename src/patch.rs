@@ -1,0 +1,461 @@
+//! Patch — serialisable snapshot of the synth's sound-generating parameters.
+//!
+//! Covers: OSC bank, noise, LFO, filter, filter ADSR, amp ADSR, glide, master vol.
+//! Excludes: sequencer patterns, keyboard octave, MIDI device, voice state.
+//!
+//! `Patch::from_app(app)` captures the current UI state.
+//! `patch.apply(app)`    writes every field back to the UI state and AudioState Shareds.
+
+use serde::{Deserialize, Serialize};
+
+// ---------------------------------------------------------------------------
+// Patch struct
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Patch {
+    pub name:     String,
+    pub category: String,
+    #[serde(default)]
+    pub synth_model: String,
+
+    // OSC bank (3 oscillators)
+    pub osc_wave:          [usize; 3],
+    pub osc_octave:        [i32;   3],
+    pub osc_detune:        [f32;   3],
+    pub osc_vol:           [f32;   3],
+    pub osc_enabled:       [bool;  3],
+    pub osc_pulse_width:   [f32;   3],
+    pub osc_pw_enabled:    [bool;  3],
+    pub osc_unison_enabled:[bool;  3],
+    pub osc_unison_count:  [usize; 3],
+    pub osc_unison_spread: [f32;   3],
+    pub hard_sync:         bool,
+    pub fm_enabled:        bool,
+    pub fm_depth:          f32,
+    pub ring_enabled:      bool,
+    pub ring_depth:        f32,
+
+    // Noise
+    pub noise_vol: f32,
+
+    // LFO
+    pub lfo_enabled: bool,
+    pub lfo_rate:    f32,
+    pub lfo_depth:   f32,
+    pub lfo_shape:   usize,
+    pub lfo_dest:    usize,
+
+    // Filter
+    pub filter_enabled:    bool,
+    pub filter_cutoff:     f32,
+    pub filter_q:          f32,
+    pub filter_env_amount: f32,
+    pub fenv_adsr:         [f32; 4],
+
+    // Amp
+    pub amp_adsr: [f32; 4],
+
+    // Global
+    pub glide_time: f32,
+    pub master_vol: f32,
+}
+
+// ---------------------------------------------------------------------------
+// Default patches — loaded from assets/patches/**/*.json at compile time
+// ---------------------------------------------------------------------------
+
+pub fn default_patches() -> Vec<Patch> {
+    // Each entry is the raw JSON string embedded at compile time.
+    // To add a new patch: drop a .json file in assets/patches/<Category>/
+    // and add an include_str! line here. No code changes needed elsewhere.
+    let embedded: &[&str] = &[
+        // Bass
+        include_str!("../assets/patches/Bass/Moog Bass.json"),
+        include_str!("../assets/patches/Bass/Acid Bass.json"),
+        include_str!("../assets/patches/Bass/Sub Bass.json"),
+        include_str!("../assets/patches/Bass/Minimoog Bass.json"),
+        include_str!("../assets/patches/Bass/ARP Bass.json"),
+        include_str!("../assets/patches/Bass/Taurus Bass.json"),
+        include_str!("../assets/patches/Bass/Sub 37 Bass.json"),
+        include_str!("../assets/patches/Bass/Brute Bass.json"),
+        include_str!("../assets/patches/Bass/Sub Wobble.json"),
+        // Bass — theSynth originals
+        include_str!("../assets/patches/Bass/Midnight Crawler.json"),
+        include_str!("../assets/patches/Bass/Voltage Storm.json"),
+        // Lead
+        include_str!("../assets/patches/Lead/Classic Lead.json"),
+        include_str!("../assets/patches/Lead/Supersaw Lead.json"),
+        include_str!("../assets/patches/Lead/Square Lead.json"),
+        include_str!("../assets/patches/Lead/Sync Lead.json"),
+        include_str!("../assets/patches/Lead/Minimoog Lead.json"),
+        include_str!("../assets/patches/Lead/Juno Brass.json"),
+        include_str!("../assets/patches/Lead/Bass Station Lead.json"),
+        include_str!("../assets/patches/Lead/Sub 37 Lead.json"),
+        include_str!("../assets/patches/Lead/Prologue Lead.json"),
+        // Lead — theSynth originals
+        include_str!("../assets/patches/Lead/Acid Rain.json"),
+        include_str!("../assets/patches/Lead/Digital Ghost.json"),
+        include_str!("../assets/patches/Lead/Neon Razor.json"),
+        // Pad
+        include_str!("../assets/patches/Pad/Warm Pad.json"),
+        include_str!("../assets/patches/Pad/String Pad.json"),
+        include_str!("../assets/patches/Pad/Dark Pad.json"),
+        include_str!("../assets/patches/Pad/Juno Pad.json"),
+        include_str!("../assets/patches/Pad/OB Strings.json"),
+        include_str!("../assets/patches/Pad/Prophet Pad.json"),
+        include_str!("../assets/patches/Pad/Vital Pad.json"),
+        include_str!("../assets/patches/Pad/Prologue Pad.json"),
+        include_str!("../assets/patches/Pad/Serum Hyper Saw.json"),
+        // Pad — theSynth originals
+        include_str!("../assets/patches/Pad/Neon Drift.json"),
+        include_str!("../assets/patches/Pad/Deep Space.json"),
+        include_str!("../assets/patches/Pad/Aurora.json"),
+        // Keys
+        include_str!("../assets/patches/Keys/Electric Piano.json"),
+        include_str!("../assets/patches/Keys/Organ.json"),
+        include_str!("../assets/patches/Keys/Clav.json"),
+        include_str!("../assets/patches/Keys/DX7 Electric Piano.json"),
+        // Keys — theSynth originals
+        include_str!("../assets/patches/Keys/Crystal Bell.json"),
+        // Pluck
+        include_str!("../assets/patches/Pluck/Pluck.json"),
+        include_str!("../assets/patches/Pluck/Acid Pluck.json"),
+        include_str!("../assets/patches/Pluck/Serum Pluck.json"),
+        include_str!("../assets/patches/Pluck/Vital Pluck.json"),
+        // Pluck — theSynth originals
+        include_str!("../assets/patches/Pluck/Glass Harp.json"),
+        // Brass
+        include_str!("../assets/patches/Brass/Brass.json"),
+        include_str!("../assets/patches/Brass/Mellow Brass.json"),
+        // FX
+        include_str!("../assets/patches/FX/Laser.json"),
+        include_str!("../assets/patches/FX/Noise Sweep.json"),
+        include_str!("../assets/patches/FX/Ring Mod Bell.json"),
+        include_str!("../assets/patches/FX/FM Metal.json"),
+        include_str!("../assets/patches/FX/R2D2.json"),
+        include_str!("../assets/patches/FX/Brute Metallic.json"),
+        include_str!("../assets/patches/FX/Serum Growl.json"),
+        // FX — theSynth originals
+        include_str!("../assets/patches/FX/Solar Wind.json"),
+        include_str!("../assets/patches/FX/Phantom Signal.json"),
+    ];
+    embedded.iter()
+        .filter_map(|s| serde_json::from_str(s).ok())
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Legacy — kept only as reference, not called anywhere
+// ---------------------------------------------------------------------------
+#[allow(dead_code)]
+fn _legacy() -> Vec<Patch> { vec![
+        // ── Bass ─────────────────────────────────────────────────────────────
+        Patch {
+            name: "Moog Bass".into(), category: "Bass".into(),
+            osc_wave: [1, 1, 0], osc_octave: [-1, -2, 0], osc_detune: [0.0, 0.0, 0.0],
+            osc_vol: [0.7, 0.4, 0.0], osc_enabled: [true, true, false],
+            osc_pulse_width: [0.5, 0.5, 0.5], osc_pw_enabled: [false; 3],
+            osc_unison_enabled: [false; 3], osc_unison_count: [2; 3], osc_unison_spread: [20.0; 3],
+            hard_sync: false, fm_enabled: false, fm_depth: 0.0, ring_enabled: false, ring_depth: 0.0,
+            noise_vol: 0.0,
+            lfo_enabled: false, lfo_rate: 2.0, lfo_depth: 0.0, lfo_shape: 0, lfo_dest: 1,
+            filter_enabled: true, filter_cutoff: 600.0, filter_q: 0.4, filter_env_amount: 0.7,
+            fenv_adsr: [0.005, 0.25, 0.0, 0.1],
+            amp_adsr: [0.005, 0.1, 0.7, 0.15],
+            glide_time: 0.0, master_vol: 0.5, synth_model: String::new(),
+        },
+        Patch {
+            name: "Acid Bass".into(), category: "Bass".into(),
+            osc_wave: [1, 0, 0], osc_octave: [-1, 0, 0], osc_detune: [0.0; 3],
+            osc_vol: [0.8, 0.0, 0.0], osc_enabled: [true, false, false],
+            osc_pulse_width: [0.5; 3], osc_pw_enabled: [false; 3],
+            osc_unison_enabled: [false; 3], osc_unison_count: [2; 3], osc_unison_spread: [20.0; 3],
+            hard_sync: false, fm_enabled: false, fm_depth: 0.0, ring_enabled: false, ring_depth: 0.0,
+            noise_vol: 0.0,
+            lfo_enabled: false, lfo_rate: 2.0, lfo_depth: 0.0, lfo_shape: 0, lfo_dest: 1,
+            filter_enabled: true, filter_cutoff: 300.0, filter_q: 0.85, filter_env_amount: 1.0,
+            fenv_adsr: [0.001, 0.12, 0.0, 0.08],
+            amp_adsr: [0.001, 0.05, 0.6, 0.1],
+            glide_time: 0.05, master_vol: 0.5, synth_model: String::new(),
+        },
+        Patch {
+            name: "Sub Bass".into(), category: "Bass".into(),
+            osc_wave: [0, 1, 0], osc_octave: [-2, -1, 0], osc_detune: [0.0; 3],
+            osc_vol: [0.6, 0.3, 0.0], osc_enabled: [true, true, false],
+            osc_pulse_width: [0.5; 3], osc_pw_enabled: [false; 3],
+            osc_unison_enabled: [false; 3], osc_unison_count: [2; 3], osc_unison_spread: [20.0; 3],
+            hard_sync: false, fm_enabled: false, fm_depth: 0.0, ring_enabled: false, ring_depth: 0.0,
+            noise_vol: 0.0,
+            lfo_enabled: false, lfo_rate: 2.0, lfo_depth: 0.0, lfo_shape: 0, lfo_dest: 1,
+            filter_enabled: true, filter_cutoff: 200.0, filter_q: 0.1, filter_env_amount: 0.2,
+            fenv_adsr: [0.01, 0.3, 0.5, 0.2],
+            amp_adsr: [0.01, 0.1, 0.8, 0.2],
+            glide_time: 0.0, master_vol: 0.5, synth_model: String::new(),
+        },
+
+        // ── Lead ─────────────────────────────────────────────────────────────
+        Patch {
+            name: "Classic Lead".into(), category: "Lead".into(),
+            osc_wave: [1, 0, 0], osc_octave: [0, 0, 0], osc_detune: [0.0; 3],
+            osc_vol: [0.7, 0.0, 0.0], osc_enabled: [true, false, false],
+            osc_pulse_width: [0.5; 3], osc_pw_enabled: [false; 3],
+            osc_unison_enabled: [false; 3], osc_unison_count: [2; 3], osc_unison_spread: [20.0; 3],
+            hard_sync: false, fm_enabled: false, fm_depth: 0.0, ring_enabled: false, ring_depth: 0.0,
+            noise_vol: 0.0,
+            lfo_enabled: true, lfo_rate: 5.5, lfo_depth: 0.25, lfo_shape: 0, lfo_dest: 0,
+            filter_enabled: true, filter_cutoff: 4000.0, filter_q: 0.2, filter_env_amount: 0.3,
+            fenv_adsr: [0.01, 0.2, 0.5, 0.2],
+            amp_adsr: [0.01, 0.1, 0.8, 0.15],
+            glide_time: 0.06, master_vol: 0.5, synth_model: String::new(),
+        },
+        Patch {
+            name: "Supersaw Lead".into(), category: "Lead".into(),
+            osc_wave: [1, 1, 0], osc_octave: [0, 0, 0], osc_detune: [0.0, 7.0, 0.0],
+            osc_vol: [0.6, 0.5, 0.0], osc_enabled: [true, true, false],
+            osc_pulse_width: [0.5; 3], osc_pw_enabled: [false; 3],
+            osc_unison_enabled: [true, true, false], osc_unison_count: [5, 5, 2], osc_unison_spread: [30.0, 30.0, 20.0],
+            hard_sync: false, fm_enabled: false, fm_depth: 0.0, ring_enabled: false, ring_depth: 0.0,
+            noise_vol: 0.0,
+            lfo_enabled: false, lfo_rate: 2.0, lfo_depth: 0.0, lfo_shape: 0, lfo_dest: 1,
+            filter_enabled: true, filter_cutoff: 6000.0, filter_q: 0.1, filter_env_amount: 0.2,
+            fenv_adsr: [0.01, 0.3, 0.6, 0.3],
+            amp_adsr: [0.02, 0.1, 0.8, 0.2],
+            glide_time: 0.0, master_vol: 0.4, synth_model: String::new(),
+        },
+        Patch {
+            name: "Square Lead".into(), category: "Lead".into(),
+            osc_wave: [2, 0, 0], osc_octave: [0, 0, 0], osc_detune: [0.0; 3],
+            osc_vol: [0.7, 0.0, 0.0], osc_enabled: [true, false, false],
+            osc_pulse_width: [0.5, 0.5, 0.5], osc_pw_enabled: [true, false, false],
+            osc_unison_enabled: [false; 3], osc_unison_count: [2; 3], osc_unison_spread: [20.0; 3],
+            hard_sync: false, fm_enabled: false, fm_depth: 0.0, ring_enabled: false, ring_depth: 0.0,
+            noise_vol: 0.0,
+            lfo_enabled: false, lfo_rate: 2.0, lfo_depth: 0.0, lfo_shape: 0, lfo_dest: 0,
+            filter_enabled: true, filter_cutoff: 5000.0, filter_q: 0.15, filter_env_amount: 0.2,
+            fenv_adsr: [0.005, 0.2, 0.5, 0.2],
+            amp_adsr: [0.005, 0.1, 0.9, 0.1],
+            glide_time: 0.0, master_vol: 0.5, synth_model: String::new(),
+        },
+        Patch {
+            name: "Sync Lead".into(), category: "Lead".into(),
+            osc_wave: [1, 1, 0], osc_octave: [0, 1, 0], osc_detune: [0.0, 0.0, 0.0],
+            osc_vol: [0.7, 0.0, 0.0], osc_enabled: [true, true, false],
+            osc_pulse_width: [0.5; 3], osc_pw_enabled: [false; 3],
+            osc_unison_enabled: [false; 3], osc_unison_count: [2; 3], osc_unison_spread: [20.0; 3],
+            hard_sync: true, fm_enabled: false, fm_depth: 0.0, ring_enabled: false, ring_depth: 0.0,
+            noise_vol: 0.0,
+            lfo_enabled: true, lfo_rate: 0.5, lfo_depth: 0.4, lfo_shape: 0, lfo_dest: 0,
+            filter_enabled: true, filter_cutoff: 5000.0, filter_q: 0.3, filter_env_amount: 0.4,
+            fenv_adsr: [0.01, 0.3, 0.4, 0.2],
+            amp_adsr: [0.01, 0.1, 0.8, 0.2],
+            glide_time: 0.04, master_vol: 0.5, synth_model: String::new(),
+        },
+
+        // ── Pad ──────────────────────────────────────────────────────────────
+        Patch {
+            name: "Warm Pad".into(), category: "Pad".into(),
+            osc_wave: [1, 0, 0], osc_octave: [0, 1, 0], osc_detune: [0.0, 5.0, 0.0],
+            osc_vol: [0.5, 0.4, 0.0], osc_enabled: [true, true, false],
+            osc_pulse_width: [0.5; 3], osc_pw_enabled: [false; 3],
+            osc_unison_enabled: [true, false, false], osc_unison_count: [3, 2, 2], osc_unison_spread: [15.0, 20.0, 20.0],
+            hard_sync: false, fm_enabled: false, fm_depth: 0.0, ring_enabled: false, ring_depth: 0.0,
+            noise_vol: 0.0,
+            lfo_enabled: true, lfo_rate: 0.4, lfo_depth: 0.15, lfo_shape: 0, lfo_dest: 1,
+            filter_enabled: true, filter_cutoff: 1800.0, filter_q: 0.1, filter_env_amount: 0.3,
+            fenv_adsr: [0.8, 0.5, 0.7, 1.5],
+            amp_adsr: [0.6, 0.3, 0.8, 1.5],
+            glide_time: 0.0, master_vol: 0.45, synth_model: String::new(),
+        },
+        Patch {
+            name: "String Pad".into(), category: "Pad".into(),
+            osc_wave: [1, 1, 1], osc_octave: [0, 1, -1], osc_detune: [0.0, 8.0, -8.0],
+            osc_vol: [0.5, 0.4, 0.3], osc_enabled: [true, true, true],
+            osc_pulse_width: [0.5; 3], osc_pw_enabled: [false; 3],
+            osc_unison_enabled: [true, true, false], osc_unison_count: [3, 3, 2], osc_unison_spread: [20.0, 20.0, 20.0],
+            hard_sync: false, fm_enabled: false, fm_depth: 0.0, ring_enabled: false, ring_depth: 0.0,
+            noise_vol: 0.0,
+            lfo_enabled: true, lfo_rate: 5.0, lfo_depth: 0.1, lfo_shape: 0, lfo_dest: 0,
+            filter_enabled: true, filter_cutoff: 3000.0, filter_q: 0.1, filter_env_amount: 0.15,
+            fenv_adsr: [0.5, 0.5, 0.8, 2.0],
+            amp_adsr: [0.4, 0.2, 0.9, 2.0],
+            glide_time: 0.0, master_vol: 0.4, synth_model: String::new(),
+        },
+        Patch {
+            name: "Dark Pad".into(), category: "Pad".into(),
+            osc_wave: [2, 1, 0], osc_octave: [0, -1, 0], osc_detune: [0.0, 0.0, 0.0],
+            osc_vol: [0.4, 0.5, 0.0], osc_enabled: [true, true, false],
+            osc_pulse_width: [0.3, 0.5, 0.5], osc_pw_enabled: [true, false, false],
+            osc_unison_enabled: [true, false, false], osc_unison_count: [4, 2, 2], osc_unison_spread: [25.0, 20.0, 20.0],
+            hard_sync: false, fm_enabled: false, fm_depth: 0.0, ring_enabled: false, ring_depth: 0.0,
+            noise_vol: 0.05,
+            lfo_enabled: true, lfo_rate: 0.3, lfo_depth: 0.2, lfo_shape: 0, lfo_dest: 1,
+            filter_enabled: true, filter_cutoff: 800.0, filter_q: 0.2, filter_env_amount: 0.2,
+            fenv_adsr: [1.2, 0.8, 0.6, 2.5],
+            amp_adsr: [1.0, 0.5, 0.7, 2.5],
+            glide_time: 0.0, master_vol: 0.4, synth_model: String::new(),
+        },
+
+        // ── Keys ─────────────────────────────────────────────────────────────
+        Patch {
+            name: "Electric Piano".into(), category: "Keys".into(),
+            osc_wave: [0, 3, 0], osc_octave: [0, 0, 0], osc_detune: [0.0, 0.0, 0.0],
+            osc_vol: [0.5, 0.3, 0.0], osc_enabled: [true, true, false],
+            osc_pulse_width: [0.5; 3], osc_pw_enabled: [false; 3],
+            osc_unison_enabled: [false; 3], osc_unison_count: [2; 3], osc_unison_spread: [20.0; 3],
+            hard_sync: false, fm_enabled: true, fm_depth: 0.3, ring_enabled: false, ring_depth: 0.0,
+            noise_vol: 0.0,
+            lfo_enabled: true, lfo_rate: 4.5, lfo_depth: 0.1, lfo_shape: 0, lfo_dest: 2,
+            filter_enabled: true, filter_cutoff: 4000.0, filter_q: 0.1, filter_env_amount: 0.4,
+            fenv_adsr: [0.002, 0.5, 0.3, 0.4],
+            amp_adsr: [0.002, 0.8, 0.3, 0.4],
+            glide_time: 0.0, master_vol: 0.5, synth_model: String::new(),
+        },
+        Patch {
+            name: "Organ".into(), category: "Keys".into(),
+            osc_wave: [2, 2, 2], osc_octave: [0, 1, 2], osc_detune: [0.0; 3],
+            osc_vol: [0.5, 0.3, 0.2], osc_enabled: [true, true, true],
+            osc_pulse_width: [0.5; 3], osc_pw_enabled: [false; 3],
+            osc_unison_enabled: [false; 3], osc_unison_count: [2; 3], osc_unison_spread: [20.0; 3],
+            hard_sync: false, fm_enabled: false, fm_depth: 0.0, ring_enabled: false, ring_depth: 0.0,
+            noise_vol: 0.0,
+            lfo_enabled: true, lfo_rate: 6.0, lfo_depth: 0.08, lfo_shape: 0, lfo_dest: 2,
+            filter_enabled: true, filter_cutoff: 8000.0, filter_q: 0.05, filter_env_amount: 0.0,
+            fenv_adsr: [0.001, 0.1, 1.0, 0.02],
+            amp_adsr: [0.001, 0.0, 1.0, 0.02],
+            glide_time: 0.0, master_vol: 0.45, synth_model: String::new(),
+        },
+        Patch {
+            name: "Clav".into(), category: "Keys".into(),
+            osc_wave: [2, 1, 0], osc_octave: [0, 0, 0], osc_detune: [0.0, 5.0, 0.0],
+            osc_vol: [0.6, 0.3, 0.0], osc_enabled: [true, true, false],
+            osc_pulse_width: [0.15, 0.5, 0.5], osc_pw_enabled: [true, false, false],
+            osc_unison_enabled: [false; 3], osc_unison_count: [2; 3], osc_unison_spread: [20.0; 3],
+            hard_sync: false, fm_enabled: false, fm_depth: 0.0, ring_enabled: false, ring_depth: 0.0,
+            noise_vol: 0.0,
+            lfo_enabled: false, lfo_rate: 2.0, lfo_depth: 0.0, lfo_shape: 0, lfo_dest: 1,
+            filter_enabled: true, filter_cutoff: 3000.0, filter_q: 0.3, filter_env_amount: 0.6,
+            fenv_adsr: [0.001, 0.15, 0.0, 0.1],
+            amp_adsr: [0.001, 0.3, 0.0, 0.1],
+            glide_time: 0.0, master_vol: 0.5, synth_model: String::new(),
+        },
+
+        // ── Pluck ────────────────────────────────────────────────────────────
+        Patch {
+            name: "Pluck".into(), category: "Pluck".into(),
+            osc_wave: [1, 3, 0], osc_octave: [0, 0, 0], osc_detune: [0.0, 0.0, 0.0],
+            osc_vol: [0.6, 0.3, 0.0], osc_enabled: [true, true, false],
+            osc_pulse_width: [0.5; 3], osc_pw_enabled: [false; 3],
+            osc_unison_enabled: [false; 3], osc_unison_count: [2; 3], osc_unison_spread: [20.0; 3],
+            hard_sync: false, fm_enabled: false, fm_depth: 0.0, ring_enabled: false, ring_depth: 0.0,
+            noise_vol: 0.0,
+            lfo_enabled: false, lfo_rate: 2.0, lfo_depth: 0.0, lfo_shape: 0, lfo_dest: 1,
+            filter_enabled: true, filter_cutoff: 500.0, filter_q: 0.3, filter_env_amount: 0.9,
+            fenv_adsr: [0.001, 0.2, 0.0, 0.1],
+            amp_adsr: [0.001, 0.4, 0.0, 0.2],
+            glide_time: 0.0, master_vol: 0.5, synth_model: String::new(),
+        },
+        Patch {
+            name: "Acid Pluck".into(), category: "Pluck".into(),
+            osc_wave: [1, 0, 0], osc_octave: [0, 0, 0], osc_detune: [0.0; 3],
+            osc_vol: [0.8, 0.0, 0.0], osc_enabled: [true, false, false],
+            osc_pulse_width: [0.5; 3], osc_pw_enabled: [false; 3],
+            osc_unison_enabled: [false; 3], osc_unison_count: [2; 3], osc_unison_spread: [20.0; 3],
+            hard_sync: false, fm_enabled: false, fm_depth: 0.0, ring_enabled: false, ring_depth: 0.0,
+            noise_vol: 0.0,
+            lfo_enabled: false, lfo_rate: 2.0, lfo_depth: 0.0, lfo_shape: 0, lfo_dest: 1,
+            filter_enabled: true, filter_cutoff: 400.0, filter_q: 0.8, filter_env_amount: 1.0,
+            fenv_adsr: [0.001, 0.18, 0.0, 0.08],
+            amp_adsr: [0.001, 0.3, 0.0, 0.15],
+            glide_time: 0.02, master_vol: 0.5, synth_model: String::new(),
+        },
+
+        // ── Brass ────────────────────────────────────────────────────────────
+        Patch {
+            name: "Brass".into(), category: "Brass".into(),
+            osc_wave: [1, 2, 0], osc_octave: [0, 0, 0], osc_detune: [0.0, 3.0, 0.0],
+            osc_vol: [0.6, 0.4, 0.0], osc_enabled: [true, true, false],
+            osc_pulse_width: [0.5, 0.5, 0.5], osc_pw_enabled: [false, true, false],
+            osc_unison_enabled: [false; 3], osc_unison_count: [2; 3], osc_unison_spread: [20.0; 3],
+            hard_sync: false, fm_enabled: false, fm_depth: 0.0, ring_enabled: false, ring_depth: 0.0,
+            noise_vol: 0.0,
+            lfo_enabled: true, lfo_rate: 5.0, lfo_depth: 0.08, lfo_shape: 0, lfo_dest: 0,
+            filter_enabled: true, filter_cutoff: 2000.0, filter_q: 0.2, filter_env_amount: 0.7,
+            fenv_adsr: [0.04, 0.2, 0.6, 0.25],
+            amp_adsr: [0.04, 0.1, 0.8, 0.2],
+            glide_time: 0.0, master_vol: 0.5, synth_model: String::new(),
+        },
+        Patch {
+            name: "Mellow Brass".into(), category: "Brass".into(),
+            osc_wave: [2, 1, 0], osc_octave: [0, -1, 0], osc_detune: [0.0, 0.0, 0.0],
+            osc_vol: [0.5, 0.4, 0.0], osc_enabled: [true, true, false],
+            osc_pulse_width: [0.4, 0.5, 0.5], osc_pw_enabled: [true, false, false],
+            osc_unison_enabled: [false; 3], osc_unison_count: [2; 3], osc_unison_spread: [20.0; 3],
+            hard_sync: false, fm_enabled: false, fm_depth: 0.0, ring_enabled: false, ring_depth: 0.0,
+            noise_vol: 0.0,
+            lfo_enabled: true, lfo_rate: 5.5, lfo_depth: 0.1, lfo_shape: 0, lfo_dest: 0,
+            filter_enabled: true, filter_cutoff: 1500.0, filter_q: 0.15, filter_env_amount: 0.5,
+            fenv_adsr: [0.06, 0.3, 0.5, 0.3],
+            amp_adsr: [0.06, 0.15, 0.75, 0.3],
+            glide_time: 0.0, master_vol: 0.5, synth_model: String::new(),
+        },
+
+        // ── FX ───────────────────────────────────────────────────────────────
+        Patch {
+            name: "Laser".into(), category: "FX".into(),
+            osc_wave: [0, 0, 0], osc_octave: [1, 0, 0], osc_detune: [0.0; 3],
+            osc_vol: [0.7, 0.0, 0.0], osc_enabled: [true, false, false],
+            osc_pulse_width: [0.5; 3], osc_pw_enabled: [false; 3],
+            osc_unison_enabled: [false; 3], osc_unison_count: [2; 3], osc_unison_spread: [20.0; 3],
+            hard_sync: false, fm_enabled: false, fm_depth: 0.0, ring_enabled: false, ring_depth: 0.0,
+            noise_vol: 0.0,
+            lfo_enabled: true, lfo_rate: 8.0, lfo_depth: 0.6, lfo_shape: 2, lfo_dest: 0,
+            filter_enabled: true, filter_cutoff: 8000.0, filter_q: 0.1, filter_env_amount: 0.0,
+            fenv_adsr: [0.001, 0.3, 0.0, 0.1],
+            amp_adsr: [0.001, 0.3, 0.0, 0.1],
+            glide_time: 0.0, master_vol: 0.5, synth_model: String::new(),
+        },
+        Patch {
+            name: "Noise Sweep".into(), category: "FX".into(),
+            osc_wave: [0, 0, 0], osc_octave: [0; 3], osc_detune: [0.0; 3],
+            osc_vol: [0.0, 0.0, 0.0], osc_enabled: [false; 3],
+            osc_pulse_width: [0.5; 3], osc_pw_enabled: [false; 3],
+            osc_unison_enabled: [false; 3], osc_unison_count: [2; 3], osc_unison_spread: [20.0; 3],
+            hard_sync: false, fm_enabled: false, fm_depth: 0.0, ring_enabled: false, ring_depth: 0.0,
+            noise_vol: 0.8,
+            lfo_enabled: false, lfo_rate: 2.0, lfo_depth: 0.0, lfo_shape: 0, lfo_dest: 1,
+            filter_enabled: true, filter_cutoff: 200.0, filter_q: 0.4, filter_env_amount: 1.0,
+            fenv_adsr: [1.5, 0.5, 0.3, 2.0],
+            amp_adsr: [0.1, 0.5, 0.6, 2.0],
+            glide_time: 0.0, master_vol: 0.5, synth_model: String::new(),
+        },
+        Patch {
+            name: "Ring Mod Bell".into(), category: "FX".into(),
+            osc_wave: [0, 0, 0], osc_octave: [0, 1, 0], osc_detune: [0.0, 7.0, 0.0],
+            osc_vol: [0.0, 0.0, 0.0], osc_enabled: [true, true, false],
+            osc_pulse_width: [0.5; 3], osc_pw_enabled: [false; 3],
+            osc_unison_enabled: [false; 3], osc_unison_count: [2; 3], osc_unison_spread: [20.0; 3],
+            hard_sync: false, fm_enabled: false, fm_depth: 0.0, ring_enabled: true, ring_depth: 1.0,
+            noise_vol: 0.0,
+            lfo_enabled: false, lfo_rate: 2.0, lfo_depth: 0.0, lfo_shape: 0, lfo_dest: 1,
+            filter_enabled: true, filter_cutoff: 6000.0, filter_q: 0.3, filter_env_amount: 0.3,
+            fenv_adsr: [0.001, 0.8, 0.2, 1.0],
+            amp_adsr: [0.001, 1.0, 0.1, 1.5],
+            glide_time: 0.0, master_vol: 0.5, synth_model: String::new(),
+        },
+        Patch {
+            name: "FM Metal".into(), category: "FX".into(),
+            osc_wave: [0, 1, 0], osc_octave: [0, 1, 0], osc_detune: [0.0, 0.0, 0.0],
+            osc_vol: [0.6, 0.0, 0.0], osc_enabled: [true, true, false],
+            osc_pulse_width: [0.5; 3], osc_pw_enabled: [false; 3],
+            osc_unison_enabled: [false; 3], osc_unison_count: [2; 3], osc_unison_spread: [20.0; 3],
+            hard_sync: false, fm_enabled: true, fm_depth: 1.5, ring_enabled: false, ring_depth: 0.0,
+            noise_vol: 0.0,
+            lfo_enabled: false, lfo_rate: 2.0, lfo_depth: 0.0, lfo_shape: 0, lfo_dest: 1,
+            filter_enabled: true, filter_cutoff: 5000.0, filter_q: 0.4, filter_env_amount: 0.5,
+            fenv_adsr: [0.001, 0.4, 0.2, 0.5],
+            amp_adsr: [0.001, 0.5, 0.2, 0.5],
+            glide_time: 0.0, master_vol: 0.5, synth_model: String::new(),
+        },
+    ]
+}
