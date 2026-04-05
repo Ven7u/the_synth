@@ -1052,3 +1052,305 @@ ambient music feature work.
   not required for the primary use cases. Tracked separately.
 - **DAW-style timeline / MIDI clip editor** — the automation UI in Phase 8 is intentionally
   minimal. A full piano-roll is a separate product, not a feature.
+
+---
+
+## 15. Bevy Integration — Developer Guide
+
+This section describes the integration from the perspective of a game developer embedding
+`synth-bevy` into a Bevy project. It covers the full picture: plugin setup, the pieces of
+architecture involved, how game systems talk to the audio engine, and the thread model.
+
+### 15.1 What the game developer gets
+
+After adding `synth-bevy` as a dependency, a game developer can:
+
+- Play musical notes from any Bevy system with a single event
+- Drive continuous audio parameters (filter cutoff, macro levels, layer volumes) directly from
+  game state — no audio code required
+- Load and switch musical scenes (a full multi-layer patch with macro definitions) at runtime
+- In development mode, open an inspector panel to tweak sounds live inside the game window
+- Do all of the above without knowing anything about DSP, fundsp, or audio callbacks
+
+### 15.2 Plugin setup
+
+The integration entry point is `SynthPlugin`. A game adds it to the Bevy `App` once:
+
+```rust
+// main.rs (game)
+use synth_bevy::SynthPlugin;
+
+App::new()
+    .add_plugins(DefaultPlugins)
+    .add_plugins(SynthPlugin::default())
+    .run();
+```
+
+`SynthPlugin` performs the following at startup, in order:
+
+1. Creates a `synth-engine` `Engine` instance (allocates DSP graph, voice pools)
+2. Wraps the engine in a Bevy `Resource` so any system can borrow it
+3. Registers the engine as a Bevy `AudioSource` — Bevy's audio backend calls `process_block()`
+   from its audio thread automatically, forever, for the lifetime of the app
+4. Registers `SynthEvent` as a Bevy event type
+5. Adds the `BevyBridge` system to the `PostUpdate` schedule — translates `SynthEvent`s into
+   lock-free `ControlEvent`s each frame
+6. If the `inspector` Cargo feature is enabled, adds the `SynthInspector` plugin (bevy-egui panel)
+
+After plugin setup the audio engine is running. It produces silence until notes or parameter
+changes arrive.
+
+### 15.3 Pieces of architecture
+
+```mermaid
+flowchart TD
+    subgraph GAME["Game Code  (game developer writes this)"]
+        GS1["TensionSystem\nreads GameState\nwrites SynthEvent"]
+        GS2["ZoneTransitionSystem\nwrites SynthEvent::SceneLoad"]
+        GS3["CombatSystem\nwrites SynthEvent::NoteOn"]
+    end
+
+    subgraph BEVY_INTERNAL["synth-bevy internals"]
+        EVT["SynthEvent\nBevy event queue\n(heap-ok, deferred)"]
+        BRIDGE["BevyBridge system\n(PostUpdate schedule)\ntranslates events"]
+        RES["SynthEngineRes\nBevy Resource\nwraps Arc Engine"]
+        INSP["SynthInspector\n(bevy-egui panel)\nfeature = inspector"]
+    end
+
+    subgraph ENGINE["synth-engine  (runs on audio thread)"]
+        QUEUE["lock-free\nControlEvent queue\n(ringbuf SPSC)"]
+        PARAMS["Shared params\nArc AtomicF32 per param"]
+        PB["process_block()\ncalled by Bevy audio thread"]
+    end
+
+    subgraph BEVY_AUDIO["Bevy audio system"]
+        AT["audio thread\n(cpal under the hood)"]
+    end
+
+    GS1 & GS2 & GS3 -->|EventWriter| EVT
+    EVT -->|EventReader| BRIDGE
+    BRIDGE -->|push_event| QUEUE
+    INSP -->|set_param| PARAMS
+    RES -.->|Arc clone| BRIDGE & INSP
+    QUEUE -->|drain each buffer| PB
+    PARAMS -->|read by DSP graph| PB
+    AT -->|call| PB
+```
+
+There are exactly **two cross-thread boundaries**:
+
+| Boundary | Mechanism | Thread safety |
+|---|---|---|
+| Game thread → audio thread (discrete events) | `ringbuf` lock-free SPSC queue | Wait-free on consumer (audio thread) |
+| Game thread → audio thread (continuous params) | `Arc<AtomicF32>` (`fundsp::Shared`) | Atomic store/load, no lock |
+
+The game thread never blocks on the audio thread. The audio thread never blocks on anything.
+
+### 15.4 SynthEvent — the game developer's API
+
+`SynthEvent` is a regular Bevy event. Game systems write it with `EventWriter<SynthEvent>`;
+the `BevyBridge` system reads it with `EventReader<SynthEvent>` and converts it to the
+engine's internal `ControlEvent`.
+
+```rust
+pub enum SynthEvent {
+    /// Trigger a note on a specific track (0-indexed).
+    NoteOn  { track: u8, pitch: u8, velocity: u8 },
+    NoteOff { track: u8, pitch: u8 },
+
+    /// Latch a chord for the track's arpeggiator.
+    /// The arp iterates these notes until a new ChordHold arrives.
+    ChordHold { track: u8, notes: Vec<u8> },
+
+    /// Set a named macro knob (0.0–1.0).
+    /// The current scene defines what parameters this macro controls.
+    SetMacro { index: u8, value: f32 },
+
+    /// Write directly to a specific parameter on a specific track.
+    SetParam { track: u8, param: ParamId, value: f32 },
+
+    /// Load a named scene (replaces all four track patches + macro definitions).
+    SceneLoad { name: String },
+
+    /// Crossfade from the current scene to a new one over N frames.
+    SceneTransition { name: String, frames: u32 },
+
+    /// Change global BPM.
+    Tempo { bpm: f32 },
+}
+```
+
+The game developer never calls audio functions directly. They write `SynthEvent`s; the bridge
+handles translation.
+
+### 15.5 Driving the engine from game state — patterns
+
+#### Pattern A: Continuous mapping (game value → macro)
+
+The most common pattern for adaptive audio. A game system reads a game-world value and maps
+it to a macro knob each frame. The musician has pre-designed what Macro 0 does — the game
+only knows it ranges 0–1.
+
+```rust
+fn tension_audio_system(
+    tension: Res<GameTension>,           // f32, 0.0 = calm, 1.0 = max danger
+    mut events: EventWriter<SynthEvent>,
+) {
+    events.write(SynthEvent::SetMacro {
+        index: 0,          // "Atmosphere" macro — defined in the scene
+        value: tension.0,
+    });
+}
+```
+
+This system runs every frame. The macro smoothly drives shimmer level, filter cutoff, pad
+volume, or whatever the musician mapped to it — without any additional code.
+
+#### Pattern B: Scene transition on zone change
+
+```rust
+fn zone_transition_system(
+    zone: Res<CurrentZone>,
+    mut last_zone: Local<Option<Zone>>,
+    mut events: EventWriter<SynthEvent>,
+) {
+    if Some(zone.0) != *last_zone {
+        *last_zone = Some(zone.0);
+        events.write(SynthEvent::SceneTransition {
+            name: zone.0.scene_name().to_string(),
+            frames: 44100 * 4,   // 4-second crossfade at 44.1 kHz
+        });
+    }
+}
+```
+
+Each zone has a named scene. When the player crosses a zone boundary the engine crossfades to
+the new scene without a hard cut.
+
+#### Pattern C: Rhythmic triggers from game events
+
+```rust
+fn combat_hit_system(
+    mut hit_events: EventReader<EnemyHitEvent>,
+    mut synth: EventWriter<SynthEvent>,
+) {
+    for hit in hit_events.read() {
+        // Track 1 = percussion layer; pitch encodes hit severity
+        let pitch = if hit.damage > 50 { 60 } else { 48 };
+        synth.write(SynthEvent::NoteOn  { track: 1, pitch, velocity: hit.damage.min(127) });
+        synth.write(SynthEvent::NoteOff { track: 1, pitch });
+    }
+}
+```
+
+#### Pattern D: Letting the arpeggiator handle harmony
+
+For ambient zones where the music should follow a harmonic center without individual note
+triggers:
+
+```rust
+fn ambient_chord_system(
+    harmony: Res<HarmonyState>,          // current root + scale
+    mut synth: EventWriter<SynthEvent>,
+    mut last_chord: Local<Vec<u8>>,
+) {
+    let chord = harmony.current_chord_midi_notes();
+    if chord != *last_chord {
+        *last_chord = chord.clone();
+        synth.write(SynthEvent::ChordHold { track: 0, notes: chord });
+    }
+}
+```
+
+The arpeggiator on Track 0 iterates the held chord automatically. The game never sends
+individual `NoteOn/Off` for the ambient layer — it just tells the arp what chord to play.
+
+### 15.6 The dev inspector
+
+During development the musician / composer can open the inspector panel inside the game
+window to design sounds and map macros without leaving Bevy. Enable it with a Cargo feature:
+
+```toml
+# Cargo.toml (game)
+[dependencies]
+synth-bevy = { path = "../synth-bevy", features = ["inspector"] }
+```
+
+The panel is a `bevy-egui` window. It exposes:
+- All four track tabs with the full patch editor (same UI as the standalone app)
+- Macro editor: drag-connect parameters to macro knobs; set min/max/curve per target
+- Scene save/load from disk
+- Live oscilloscope and peak meter
+
+In a release build the `inspector` feature is not enabled. The panel code is compiled out
+entirely — zero overhead.
+
+### 15.7 Thread model summary
+
+```mermaid
+sequenceDiagram
+    participant GS as Game System<br/>(main thread)
+    participant BB as BevyBridge<br/>(PostUpdate, main thread)
+    participant Q  as lock-free queue<br/>(shared)
+    participant AT as Audio Thread<br/>(Bevy / cpal)
+    participant EN as Engine<br/>(process_block)
+
+    GS->>BB: EventWriter<SynthEvent> (deferred)
+    Note over BB: PostUpdate: drain SynthEvents
+    BB->>Q: push_event(ControlEvent) [non-blocking]
+    Note over AT: hardware buffer callback (~5ms)
+    AT->>EN: process_block(output, frames)
+    EN->>Q: drain all pending ControlEvents
+    EN->>EN: advance arp, automation, DSP graph
+    EN->>AT: fill output buffer
+```
+
+Key properties:
+- `SynthEvent` is a normal Bevy event — it can carry heap data (`Vec`, `String`) safely because
+  it lives on the game thread until `BevyBridge` converts it to a `ControlEvent`
+- `ControlEvent` pushed into the lock-free queue is stack-sized (no heap). The queue is
+  pre-allocated; if it is full, the push is dropped silently — the audio thread never blocks
+- `process_block()` drains the queue before advancing DSP — events written in frame N take
+  effect at the start of the next audio buffer, typically within 5–10 ms
+
+### 15.8 Minimal working example
+
+A complete Bevy app that plays a generative ambient loop, driven by a single tension value:
+
+```rust
+use bevy::prelude::*;
+use synth_bevy::{SynthPlugin, SynthEvent};
+
+#[derive(Resource)]
+struct GameTension(f32);
+
+fn main() {
+    App::new()
+        .add_plugins(DefaultPlugins)
+        .add_plugins(SynthPlugin::default())
+        .insert_resource(GameTension(0.0))
+        .add_systems(Startup, load_scene)
+        .add_systems(Update, (oscillate_tension, map_tension_to_audio))
+        .run();
+}
+
+fn load_scene(mut events: EventWriter<SynthEvent>) {
+    events.write(SynthEvent::SceneLoad { name: "ambient_forest".to_string() });
+}
+
+fn oscillate_tension(time: Res<Time>, mut tension: ResMut<GameTension>) {
+    // Slowly oscillate tension 0→1→0 over 20 seconds (placeholder for real game logic)
+    tension.0 = (time.elapsed_secs() * std::f32::consts::TAU / 20.0).sin() * 0.5 + 0.5;
+}
+
+fn map_tension_to_audio(
+    tension: Res<GameTension>,
+    mut events: EventWriter<SynthEvent>,
+) {
+    events.write(SynthEvent::SetMacro { index: 0, value: tension.0 });
+}
+```
+
+The `ambient_forest` scene (designed in the standalone app or inspector, saved to disk)
+contains four layers — pad, bass, arp, texture — with Macro 0 wired to shimmer level, filter
+cutoff, and texture volume. The game code above is the entirety of the audio integration.
