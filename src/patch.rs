@@ -83,6 +83,16 @@ pub struct Patch {
     #[serde(default = "default_reverb_size")] pub fx_reverb_size:    f32,
     #[serde(default = "default_reverb_damp")] pub fx_reverb_damp:    f32,
     #[serde(default)] pub fx_reverb_mix:      f32,
+
+    // Shimmer reverb (independent from plain reverb)
+    #[serde(default)] pub fx_shimmer_on:    bool,
+    #[serde(default = "default_shimmer_size")]  pub fx_shimmer_size:  f32,
+    #[serde(default = "default_shimmer_damp")]  pub fx_shimmer_damp:  f32,
+    #[serde(default = "default_shimmer_mix")]   pub fx_shimmer_mix:   f32,
+    #[serde(default = "default_shimmer_amt")]   pub fx_shimmer_amt:   f32,
+    #[serde(default = "default_shimmer_width")] pub fx_shimmer_width: f32,
+    #[serde(default = "default_shimmer_spread")] pub fx_shimmer_spread: f32,
+    #[serde(default = "default_shimmer_pitch")] pub fx_shimmer_pitch: u8,
 }
 
 fn default_overdrive_drive()  -> f32 { 3.0 }
@@ -94,6 +104,13 @@ fn default_delay_time()       -> f32 { 0.35 }
 fn default_delay_fb()         -> f32 { 0.4 }
 fn default_reverb_size()      -> f32 { 0.6 }
 fn default_reverb_damp()      -> f32 { 0.5 }
+fn default_shimmer_size()     -> f32 { 0.7 }
+fn default_shimmer_damp()     -> f32 { 0.4 }
+fn default_shimmer_mix()      -> f32 { 0.4 }
+fn default_shimmer_amt()      -> f32 { 0.5 }
+fn default_shimmer_width()    -> f32 { 1.35 }
+fn default_shimmer_spread()   -> f32 { 0.10 }
+fn default_shimmer_pitch()    -> u8  { 1 }
 
 // ---------------------------------------------------------------------------
 // Default patches — loaded from assets/patches/**/*.json at compile time
@@ -230,4 +247,3 @@ pub fn default_patches() -> Vec<Patch> {
         .filter_map(|s| serde_json::from_str(s).ok())
         .collect()
 }
-

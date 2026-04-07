@@ -171,6 +171,16 @@ struct SynthApp {
     fx_reverb_size: f32,
     fx_reverb_damp: f32,
     fx_reverb_mix: f32,
+
+    // Shimmer reverb (independent from plain reverb)
+    fx_shimmer_on: bool,
+    fx_shimmer_size: f32,
+    fx_shimmer_damp: f32,
+    fx_shimmer_mix: f32,
+    fx_shimmer_amt: f32,
+    fx_shimmer_width: f32,
+    fx_shimmer_spread: f32,
+    fx_shimmer_pitch: u8, // 0=unison, 1=+12st, 2=+24st
 }
 
 impl SynthApp {
@@ -272,6 +282,14 @@ impl SynthApp {
             fx_reverb_size: 0.6,
             fx_reverb_damp: 0.5,
             fx_reverb_mix: 0.4,
+            fx_shimmer_on: false,
+            fx_shimmer_size: 0.7,
+            fx_shimmer_damp: 0.4,
+            fx_shimmer_mix: 0.4,
+            fx_shimmer_amt: 0.5,
+            fx_shimmer_width: 1.35,
+            fx_shimmer_spread: 0.10,
+            fx_shimmer_pitch: 1,
         }
     }
 }
@@ -1983,6 +2001,14 @@ impl SynthApp {
             fx_reverb_size:     self.fx_reverb_size,
             fx_reverb_damp:     self.fx_reverb_damp,
             fx_reverb_mix:      self.fx_reverb_mix,
+            fx_shimmer_on:      self.fx_shimmer_on,
+            fx_shimmer_size:    self.fx_shimmer_size,
+            fx_shimmer_damp:    self.fx_shimmer_damp,
+            fx_shimmer_mix:     self.fx_shimmer_mix,
+            fx_shimmer_amt:     self.fx_shimmer_amt,
+            fx_shimmer_width:   self.fx_shimmer_width,
+            fx_shimmer_spread:  self.fx_shimmer_spread,
+            fx_shimmer_pitch:   self.fx_shimmer_pitch,
         }
     }
 
@@ -2073,6 +2099,14 @@ impl SynthApp {
             self.fx_reverb_size     = p.fx_reverb_size;
             self.fx_reverb_damp     = p.fx_reverb_damp;
             self.fx_reverb_mix      = p.fx_reverb_mix;
+            self.fx_shimmer_on      = p.fx_shimmer_on;
+            self.fx_shimmer_size    = p.fx_shimmer_size;
+            self.fx_shimmer_damp    = p.fx_shimmer_damp;
+            self.fx_shimmer_mix     = p.fx_shimmer_mix;
+            self.fx_shimmer_amt     = p.fx_shimmer_amt;
+            self.fx_shimmer_width   = p.fx_shimmer_width;
+            self.fx_shimmer_spread  = p.fx_shimmer_spread;
+            self.fx_shimmer_pitch   = p.fx_shimmer_pitch;
             s.fx_overdrive_drive.set_value(self.fx_overdrive_drive);
             s.fx_overdrive_mix.set_value(if self.fx_overdrive_on { self.fx_overdrive_mix } else { 0.0 });
             s.fx_overdrive_tone.set_value(self.fx_overdrive_tone);
@@ -2090,6 +2124,13 @@ impl SynthApp {
             s.fx_reverb_size.set_value(self.fx_reverb_size);
             s.fx_reverb_damp.set_value(self.fx_reverb_damp);
             s.fx_reverb_mix.set_value(if self.fx_reverb_on { self.fx_reverb_mix } else { 0.0 });
+            s.fx_shimmer.size.set_value(self.fx_shimmer_size);
+            s.fx_shimmer.damp.set_value(self.fx_shimmer_damp);
+            s.fx_shimmer.shimmer.set_value(if self.fx_shimmer_on { self.fx_shimmer_amt } else { 0.0 });
+            s.fx_shimmer.width.set_value(self.fx_shimmer_width);
+            s.fx_shimmer.spread.set_value(self.fx_shimmer_spread);
+            s.fx_shimmer.pitch.store(self.fx_shimmer_pitch, std::sync::atomic::Ordering::Relaxed);
+            s.fx_shimmer.mix.set_value(if self.fx_shimmer_on { self.fx_shimmer_mix } else { 0.0 });
         }
     }
 }
@@ -2723,6 +2764,56 @@ impl SynthApp {
                     if self.fx_reverb_on {
                         self.state.fx_reverb_mix.set_value(self.fx_reverb_mix);
                     }
+                });
+            });
+
+            // ---- Shimmer ----
+            let col_shim = Color32::from_rgb(120, 200, 255);
+            ui.group(|ui| {
+                ui.set_min_width(110.0);
+                ui.vertical(|ui| {
+                    let on = &mut self.fx_shimmer_on;
+                    let label = egui::RichText::new("SHIMMER").small().strong()
+                        .color(if *on { col_shim } else { Color32::GRAY });
+                    if ui.button(label).on_hover_text("Shimmer reverb — pitch-shifted feedback loop creates a rising harmonic halo.").clicked() {
+                        *on = !*on;
+                        self.state.fx_shimmer.mix.set_value(if *on { self.fx_shimmer_mix } else { 0.0 });
+                    }
+                    ui.add(egui::Slider::new(&mut self.fx_shimmer_size, 0.0_f32..=1.0)
+                        .text("Size").clamp_to_range(true))
+                        .on_hover_text("Shimmer reverb room size.");
+                    ui.add(egui::Slider::new(&mut self.fx_shimmer_damp, 0.0_f32..=1.0)
+                        .text("Damp").clamp_to_range(true))
+                        .on_hover_text("Shimmer high-frequency damping.");
+                    ui.add(egui::Slider::new(&mut self.fx_shimmer_amt, 0.0_f32..=1.0)
+                        .text("Shimmer").clamp_to_range(true))
+                        .on_hover_text("Amount of pitch-shifted signal fed back into the reverb loop.");
+                    ui.add(egui::Slider::new(&mut self.fx_shimmer_width, 0.5_f32..=2.0)
+                        .text("Width").clamp_to_range(true))
+                        .on_hover_text("Stereo width of the wet reverb/shimmer field. 1.0 = neutral.");
+                    ui.add(egui::Slider::new(&mut self.fx_shimmer_spread, 0.0_f32..=0.3)
+                        .text("Spread").clamp_to_range(true))
+                        .on_hover_text("Left/right decorrelation depth for reverb and shimmer tails.");
+                    ui.add(egui::Slider::new(&mut self.fx_shimmer_mix, 0.0_f32..=1.0)
+                        .text("Mix").clamp_to_range(true))
+                        .on_hover_text("Shimmer wet level.");
+                    ui.horizontal(|ui| {
+                        ui.label("Pitch:");
+                        for (i, lbl) in ["0", "+12", "+24"].iter().enumerate() {
+                            if ui.selectable_label(self.fx_shimmer_pitch == i as u8, *lbl).clicked() {
+                                self.fx_shimmer_pitch = i as u8;
+                                self.state.fx_shimmer.pitch.store(i as u8, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                    });
+                    self.state.fx_shimmer.size.set_value(self.fx_shimmer_size);
+                    self.state.fx_shimmer.damp.set_value(self.fx_shimmer_damp);
+                    self.state.fx_shimmer.shimmer.set_value(
+                        if self.fx_shimmer_on { self.fx_shimmer_amt } else { 0.0 });
+                    self.state.fx_shimmer.width.set_value(self.fx_shimmer_width);
+                    self.state.fx_shimmer.spread.set_value(self.fx_shimmer_spread);
+                    self.state.fx_shimmer.mix.set_value(
+                        if self.fx_shimmer_on { self.fx_shimmer_mix } else { 0.0 });
                 });
             });
         });

@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use synth_dsp::envelope::LiveAdsr;
 use synth_dsp::osc::{MultiWaveOsc, SyncRole};
+use synth_dsp::shimmer::{ShimmerShared, ShimmerReverb};
 
 pub const VOICE_COUNT: usize = 6;
 
@@ -134,6 +135,9 @@ pub struct AudioState {
     pub fx_reverb_size:    Shared, // 0.0..1.0 (room size)
     pub fx_reverb_damp:    Shared, // 0.0..1.0 (high-freq damping)
     pub fx_reverb_mix:     Shared,
+
+    // Shimmer reverb (extends the standard reverb with pitch-shifted feedback)
+    pub fx_shimmer:        ShimmerShared,
 }
 
 impl AudioState {
@@ -253,6 +257,7 @@ impl AudioState {
             fx_reverb_size:    shared(0.6),
             fx_reverb_damp:    shared(0.5),
             fx_reverb_mix:     shared(0.0),
+            fx_shimmer:        ShimmerShared::new(),
         }
     }
 }
@@ -387,10 +392,9 @@ pub fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Sen
 
     let voice_mix = v0 + v1 + v2 + v3 + v4 + v5;
 
-    let chain = voice_mix >> An(FxChain::new(state, sr as f32));
+    let chain = (voice_mix * var(&state.master_vol)) >> An(FxChain::new(state, sr as f32));
 
-    let mut g: Box<dyn AudioUnit + Send> =
-        Box::new(chain * var(&state.master_vol) >> pan(0.0));
+    let mut g: Box<dyn AudioUnit + Send> = Box::new(chain);
     g.set_sample_rate(sr);
     g.allocate();
     g
@@ -400,58 +404,6 @@ pub fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Sen
 // FX chain — custom AudioNode (tick-based, plain f32)
 // ---------------------------------------------------------------------------
 
-/// Schroeder reverb: 4 parallel comb filters → 2 serial allpass filters.
-#[derive(Clone)]
-struct ReverbState {
-    comb_buf:  [Vec<f32>; 4],
-    comb_pos:  [usize;    4],
-    comb_feed: [f32;      4], // one-pole LP state per comb (damping)
-    ap_buf:    [Vec<f32>; 2],
-    ap_pos:    [usize;    2],
-}
-
-impl ReverbState {
-    fn new(sr: f32) -> Self {
-        let scale = sr / 44100.0;
-        let comb_delays: [usize; 4] = [1557, 1617, 1491, 1422];
-        let ap_delays:   [usize; 2] = [225, 556];
-        Self {
-            comb_buf:  comb_delays.map(|d| vec![0.0; std::cmp::max((d as f32 * scale) as usize, 1)]),
-            comb_pos:  [0; 4],
-            comb_feed: [0.0; 4],
-            ap_buf:    ap_delays.map(|d| vec![0.0; std::cmp::max((d as f32 * scale) as usize, 1)]),
-            ap_pos:    [0; 2],
-        }
-    }
-
-    fn tick(&mut self, input: f32, room: f32, damp: f32) -> f32 {
-        let feed = 0.7 + room * 0.28; // 0.7..0.98 decay
-        let d    = damp * 0.4;        // HF rolloff coefficient
-
-        let mut out = 0.0f32;
-        for i in 0..4 {
-            let len = self.comb_buf[i].len();
-            let pos = self.comb_pos[i];
-            let delayed = self.comb_buf[i][pos];
-            self.comb_feed[i] = delayed * (1.0 - d) + self.comb_feed[i] * d;
-            self.comb_buf[i][pos] = input + self.comb_feed[i] * feed;
-            self.comb_pos[i] = (pos + 1) % len;
-            out += delayed;
-        }
-        out *= 0.25;
-
-        for i in 0..2 {
-            let len = self.ap_buf[i].len();
-            let pos = self.ap_pos[i];
-            let buf = self.ap_buf[i][pos];
-            let v = out + buf * 0.5;
-            self.ap_buf[i][pos] = v;
-            self.ap_pos[i] = (pos + 1) % len;
-            out = buf - v * 0.5;
-        }
-        out
-    }
-}
 
 /// One-pole exponential smoother wrapping a `Shared` parameter.
 /// Prevents audio artifacts (clicks/pops) when a parameter is changed live.
@@ -487,8 +439,8 @@ impl SmoothedParam {
     }
 }
 
-/// All five effects in a single sample-accurate node.
-/// Each effect blends dry/wet: out = dry + mix*(wet−dry). mix=0 → bypass.
+/// All effects in a single sample-accurate node.
+/// Input is mono, output is stereo with decorrelated reverb/shimmer tails.
 #[derive(Clone)]
 struct FxChain {
     // Plain Shared — no smoothing needed (tone/asym affect filter coefficients gradually)
@@ -508,18 +460,30 @@ struct FxChain {
     cho_mix:  SmoothedParam, // 5 ms
     del_time: SmoothedParam, // 20 ms — prevents pitch-jump noise on slider move
     del_mix:  SmoothedParam, // 5 ms
-    rev_size: SmoothedParam, // 50 ms — smooth reverb tail transitions
+    // Reverb params (plain reverb, shimmer_amt always 0)
+    rev_size: SmoothedParam, // 50 ms
     rev_damp: SmoothedParam, // 50 ms
     rev_mix:  SmoothedParam, // 5 ms
+    // Shimmer params (independent instance — own size/damp/shimmer/pitch/mix)
+    shim_size:  SmoothedParam,
+    shim_damp:  SmoothedParam,
+    shim_mix:   SmoothedParam,
+    shim_amt:   SmoothedParam,
+    shim_width: SmoothedParam,
+    shim_spread: SmoothedParam,
+    shim_pitch: std::sync::Arc<std::sync::atomic::AtomicU8>,
     // Internal state
     cho_phase:   f32,
     del_buf:     Vec<f32>,
     del_pos:     usize,
-    od_tone_z:   f32, // one-pole LP state — OD post-filter
-    dist_tone_z: f32, // one-pole LP state — DIST post-filter
-    dist_pre_z:  f32, // one-pole LP state for HP = input - LP
-    rev:         ReverbState,
-    sr:          f32,
+    od_tone_z:   f32,
+    dist_tone_z: f32,
+    dist_pre_z:  f32,
+    rev_l:    ShimmerReverb,
+    rev_r:    ShimmerReverb,
+    shim_l:   ShimmerReverb,
+    shim_r:   ShimmerReverb,
+    sr:       f32,
 }
 
 impl FxChain {
@@ -543,16 +507,26 @@ impl FxChain {
             cho_mix:  SmoothedParam::new(state.fx_chorus_mix.clone(),     MIX_TAU, sr),
             del_time: SmoothedParam::new(state.fx_delay_time.clone(),     DEL_TAU, sr),
             del_mix:  SmoothedParam::new(state.fx_delay_mix.clone(),      MIX_TAU, sr),
-            rev_size: SmoothedParam::new(state.fx_reverb_size.clone(),    REV_TAU, sr),
-            rev_damp: SmoothedParam::new(state.fx_reverb_damp.clone(),    REV_TAU, sr),
-            rev_mix:  SmoothedParam::new(state.fx_reverb_mix.clone(),     MIX_TAU, sr),
+            rev_size:   SmoothedParam::new(state.fx_reverb_size.clone(),     REV_TAU, sr),
+            rev_damp:   SmoothedParam::new(state.fx_reverb_damp.clone(),     REV_TAU, sr),
+            rev_mix:    SmoothedParam::new(state.fx_reverb_mix.clone(),      MIX_TAU, sr),
+            shim_size:  SmoothedParam::new(state.fx_shimmer.size.clone(),    REV_TAU, sr),
+            shim_damp:  SmoothedParam::new(state.fx_shimmer.damp.clone(),    REV_TAU, sr),
+            shim_mix:   SmoothedParam::new(state.fx_shimmer.mix.clone(),     MIX_TAU, sr),
+            shim_amt:   SmoothedParam::new(state.fx_shimmer.shimmer.clone(), REV_TAU, sr),
+            shim_width: SmoothedParam::new(state.fx_shimmer.width.clone(),   REV_TAU, sr),
+            shim_spread: SmoothedParam::new(state.fx_shimmer.spread.clone(), REV_TAU, sr),
+            shim_pitch: std::sync::Arc::clone(&state.fx_shimmer.pitch),
             cho_phase:   0.0,
             del_buf:     vec![0.0f32; buf_len],
             del_pos:     0,
             od_tone_z:   0.0,
             dist_tone_z: 0.0,
             dist_pre_z:  0.0,
-            rev:         ReverbState::new(sr),
+            rev_l:    ShimmerReverb::new(sr),
+            rev_r:    ShimmerReverb::new(sr),
+            shim_l:   ShimmerReverb::new(sr),
+            shim_r:   ShimmerReverb::new(sr),
             sr,
         }
     }
@@ -561,7 +535,7 @@ impl FxChain {
 impl AudioNode for FxChain {
     const ID: u64 = 0x7468655F_78636861; // "the_xcha"
     type Inputs  = U1;
-    type Outputs = U1;
+    type Outputs = U2;
 
     fn reset(&mut self) {
         self.cho_phase = 0.0;
@@ -571,7 +545,11 @@ impl AudioNode for FxChain {
         self.dist_drive.reset(); self.dist_mix.reset();
         self.cho_mix.reset();  self.del_time.reset(); self.del_mix.reset();
         self.rev_size.reset(); self.rev_damp.reset(); self.rev_mix.reset();
-        self.rev = ReverbState::new(self.sr);
+        self.shim_size.reset(); self.shim_damp.reset();
+        self.shim_mix.reset(); self.shim_amt.reset();
+        self.shim_width.reset(); self.shim_spread.reset();
+        self.rev_l.reset(); self.rev_r.reset();
+        self.shim_l.reset(); self.shim_r.reset();
     }
 
     fn set_sample_rate(&mut self, sr: f64) {
@@ -584,11 +562,15 @@ impl AudioNode for FxChain {
         self.cho_mix.set_sample_rate(self.sr);  self.del_time.set_sample_rate(self.sr);
         self.del_mix.set_sample_rate(self.sr);  self.rev_size.set_sample_rate(self.sr);
         self.rev_damp.set_sample_rate(self.sr); self.rev_mix.set_sample_rate(self.sr);
-        self.rev = ReverbState::new(self.sr);
+        self.shim_size.set_sample_rate(self.sr); self.shim_damp.set_sample_rate(self.sr);
+        self.shim_mix.set_sample_rate(self.sr); self.shim_amt.set_sample_rate(self.sr);
+        self.shim_width.set_sample_rate(self.sr); self.shim_spread.set_sample_rate(self.sr);
+        self.rev_l.set_sample_rate(self.sr); self.rev_r.set_sample_rate(self.sr);
+        self.shim_l.set_sample_rate(self.sr); self.shim_r.set_sample_rate(self.sr);
     }
 
     #[inline]
-    fn tick(&mut self, input: &Frame<f32, U1>) -> Frame<f32, U1> {
+    fn tick(&mut self, input: &Frame<f32, U1>) -> Frame<f32, U2> {
         let dry = input[0];
 
         // ── Overdrive (tanh soft clip) ──────────────────────────────────────
@@ -670,16 +652,62 @@ impl AudioNode for FxChain {
 
         self.del_pos = (self.del_pos + 1) % buf_len;
 
-        // ── Reverb ─────────────────────────────────────────────────────────
-        let rev_mix  = self.rev_mix.next();
-        let rev_size = self.rev_size.next(); // smoothed — prevents tail surge on size change
-        let rev_damp = self.rev_damp.next(); // smoothed — prevents tail surge on damp change
-        let rev_wet = if rev_mix > 0.0001 {
-            self.rev.tick(s4, rev_size, rev_damp)
-        } else { 0.0 };
-        // Additive model: dry stays at full level, reverb tail is added on top.
-        let s5 = s4 + rev_mix * rev_wet;
+        // Stereo field controls shared by reverb + shimmer wet tails.
+        let shim_width = self.shim_width.next().clamp(0.5, 2.0);
+        let shim_spread = self.shim_spread.next().clamp(0.0, 0.3);
+        let size_spread = 0.5 * shim_spread;
+        let damp_spread = 0.5 * shim_spread;
 
-        Frame::from([s5])
+        // ── Reverb (stereo-decorrelated) ────────────────────────────────────
+        let rev_mix  = self.rev_mix.next();
+        let rev_size = self.rev_size.next();
+        let rev_damp = self.rev_damp.next();
+        let (rev_wet_l, rev_wet_r) = if rev_mix > 0.0001 {
+            let size_l = (rev_size * (1.0 - size_spread)).clamp(0.0, 1.0);
+            let size_r = (rev_size * (1.0 + size_spread)).clamp(0.0, 1.0);
+            let damp_l = (rev_damp + damp_spread).clamp(0.0, 1.0);
+            let damp_r = (rev_damp - damp_spread).clamp(0.0, 1.0);
+            (
+                self.rev_l.tick(s4, size_l, damp_l, 0.0, 0),
+                self.rev_r.tick(s4, size_r, damp_r, 0.0, 0),
+            )
+        } else { (0.0, 0.0) };
+
+        // ── Shimmer reverb (stereo-decorrelated) ───────────────────────────
+        let shim_mix   = self.shim_mix.next();
+        let shim_size  = self.shim_size.next();
+        let shim_damp  = self.shim_damp.next();
+        let shim_amt   = self.shim_amt.next();
+        let shim_pitch = self.shim_pitch.load(std::sync::atomic::Ordering::Relaxed);
+        let (shim_wet_l, shim_wet_r) = if shim_mix > 0.0001 {
+            let size_l = (shim_size * (1.0 - size_spread)).clamp(0.0, 1.0);
+            let size_r = (shim_size * (1.0 + size_spread)).clamp(0.0, 1.0);
+            let damp_l = (shim_damp + damp_spread).clamp(0.0, 1.0);
+            let damp_r = (shim_damp - damp_spread).clamp(0.0, 1.0);
+            (
+                self.shim_l.tick(s4, size_l, damp_l, shim_amt, shim_pitch),
+                self.shim_r.tick(s4, size_r, damp_r, shim_amt, shim_pitch),
+            )
+        } else { (0.0, 0.0) };
+
+        // Wet balance:
+        // keep output level stable as wet is increased so "more mix" means
+        // more space/halo, not mostly more gain into downstream saturation.
+        let wet_total = (rev_mix + shim_mix).clamp(0.0, 1.0);
+        let dry_bal = s4 * (1.0 - wet_total);
+
+        let wet_l = rev_mix * rev_wet_l + shim_mix * shim_wet_l;
+        let wet_r = rev_mix * rev_wet_r + shim_mix * shim_wet_r;
+
+        // Extra width in the wet field only, leaving dry center stable.
+        let wet_mid = 0.5 * (wet_l + wet_r);
+        let wet_side = 0.5 * (wet_l - wet_r);
+        let wet_wide_l = wet_mid + wet_side * shim_width;
+        let wet_wide_r = wet_mid - wet_side * shim_width;
+
+        let out_l = dry_bal + wet_wide_l;
+        let out_r = dry_bal + wet_wide_r;
+
+        Frame::from([out_l, out_r])
     }
 }

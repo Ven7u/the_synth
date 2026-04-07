@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use synth_dsp::envelope::LiveAdsr;
 use synth_dsp::osc::{MultiWaveOsc, SyncRole};
+use synth_dsp::shimmer::{ShimmerShared, ShimmerReverb};
 use crate::arp::{ArpShared, ScaleWalkerShared};
 
 pub const TRACK_COUNT: usize = 4;
@@ -272,20 +273,20 @@ fn build_track_graph(state: &TrackState, sr: f64) -> Box<dyn AudioUnit + Send> {
 /// The audio callback calls `get_stereo` each sample to get stereo output.
 pub struct MultiTrackEngine {
     pub tracks: [TrackState; TRACK_COUNT],
-    /// Global shimmer bus wet level (0.0–1.0). Dry passthrough until Phase 5.
-    pub shimmer_mix: Shared,
-    /// Global crystal bus wet level (0.0–1.0). Dry passthrough until Phase 5.
+    /// Global shimmer reverb parameters (UI-accessible).
+    pub shimmer: ShimmerShared,
+    /// Global crystal bus wet level (0.0–1.0). Dry passthrough until crystallizer is implemented.
     pub crystal_mix: Shared,
     /// Master output volume.
     pub master_vol: Shared,
 
     /// Per-track arpeggiator config (UI-accessible).
-    /// Matching ArpState lives in the audio callback closure.
     pub arp_configs:    [ArpShared; TRACK_COUNT],
     /// Per-track scale walker config (UI-accessible).
     pub walker_configs: [ScaleWalkerShared; TRACK_COUNT],
 
-    track_graphs: Vec<BlockRateAdapter>,
+    track_graphs:  Vec<BlockRateAdapter>,
+    shimmer_state: ShimmerReverb,
     sr: f64,
     smoothed_freqs: Vec<Vec<f32>>,
 }
@@ -300,12 +301,13 @@ impl MultiTrackEngine {
         let smoothed_freqs = vec![vec![440.0f32; VOICE_COUNT]; TRACK_COUNT];
         Self {
             tracks,
-            shimmer_mix: shared(0.0),
+            shimmer: ShimmerShared::new(),
             crystal_mix: shared(0.0),
             master_vol: shared(0.7),
             arp_configs:    std::array::from_fn(|_| ArpShared::new()),
             walker_configs: std::array::from_fn(|_| ScaleWalkerShared::new()),
             track_graphs,
+            shimmer_state: ShimmerReverb::new(sr as f32),
             sr,
             smoothed_freqs,
         }
@@ -364,12 +366,30 @@ impl MultiTrackEngine {
     /// Call `tick_glide` once per buffer and `tick_lfo_sample` once per sample before this.
     #[inline]
     pub fn get_stereo(&mut self) -> (f32, f32) {
-        let mut sum = 0.0f32;
-        for graph in self.track_graphs.iter_mut() {
+        let mut dry_sum = 0.0f32;
+        let mut shim_bus = 0.0f32;
+        for (ti, graph) in self.track_graphs.iter_mut().enumerate() {
             let (l, _r) = graph.get_stereo();
-            sum += l;
+            dry_sum += l;
+            shim_bus += l * self.tracks[ti].shimmer_send.value();
         }
-        let out = (sum / TRACK_COUNT as f32 * self.master_vol.value()).tanh();
+
+        let shim_mix = self.shimmer.mix.value();
+        let shim_wet = if shim_mix > 0.0001 {
+            self.shimmer_state.tick(
+                shim_bus / TRACK_COUNT as f32,
+                self.shimmer.size.value(),
+                self.shimmer.damp.value(),
+                self.shimmer.shimmer.value(),
+                self.shimmer.pitch.load(std::sync::atomic::Ordering::Relaxed),
+            )
+        } else {
+            0.0
+        };
+
+        let dry = dry_sum / TRACK_COUNT as f32;
+        let mix = dry * (1.0 - shim_mix) + shim_mix * shim_wet;
+        let out = (mix * self.master_vol.value()).tanh();
         (out, out)
     }
 }

@@ -247,6 +247,14 @@ struct AmbientBoxApp {
     walker_oct:   [u8;  TRACK_COUNT],
     walker_div:   [u8;  TRACK_COUNT],
     walker_gate:  [f32; TRACK_COUNT],
+
+    // Global shimmer UI state
+    shimmer_on:    bool,
+    shimmer_mix:   f32,
+    shimmer_amt:   f32,
+    shimmer_size:  f32,
+    shimmer_damp:  f32,
+    shimmer_pitch: u8,
 }
 
 impl AmbientBoxApp {
@@ -276,6 +284,12 @@ impl AmbientBoxApp {
             walker_oct:   [2;     TRACK_COUNT],
             walker_div:   [1;     TRACK_COUNT],
             walker_gate:  [0.6;   TRACK_COUNT],
+            shimmer_on:    false,
+            shimmer_mix:   0.4,
+            shimmer_amt:   0.5,
+            shimmer_size:  0.6,
+            shimmer_damp:  0.5,
+            shimmer_pitch: 1,
         }
     }
 
@@ -378,6 +392,38 @@ impl eframe::App for AmbientBoxApp {
                     let mut mvol = eng.master_vol.value();
                     if synth_ui::knob(ui, "Master Vol", &mut mvol, 0.0, 1.0) {
                         eng.master_vol.set(mvol);
+                    }
+                });
+
+                ui.separator();
+
+                // --- Shimmer reverb global bus ---
+                ui.horizontal(|ui| {
+                    let col = egui::Color32::from_rgb(120, 200, 255);
+                    let lbl = egui::RichText::new("SHIMMER").strong()
+                        .color(if self.shimmer_on { col } else { egui::Color32::GRAY });
+                    if ui.button(lbl).on_hover_text("Global shimmer reverb bus.").clicked() {
+                        self.shimmer_on = !self.shimmer_on;
+                        eng.shimmer.mix.set(if self.shimmer_on { self.shimmer_mix } else { 0.0 });
+                    }
+                    if synth_ui::knob(ui, "Mix", &mut self.shimmer_mix, 0.0, 1.0) {
+                        if self.shimmer_on { eng.shimmer.mix.set(self.shimmer_mix); }
+                    }
+                    if synth_ui::knob(ui, "Shim", &mut self.shimmer_amt, 0.0, 1.0) {
+                        eng.shimmer.shimmer.set(self.shimmer_amt);
+                    }
+                    if synth_ui::knob(ui, "Size", &mut self.shimmer_size, 0.0, 1.0) {
+                        eng.shimmer.size.set(self.shimmer_size);
+                    }
+                    if synth_ui::knob(ui, "Damp", &mut self.shimmer_damp, 0.0, 1.0) {
+                        eng.shimmer.damp.set(self.shimmer_damp);
+                    }
+                    ui.label("Pitch:");
+                    for (i, lbl) in ["0", "+12", "+24"].iter().enumerate() {
+                        if ui.selectable_label(self.shimmer_pitch == i as u8, *lbl).clicked() {
+                            self.shimmer_pitch = i as u8;
+                            eng.shimmer.pitch.store(i as u8, Ordering::Relaxed);
+                        }
                     }
                 });
             }
