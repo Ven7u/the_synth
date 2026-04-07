@@ -197,7 +197,7 @@ version = "0.1.0"
 dependencies = [
  "fundsp",
  "synth-control",
- "synth-dsp",
+ "synth-engine",
 ]
 
 [[package]]
