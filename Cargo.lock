@@ -177,6 +177,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "ambient-box"
+version = "0.1.0"
+dependencies = [
+ "ambient-engine",
+ "anyhow",
+ "cpal",
+ "eframe",
+ "egui",
+ "fundsp",
+ "midir",
+ "synth-control",
+ "synth-ui",
+]
+
+[[package]]
+name = "ambient-engine"
+version = "0.1.0"
+dependencies = [
+ "fundsp",
+ "synth-control",
+ "synth-engine",
+]
+
+[[package]]
 name = "android-activity"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3818,6 +3842,13 @@ version = "0.1.0"
 dependencies = [
  "fundsp",
  "synth-dsp",
+]
+
+[[package]]
+name = "synth-ui"
+version = "0.1.0"
+dependencies = [
+ "egui",
 ]
 
 [[package]]

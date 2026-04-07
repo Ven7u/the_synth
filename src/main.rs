@@ -262,12 +262,12 @@ impl SynthApp {
         if let Ok(mut t) = self.state.note_on_time.lock() {
             *t = Some(std::time::Instant::now());
         }
-        let _ = self.control.try_send(ControlEvent::NoteOn { pitch: midi, velocity: 100 });
+        let _ = self.control.try_send(ControlEvent::NoteOn { pitch: midi, velocity: 100, track: 0 });
     }
 
     /// Push a NoteOff event into the audio thread's control queue.
     fn push_note_off(&mut self, midi: u8) {
-        let _ = self.control.try_send(ControlEvent::NoteOff { pitch: midi });
+        let _ = self.control.try_send(ControlEvent::NoteOff { pitch: midi, track: 0 });
     }
 }
 
