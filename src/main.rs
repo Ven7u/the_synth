@@ -108,6 +108,10 @@ struct SynthApp {
     // Sequencer — shared timing
     seq_playing: bool,
     seq_bpm: u32,
+    seq_clock_sync: bool,
+    seq_bar_quantize_start: bool,
+    arp_restart_pending: bool,
+    walker_restart_pending: bool,
     seq_current_step: usize,
     seq_last_tick: std::time::Instant,
     seq_prev_notes: Vec<u8>, // notes playing from last step (supports chords)
@@ -181,6 +185,14 @@ struct SynthApp {
     fx_shimmer_width: f32,
     fx_shimmer_spread: f32,
     fx_shimmer_pitch: u8, // 0=unison, 1=+12st, 2=+24st
+    // Crystallizer (granular pitch-shift delay)
+    fx_crystal_on: bool,
+    fx_crystal_mix: f32,
+    fx_crystal_grain_ms: f32,
+    fx_crystal_scatter: f32,
+    fx_crystal_feedback: f32,
+    fx_crystal_delay_ms: f32,
+    fx_crystal_pitch: u8, // 0=0.5x, 1=1x, 2=2x, 3=4x
 }
 
 impl SynthApp {
@@ -231,6 +243,10 @@ impl SynthApp {
             limiter_threshold: 0.95,
             seq_playing: false,
             seq_bpm: 120,
+            seq_clock_sync: true,
+            seq_bar_quantize_start: false,
+            arp_restart_pending: false,
+            walker_restart_pending: false,
             seq_current_step: 0,
             seq_last_tick: std::time::Instant::now(),
             seq_prev_notes: Vec::new(),
@@ -290,6 +306,13 @@ impl SynthApp {
             fx_shimmer_width: 1.35,
             fx_shimmer_spread: 0.10,
             fx_shimmer_pitch: 1,
+            fx_crystal_on: false,
+            fx_crystal_mix: 0.35,
+            fx_crystal_grain_ms: 120.0,
+            fx_crystal_scatter: 0.25,
+            fx_crystal_feedback: 0.35,
+            fx_crystal_delay_ms: 260.0,
+            fx_crystal_pitch: 2,
         }
     }
 }
@@ -299,6 +322,54 @@ impl SynthApp {
 // ---------------------------------------------------------------------------
 
 impl SynthApp {
+    fn sync_transport_now(&mut self) {
+        // Realign sequencer UI transport to "now".
+        self.seq_current_step = 0;
+        self.seq_last_tick = std::time::Instant::now();
+        self.arp_restart_pending = false;
+        self.walker_restart_pending = false;
+
+        // Prevent dangling sequencer notes while re-phasing.
+        let prev: Vec<u8> = self.seq_prev_notes.drain(..).collect();
+        for m in prev {
+            self.push_note_off(m);
+        }
+
+        let _ = self.control.try_send(ControlEvent::ArpRestart { track: 0 });
+        let _ = self.control.try_send(ControlEvent::WalkerRestart { track: 0 });
+    }
+
+    fn schedule_or_restart_arp(&mut self) {
+        if self.seq_clock_sync && self.seq_bar_quantize_start && self.seq_playing {
+            self.arp_restart_pending = true;
+        } else {
+            let _ = self.control.try_send(ControlEvent::ArpRestart { track: 0 });
+        }
+    }
+
+    fn schedule_or_restart_walker(&mut self) {
+        if self.seq_clock_sync && self.seq_bar_quantize_start && self.seq_playing {
+            self.walker_restart_pending = true;
+        } else {
+            let _ = self.control.try_send(ControlEvent::WalkerRestart { track: 0 });
+        }
+    }
+
+    fn apply_clock_sync(&mut self) {
+        if !self.seq_clock_sync {
+            return;
+        }
+        let bpm = self.seq_bpm as f32;
+        if (self.arp_bpm - bpm).abs() > f32::EPSILON {
+            self.arp_bpm = bpm;
+            self.state.arp.bpm.set(bpm);
+        }
+        if (self.walker_bpm - bpm).abs() > f32::EPSILON {
+            self.walker_bpm = bpm;
+            self.state.walker.bpm.set(bpm);
+        }
+    }
+
     /// Push a NoteOn event into the audio thread's control queue.
     fn push_note_on(&mut self, midi: u8) {
         // Stamp the time before enqueuing — audio callback measures how long it takes
@@ -395,6 +466,16 @@ impl SynthApp {
             SeqMode::ChordKb  => return, // ChordKb has no sequencer tick
         };
         self.seq_current_step = (self.seq_current_step + 1) % seq_length;
+        let bar_boundary = self.seq_current_step == 0;
+
+        if self.arp_restart_pending && bar_boundary {
+            let _ = self.control.try_send(ControlEvent::ArpRestart { track: 0 });
+            self.arp_restart_pending = false;
+        }
+        if self.walker_restart_pending && bar_boundary {
+            let _ = self.control.try_send(ControlEvent::WalkerRestart { track: 0 });
+            self.walker_restart_pending = false;
+        }
 
         let notes_to_play: Vec<u8> = match self.seq_mode {
             SeqMode::NoteSeq => {
@@ -427,6 +508,7 @@ impl SynthApp {
 impl eframe::App for SynthApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.tick_midi();
+        self.apply_clock_sync();
         self.tick_sequencer(ctx);
 
         self.ui_patch_browser(ctx);
@@ -1000,21 +1082,46 @@ impl SynthApp {
             let label = egui::RichText::new("ARP").strong()
                 .color(if enabled { Color32::from_rgb(0, 220, 160) } else { Color32::GRAY });
             if ui.button(label).clicked() {
-                self.state.arp.enabled.store(!enabled, Ordering::Relaxed);
+                let new_enabled = !enabled;
+                self.state.arp.enabled.store(new_enabled, Ordering::Relaxed);
+                if new_enabled && self.seq_clock_sync {
+                    self.apply_clock_sync();
+                    self.schedule_or_restart_arp();
+                }
+                if !new_enabled {
+                    // Force-clear latched chord when arp is turned off.
+                    let _ = self.control.try_send(ControlEvent::ChordHold { track: 0, notes: Vec::new() });
+                }
+            }
+            if ui.button("RST").on_hover_text("Restart arp phase/step from beginning.").clicked() {
+                let _ = self.control.try_send(ControlEvent::ArpRestart { track: 0 });
             }
             let hold = self.state.arp.hold.load(Ordering::Relaxed);
             let hold_label = egui::RichText::new("HOLD")
                 .color(if hold { Color32::from_rgb(255, 200, 0) } else { Color32::GRAY });
             if ui.button(hold_label).clicked() {
-                self.state.arp.hold.store(!hold, Ordering::Relaxed);
+                let new_hold = !hold;
+                self.state.arp.hold.store(new_hold, Ordering::Relaxed);
+                if !new_hold {
+                    // HOLD off unlatches immediately.
+                    let _ = self.control.try_send(ControlEvent::ChordHold { track: 0, notes: Vec::new() });
+                }
             }
         });
 
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal(|ui| {
                 ui.label("BPM:");
-                if ui.add(egui::Slider::new(&mut self.arp_bpm, 20.0..=300.0)).changed() {
-                    self.state.arp.bpm.set(self.arp_bpm);
+                if self.seq_clock_sync {
+                    self.arp_bpm = self.seq_bpm as f32;
+                }
+                ui.add_enabled_ui(!self.seq_clock_sync, |ui| {
+                    if ui.add(egui::Slider::new(&mut self.arp_bpm, 20.0..=300.0)).changed() {
+                        self.state.arp.bpm.set(self.arp_bpm);
+                    }
+                });
+                if self.seq_clock_sync {
+                    ui.label(egui::RichText::new("SYNC").small().color(Color32::GRAY));
                 }
             });
             ui.horizontal(|ui| {
@@ -1059,15 +1166,31 @@ impl SynthApp {
             let label = egui::RichText::new("WALKER").strong()
                 .color(if enabled { Color32::from_rgb(100, 180, 255) } else { Color32::GRAY });
             if ui.button(label).on_hover_text("Scale Walker — autonomous random walk within a scale. Generates notes independently of keyboard input.").clicked() {
-                self.state.walker.enabled.store(!enabled, Ordering::Relaxed);
+                let new_enabled = !enabled;
+                self.state.walker.enabled.store(new_enabled, Ordering::Relaxed);
+                if new_enabled && self.seq_clock_sync {
+                    self.apply_clock_sync();
+                    self.schedule_or_restart_walker();
+                }
+            }
+            if ui.button("RST").on_hover_text("Restart walker phase/index from beginning.").clicked() {
+                let _ = self.control.try_send(ControlEvent::WalkerRestart { track: 0 });
             }
         });
 
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal(|ui| {
                 ui.label("BPM:");
-                if ui.add(egui::Slider::new(&mut self.walker_bpm, 20.0..=300.0)).changed() {
-                    self.state.walker.bpm.set(self.walker_bpm);
+                if self.seq_clock_sync {
+                    self.walker_bpm = self.seq_bpm as f32;
+                }
+                ui.add_enabled_ui(!self.seq_clock_sync, |ui| {
+                    if ui.add(egui::Slider::new(&mut self.walker_bpm, 20.0..=300.0)).changed() {
+                        self.state.walker.bpm.set(self.walker_bpm);
+                    }
+                });
+                if self.seq_clock_sync {
+                    ui.label(egui::RichText::new("SYNC").small().color(Color32::GRAY));
                 }
             });
             ui.horizontal(|ui| {
@@ -1504,7 +1627,20 @@ impl SynthApp {
                 let btn = if self.seq_playing { "⏹ Stop" } else { "▶ Play" };
                 if ui.button(btn).on_hover_text("Start or stop the sequencer.").clicked() {
                     self.seq_playing = !self.seq_playing;
-                    if !self.seq_playing {
+                    if self.seq_playing {
+                        // Restart sequencer clock from this moment when transport starts.
+                        self.seq_last_tick = std::time::Instant::now();
+                        if self.seq_bar_quantize_start && self.seq_current_step == 0 {
+                            if self.arp_restart_pending {
+                                let _ = self.control.try_send(ControlEvent::ArpRestart { track: 0 });
+                                self.arp_restart_pending = false;
+                            }
+                            if self.walker_restart_pending {
+                                let _ = self.control.try_send(ControlEvent::WalkerRestart { track: 0 });
+                                self.walker_restart_pending = false;
+                            }
+                        }
+                    } else {
                         let prev: Vec<u8> = self.seq_prev_notes.drain(..).collect();
                         for m in prev { self.push_note_off(m); }
                     }
@@ -1512,6 +1648,10 @@ impl SynthApp {
                 ui.label("BPM:").on_hover_text("Sequencer tempo in beats per minute.");
                 ui.add(egui::Slider::new(&mut self.seq_bpm, 40..=600))
                     .on_hover_text("Sequencer tempo (40–600 BPM).");
+                if self.seq_clock_sync {
+                    // Keep ARP/WALKER locked while moving the sequencer BPM slider.
+                    self.apply_clock_sync();
+                }
 
                 // Step length selector
                 let cur_length = match self.seq_mode {
@@ -1559,6 +1699,30 @@ impl SynthApp {
                         SeqMode::ChordKb => {}
                     }
                 }
+            }
+
+            ui.separator();
+            if ui.checkbox(&mut self.seq_clock_sync, "Clock Sync")
+                .on_hover_text("Lock ARP + Walker BPM to sequencer BPM and align phases.")
+                .changed() && self.seq_clock_sync
+            {
+                self.apply_clock_sync();
+                self.sync_transport_now();
+            }
+            if !self.seq_clock_sync {
+                self.arp_restart_pending = false;
+                self.walker_restart_pending = false;
+            }
+            ui.add_enabled_ui(self.seq_clock_sync, |ui| {
+                ui.checkbox(&mut self.seq_bar_quantize_start, "Bar Quantize")
+                    .on_hover_text("When enabled, ARP/WALKER restart on the next bar instead of immediately.");
+            });
+            if ui.button("SYNC NOW")
+                .on_hover_text("Restart sequencer, arpeggiator, and walker phase together.")
+                .clicked()
+            {
+                self.apply_clock_sync();
+                self.sync_transport_now();
             }
 
             // Chord key/scale selector (ChordSeq and ChordKb)
@@ -2009,6 +2173,13 @@ impl SynthApp {
             fx_shimmer_width:   self.fx_shimmer_width,
             fx_shimmer_spread:  self.fx_shimmer_spread,
             fx_shimmer_pitch:   self.fx_shimmer_pitch,
+            fx_crystal_on:      self.fx_crystal_on,
+            fx_crystal_mix:     self.fx_crystal_mix,
+            fx_crystal_grain_ms:self.fx_crystal_grain_ms,
+            fx_crystal_scatter: self.fx_crystal_scatter,
+            fx_crystal_feedback:self.fx_crystal_feedback,
+            fx_crystal_delay_ms:self.fx_crystal_delay_ms,
+            fx_crystal_pitch:   self.fx_crystal_pitch,
         }
     }
 
@@ -2107,6 +2278,13 @@ impl SynthApp {
             self.fx_shimmer_width   = p.fx_shimmer_width;
             self.fx_shimmer_spread  = p.fx_shimmer_spread;
             self.fx_shimmer_pitch   = p.fx_shimmer_pitch;
+            self.fx_crystal_on      = p.fx_crystal_on;
+            self.fx_crystal_mix     = p.fx_crystal_mix;
+            self.fx_crystal_grain_ms = p.fx_crystal_grain_ms;
+            self.fx_crystal_scatter = p.fx_crystal_scatter;
+            self.fx_crystal_feedback = p.fx_crystal_feedback;
+            self.fx_crystal_delay_ms = p.fx_crystal_delay_ms;
+            self.fx_crystal_pitch   = p.fx_crystal_pitch;
             s.fx_overdrive_drive.set_value(self.fx_overdrive_drive);
             s.fx_overdrive_mix.set_value(if self.fx_overdrive_on { self.fx_overdrive_mix } else { 0.0 });
             s.fx_overdrive_tone.set_value(self.fx_overdrive_tone);
@@ -2131,6 +2309,12 @@ impl SynthApp {
             s.fx_shimmer.spread.set_value(self.fx_shimmer_spread);
             s.fx_shimmer.pitch.store(self.fx_shimmer_pitch, std::sync::atomic::Ordering::Relaxed);
             s.fx_shimmer.mix.set_value(if self.fx_shimmer_on { self.fx_shimmer_mix } else { 0.0 });
+            s.fx_crystal.grain_ms.set_value(self.fx_crystal_grain_ms);
+            s.fx_crystal.scatter.set_value(self.fx_crystal_scatter);
+            s.fx_crystal.feedback.set_value(self.fx_crystal_feedback);
+            s.fx_crystal.delay_ms.set_value(self.fx_crystal_delay_ms);
+            s.fx_crystal.pitch.store(self.fx_crystal_pitch, std::sync::atomic::Ordering::Relaxed);
+            s.fx_crystal.mix.set_value(if self.fx_crystal_on { self.fx_crystal_mix } else { 0.0 });
         }
     }
 }
@@ -2583,6 +2767,7 @@ impl SynthApp {
         let col_cho  = Color32::from_rgb( 80, 200, 140); // green
         let col_dly  = Color32::from_rgb( 80, 160, 255); // blue
         let col_rev  = Color32::from_rgb(170,  90, 240); // purple
+        let col_crys = Color32::from_rgb(255, 170,  90); // amber
 
         ui.horizontal(|ui| {
             // ---- Overdrive ----
@@ -2814,6 +2999,50 @@ impl SynthApp {
                     self.state.fx_shimmer.spread.set_value(self.fx_shimmer_spread);
                     self.state.fx_shimmer.mix.set_value(
                         if self.fx_shimmer_on { self.fx_shimmer_mix } else { 0.0 });
+                });
+            });
+
+            // ---- Crystallizer ----
+            ui.group(|ui| {
+                ui.set_min_width(140.0);
+                ui.vertical(|ui| {
+                    let on = &mut self.fx_crystal_on;
+                    let label = egui::RichText::new("CRYSTAL").small().strong()
+                        .color(if *on { col_crys } else { Color32::GRAY });
+                    if ui.button(label).on_hover_text("Crystallizer — granular pitch-shift delay with feedback.").clicked() {
+                        *on = !*on;
+                        self.state.fx_crystal.mix.set_value(if *on { self.fx_crystal_mix } else { 0.0 });
+                    }
+                    ui.add(egui::Slider::new(&mut self.fx_crystal_grain_ms, 10.0_f32..=400.0)
+                        .text("Grain").suffix(" ms").clamp_to_range(true))
+                        .on_hover_text("Grain size in milliseconds.");
+                    ui.add(egui::Slider::new(&mut self.fx_crystal_scatter, 0.0_f32..=1.0)
+                        .text("Scatter").clamp_to_range(true))
+                        .on_hover_text("Random grain position offset.");
+                    ui.add(egui::Slider::new(&mut self.fx_crystal_delay_ms, 20.0_f32..=1200.0)
+                        .text("Delay").suffix(" ms").clamp_to_range(true))
+                        .on_hover_text("Base delay time.");
+                    ui.add(egui::Slider::new(&mut self.fx_crystal_feedback, 0.0_f32..=0.95)
+                        .text("Feedback").clamp_to_range(true))
+                        .on_hover_text("Feedback amount.");
+                    ui.add(egui::Slider::new(&mut self.fx_crystal_mix, 0.0_f32..=1.0)
+                        .text("Mix").clamp_to_range(true))
+                        .on_hover_text("Crystallizer wet level.");
+                    ui.horizontal(|ui| {
+                        ui.label("Pitch:");
+                        for (i, lbl) in ["0.5x", "1x", "2x", "4x"].iter().enumerate() {
+                            if ui.selectable_label(self.fx_crystal_pitch == i as u8, *lbl).clicked() {
+                                self.fx_crystal_pitch = i as u8;
+                                self.state.fx_crystal.pitch.store(i as u8, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                    });
+                    self.state.fx_crystal.grain_ms.set_value(self.fx_crystal_grain_ms);
+                    self.state.fx_crystal.scatter.set_value(self.fx_crystal_scatter);
+                    self.state.fx_crystal.delay_ms.set_value(self.fx_crystal_delay_ms);
+                    self.state.fx_crystal.feedback.set_value(self.fx_crystal_feedback);
+                    self.state.fx_crystal.mix.set_value(
+                        if self.fx_crystal_on { self.fx_crystal_mix } else { 0.0 });
                 });
             });
         });

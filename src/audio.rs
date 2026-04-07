@@ -163,6 +163,26 @@ where
                     ControlEvent::ChordHold { notes, .. } => {
                         arp.set_chord(&notes);
                     }
+                    ControlEvent::ArpRestart { .. } => {
+                        if let Some(pitch) = arp.restart() {
+                            for (slot, note) in voice_notes.iter_mut().enumerate() {
+                                if *note == Some(pitch) {
+                                    state.voice_gates[slot].set(0.0);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    ControlEvent::WalkerRestart { .. } => {
+                        if let Some(pitch) = walker.restart() {
+                            for (slot, note) in voice_notes.iter_mut().enumerate() {
+                                if *note == Some(pitch) {
+                                    state.voice_gates[slot].set(0.0);
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

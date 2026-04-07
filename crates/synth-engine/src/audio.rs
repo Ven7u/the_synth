@@ -12,6 +12,7 @@ use std::sync::Arc;
 use synth_dsp::envelope::LiveAdsr;
 use synth_dsp::osc::{MultiWaveOsc, SyncRole};
 use synth_dsp::shimmer::{ShimmerShared, ShimmerReverb};
+use synth_dsp::crystallizer::{CrystallizerShared, Crystallizer};
 
 pub const VOICE_COUNT: usize = 6;
 
@@ -138,6 +139,8 @@ pub struct AudioState {
 
     // Shimmer reverb (extends the standard reverb with pitch-shifted feedback)
     pub fx_shimmer:        ShimmerShared,
+    // Crystallizer (granular pitch-shift delay)
+    pub fx_crystal:        CrystallizerShared,
 }
 
 impl AudioState {
@@ -258,6 +261,7 @@ impl AudioState {
             fx_reverb_damp:    shared(0.5),
             fx_reverb_mix:     shared(0.0),
             fx_shimmer:        ShimmerShared::new(),
+            fx_crystal:        CrystallizerShared::new(),
         }
     }
 }
@@ -472,6 +476,13 @@ struct FxChain {
     shim_width: SmoothedParam,
     shim_spread: SmoothedParam,
     shim_pitch: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    // Crystallizer params (granular pitch-shift delay)
+    crys_grain: SmoothedParam,
+    crys_scatter: SmoothedParam,
+    crys_feedback: SmoothedParam,
+    crys_delay: SmoothedParam,
+    crys_mix: SmoothedParam,
+    crys_pitch: std::sync::Arc<std::sync::atomic::AtomicU8>,
     // Internal state
     cho_phase:   f32,
     del_buf:     Vec<f32>,
@@ -483,6 +494,8 @@ struct FxChain {
     rev_r:    ShimmerReverb,
     shim_l:   ShimmerReverb,
     shim_r:   ShimmerReverb,
+    crys_l:   Crystallizer,
+    crys_r:   Crystallizer,
     sr:       f32,
 }
 
@@ -517,6 +530,12 @@ impl FxChain {
             shim_width: SmoothedParam::new(state.fx_shimmer.width.clone(),   REV_TAU, sr),
             shim_spread: SmoothedParam::new(state.fx_shimmer.spread.clone(), REV_TAU, sr),
             shim_pitch: std::sync::Arc::clone(&state.fx_shimmer.pitch),
+            crys_grain: SmoothedParam::new(state.fx_crystal.grain_ms.clone(), REV_TAU, sr),
+            crys_scatter: SmoothedParam::new(state.fx_crystal.scatter.clone(), REV_TAU, sr),
+            crys_feedback: SmoothedParam::new(state.fx_crystal.feedback.clone(), REV_TAU, sr),
+            crys_delay: SmoothedParam::new(state.fx_crystal.delay_ms.clone(), REV_TAU, sr),
+            crys_mix: SmoothedParam::new(state.fx_crystal.mix.clone(), MIX_TAU, sr),
+            crys_pitch: std::sync::Arc::clone(&state.fx_crystal.pitch),
             cho_phase:   0.0,
             del_buf:     vec![0.0f32; buf_len],
             del_pos:     0,
@@ -527,6 +546,8 @@ impl FxChain {
             rev_r:    ShimmerReverb::new(sr),
             shim_l:   ShimmerReverb::new(sr),
             shim_r:   ShimmerReverb::new(sr),
+            crys_l:   Crystallizer::new(sr),
+            crys_r:   Crystallizer::new(sr),
             sr,
         }
     }
@@ -548,8 +569,12 @@ impl AudioNode for FxChain {
         self.shim_size.reset(); self.shim_damp.reset();
         self.shim_mix.reset(); self.shim_amt.reset();
         self.shim_width.reset(); self.shim_spread.reset();
+        self.crys_grain.reset(); self.crys_scatter.reset();
+        self.crys_feedback.reset(); self.crys_delay.reset();
+        self.crys_mix.reset();
         self.rev_l.reset(); self.rev_r.reset();
         self.shim_l.reset(); self.shim_r.reset();
+        self.crys_l.reset(); self.crys_r.reset();
     }
 
     fn set_sample_rate(&mut self, sr: f64) {
@@ -565,8 +590,12 @@ impl AudioNode for FxChain {
         self.shim_size.set_sample_rate(self.sr); self.shim_damp.set_sample_rate(self.sr);
         self.shim_mix.set_sample_rate(self.sr); self.shim_amt.set_sample_rate(self.sr);
         self.shim_width.set_sample_rate(self.sr); self.shim_spread.set_sample_rate(self.sr);
+        self.crys_grain.set_sample_rate(self.sr); self.crys_scatter.set_sample_rate(self.sr);
+        self.crys_feedback.set_sample_rate(self.sr); self.crys_delay.set_sample_rate(self.sr);
+        self.crys_mix.set_sample_rate(self.sr);
         self.rev_l.set_sample_rate(self.sr); self.rev_r.set_sample_rate(self.sr);
         self.shim_l.set_sample_rate(self.sr); self.shim_r.set_sample_rate(self.sr);
+        self.crys_l.set_sample_rate(self.sr); self.crys_r.set_sample_rate(self.sr);
     }
 
     #[inline]
@@ -690,10 +719,38 @@ impl AudioNode for FxChain {
             )
         } else { (0.0, 0.0) };
 
+        // ── Crystallizer (stereo-decorrelated) ─────────────────────────────
+        let crys_mix = self.crys_mix.next();
+        let crys_grain = self.crys_grain.next();
+        let crys_scatter = self.crys_scatter.next();
+        let crys_feedback = self.crys_feedback.next();
+        let crys_delay = self.crys_delay.next();
+        let crys_pitch = self.crys_pitch.load(std::sync::atomic::Ordering::Relaxed);
+        let (crys_wet_l, crys_wet_r) = if crys_mix > 0.0001 {
+            (
+                self.crys_l.tick(
+                    s4,
+                    crys_grain * 0.92,
+                    (crys_scatter + 0.05).clamp(0.0, 1.0),
+                    crys_feedback,
+                    crys_delay * 0.95,
+                    crys_pitch,
+                ),
+                self.crys_r.tick(
+                    s4,
+                    crys_grain * 1.08,
+                    (crys_scatter - 0.05).clamp(0.0, 1.0),
+                    crys_feedback,
+                    crys_delay * 1.05,
+                    crys_pitch,
+                ),
+            )
+        } else { (0.0, 0.0) };
+
         // Wet balance:
         // keep output level stable as wet is increased so "more mix" means
         // more space/halo, not mostly more gain into downstream saturation.
-        let wet_total = (rev_mix + shim_mix).clamp(0.0, 1.0);
+        let wet_total = (rev_mix + shim_mix + crys_mix).clamp(0.0, 1.0);
         let dry_bal = s4 * (1.0 - wet_total);
 
         let wet_l = rev_mix * rev_wet_l + shim_mix * shim_wet_l;
@@ -705,8 +762,8 @@ impl AudioNode for FxChain {
         let wet_wide_l = wet_mid + wet_side * shim_width;
         let wet_wide_r = wet_mid - wet_side * shim_width;
 
-        let out_l = dry_bal + wet_wide_l;
-        let out_r = dry_bal + wet_wide_r;
+        let out_l = dry_bal + wet_wide_l + crys_mix * crys_wet_l;
+        let out_r = dry_bal + wet_wide_r + crys_mix * crys_wet_r;
 
         Frame::from([out_l, out_r])
     }

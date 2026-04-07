@@ -18,6 +18,7 @@ use std::sync::Arc;
 use synth_dsp::envelope::LiveAdsr;
 use synth_dsp::osc::{MultiWaveOsc, SyncRole};
 use synth_dsp::shimmer::{ShimmerShared, ShimmerReverb};
+use synth_dsp::crystallizer::{CrystallizerShared, Crystallizer};
 use crate::arp::{ArpShared, ScaleWalkerShared};
 
 pub const TRACK_COUNT: usize = 4;
@@ -275,8 +276,8 @@ pub struct MultiTrackEngine {
     pub tracks: [TrackState; TRACK_COUNT],
     /// Global shimmer reverb parameters (UI-accessible).
     pub shimmer: ShimmerShared,
-    /// Global crystal bus wet level (0.0–1.0). Dry passthrough until crystallizer is implemented.
-    pub crystal_mix: Shared,
+    /// Global crystal bus parameters (UI-accessible).
+    pub crystal: CrystallizerShared,
     /// Master output volume.
     pub master_vol: Shared,
 
@@ -287,6 +288,7 @@ pub struct MultiTrackEngine {
 
     track_graphs:  Vec<BlockRateAdapter>,
     shimmer_state: ShimmerReverb,
+    crystal_state: Crystallizer,
     sr: f64,
     smoothed_freqs: Vec<Vec<f32>>,
 }
@@ -302,12 +304,13 @@ impl MultiTrackEngine {
         Self {
             tracks,
             shimmer: ShimmerShared::new(),
-            crystal_mix: shared(0.0),
+            crystal: CrystallizerShared::new(),
             master_vol: shared(0.7),
             arp_configs:    std::array::from_fn(|_| ArpShared::new()),
             walker_configs: std::array::from_fn(|_| ScaleWalkerShared::new()),
             track_graphs,
             shimmer_state: ShimmerReverb::new(sr as f32),
+            crystal_state: Crystallizer::new(sr as f32),
             sr,
             smoothed_freqs,
         }
@@ -368,10 +371,12 @@ impl MultiTrackEngine {
     pub fn get_stereo(&mut self) -> (f32, f32) {
         let mut dry_sum = 0.0f32;
         let mut shim_bus = 0.0f32;
+        let mut crys_bus = 0.0f32;
         for (ti, graph) in self.track_graphs.iter_mut().enumerate() {
             let (l, _r) = graph.get_stereo();
             dry_sum += l;
             shim_bus += l * self.tracks[ti].shimmer_send.value();
+            crys_bus += l * self.tracks[ti].crystal_send.value();
         }
 
         let shim_mix = self.shimmer.mix.value();
@@ -387,8 +392,23 @@ impl MultiTrackEngine {
             0.0
         };
 
+        let crys_mix = self.crystal.mix.value();
+        let crys_wet = if crys_mix > 0.0001 {
+            self.crystal_state.tick(
+                crys_bus / TRACK_COUNT as f32,
+                self.crystal.grain_ms.value(),
+                self.crystal.scatter.value(),
+                self.crystal.feedback.value(),
+                self.crystal.delay_ms.value(),
+                self.crystal.pitch.load(std::sync::atomic::Ordering::Relaxed),
+            )
+        } else {
+            0.0
+        };
+
         let dry = dry_sum / TRACK_COUNT as f32;
-        let mix = dry * (1.0 - shim_mix) + shim_mix * shim_wet;
+        let wet_total = (shim_mix + crys_mix).clamp(0.0, 1.0);
+        let mix = dry * (1.0 - wet_total) + shim_mix * shim_wet + crys_mix * crys_wet;
         let out = (mix * self.master_vol.value()).tanh();
         (out, out)
     }

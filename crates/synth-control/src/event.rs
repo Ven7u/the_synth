@@ -17,6 +17,10 @@ pub enum ControlEvent {
     /// The arp iterates these pitches until a new ChordHold arrives.
     /// Sent by the UI/MIDI layer; heap allocation is fine on the sender thread.
     ChordHold { track: u8, notes: Vec<u8> },
+    /// Restart arpeggiator timing/step state for a track.
+    ArpRestart { track: u8 },
+    /// Restart scale-walker timing/index state for a track.
+    WalkerRestart { track: u8 },
 }
 
 /// Addressable engine parameters reachable via `ControlEvent::SetParam`.

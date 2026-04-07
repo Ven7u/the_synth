@@ -93,6 +93,13 @@ pub struct Patch {
     #[serde(default = "default_shimmer_width")] pub fx_shimmer_width: f32,
     #[serde(default = "default_shimmer_spread")] pub fx_shimmer_spread: f32,
     #[serde(default = "default_shimmer_pitch")] pub fx_shimmer_pitch: u8,
+    #[serde(default)] pub fx_crystal_on: bool,
+    #[serde(default = "default_crystal_mix")] pub fx_crystal_mix: f32,
+    #[serde(default = "default_crystal_grain")] pub fx_crystal_grain_ms: f32,
+    #[serde(default = "default_crystal_scatter")] pub fx_crystal_scatter: f32,
+    #[serde(default = "default_crystal_feedback")] pub fx_crystal_feedback: f32,
+    #[serde(default = "default_crystal_delay")] pub fx_crystal_delay_ms: f32,
+    #[serde(default = "default_crystal_pitch")] pub fx_crystal_pitch: u8,
 }
 
 fn default_overdrive_drive()  -> f32 { 3.0 }
@@ -111,6 +118,12 @@ fn default_shimmer_amt()      -> f32 { 0.5 }
 fn default_shimmer_width()    -> f32 { 1.35 }
 fn default_shimmer_spread()   -> f32 { 0.10 }
 fn default_shimmer_pitch()    -> u8  { 1 }
+fn default_crystal_mix()      -> f32 { 0.35 }
+fn default_crystal_grain()    -> f32 { 120.0 }
+fn default_crystal_scatter()  -> f32 { 0.25 }
+fn default_crystal_feedback() -> f32 { 0.35 }
+fn default_crystal_delay()    -> f32 { 260.0 }
+fn default_crystal_pitch()    -> u8  { 2 }
 
 // ---------------------------------------------------------------------------
 // Default patches — loaded from assets/patches/**/*.json at compile time

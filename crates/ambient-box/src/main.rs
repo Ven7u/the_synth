@@ -156,6 +156,28 @@ where
                         let ti = track as usize % TRACK_COUNT;
                         arp_states[ti].set_chord(&notes);
                     }
+                    ControlEvent::ArpRestart { track } => {
+                        let ti = track as usize % TRACK_COUNT;
+                        if let Some(pitch) = arp_states[ti].restart() {
+                            for (slot, note) in voice_notes[ti].iter_mut().enumerate() {
+                                if *note == Some(pitch) {
+                                    eng.tracks[ti].voice_gates[slot].set(0.0);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    ControlEvent::WalkerRestart { track } => {
+                        let ti = track as usize % TRACK_COUNT;
+                        if let Some(pitch) = walker_states[ti].restart() {
+                            for (slot, note) in voice_notes[ti].iter_mut().enumerate() {
+                                if *note == Some(pitch) {
+                                    eng.tracks[ti].voice_gates[slot].set(0.0);
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -255,6 +277,15 @@ struct AmbientBoxApp {
     shimmer_size:  f32,
     shimmer_damp:  f32,
     shimmer_pitch: u8,
+
+    // Global crystallizer UI state
+    crystal_on:       bool,
+    crystal_mix:      f32,
+    crystal_grain_ms: f32,
+    crystal_scatter:  f32,
+    crystal_feedback: f32,
+    crystal_delay_ms: f32,
+    crystal_pitch:    u8,
 }
 
 impl AmbientBoxApp {
@@ -290,6 +321,13 @@ impl AmbientBoxApp {
             shimmer_size:  0.6,
             shimmer_damp:  0.5,
             shimmer_pitch: 1,
+            crystal_on:       false,
+            crystal_mix:      0.35,
+            crystal_grain_ms: 120.0,
+            crystal_scatter:  0.25,
+            crystal_feedback: 0.35,
+            crystal_delay_ms: 260.0,
+            crystal_pitch:    2,
         }
     }
 
@@ -426,6 +464,41 @@ impl eframe::App for AmbientBoxApp {
                         }
                     }
                 });
+
+                ui.separator();
+
+                // --- Crystal global bus ---
+                ui.horizontal(|ui| {
+                    let col = egui::Color32::from_rgb(255, 170, 90);
+                    let lbl = egui::RichText::new("CRYSTAL").strong()
+                        .color(if self.crystal_on { col } else { egui::Color32::GRAY });
+                    if ui.button(lbl).on_hover_text("Global crystallizer bus (granular pitch-shift delay).").clicked() {
+                        self.crystal_on = !self.crystal_on;
+                        eng.crystal.mix.set(if self.crystal_on { self.crystal_mix } else { 0.0 });
+                    }
+                    if synth_ui::knob(ui, "Mix", &mut self.crystal_mix, 0.0, 1.0) {
+                        if self.crystal_on { eng.crystal.mix.set(self.crystal_mix); }
+                    }
+                    if synth_ui::knob(ui, "Grain", &mut self.crystal_grain_ms, 10.0, 400.0) {
+                        eng.crystal.grain_ms.set(self.crystal_grain_ms);
+                    }
+                    if synth_ui::knob(ui, "Scatter", &mut self.crystal_scatter, 0.0, 1.0) {
+                        eng.crystal.scatter.set(self.crystal_scatter);
+                    }
+                    if synth_ui::knob(ui, "Delay", &mut self.crystal_delay_ms, 20.0, 1200.0) {
+                        eng.crystal.delay_ms.set(self.crystal_delay_ms);
+                    }
+                    if synth_ui::knob(ui, "Feedback", &mut self.crystal_feedback, 0.0, 0.95) {
+                        eng.crystal.feedback.set(self.crystal_feedback);
+                    }
+                    ui.label("Pitch:");
+                    for (i, lbl) in ["0.5x", "1x", "2x", "4x"].iter().enumerate() {
+                        if ui.selectable_label(self.crystal_pitch == i as u8, *lbl).clicked() {
+                            self.crystal_pitch = i as u8;
+                            eng.crystal.pitch.store(i as u8, Ordering::Relaxed);
+                        }
+                    }
+                });
             }
 
             ui.separator();
@@ -443,13 +516,30 @@ impl eframe::App for AmbientBoxApp {
                         let lbl = egui::RichText::new("ARP").strong()
                             .color(if arp_on { egui::Color32::from_rgb(0,220,160) } else { egui::Color32::GRAY });
                         if ui.button(lbl).clicked() {
-                            arp_cfg.enabled.store(!arp_on, Ordering::Relaxed);
+                            let new_on = !arp_on;
+                            arp_cfg.enabled.store(new_on, Ordering::Relaxed);
+                            if !new_on {
+                                let _ = self.control.try_send(ControlEvent::ChordHold {
+                                    track: ti as u8,
+                                    notes: Vec::new(),
+                                });
+                            }
+                        }
+                        if ui.button("RST").on_hover_text("Restart arp phase/step.").clicked() {
+                            let _ = self.control.try_send(ControlEvent::ArpRestart { track: ti as u8 });
                         }
                         let hold = arp_cfg.hold.load(Ordering::Relaxed);
                         let hl = egui::RichText::new("HOLD")
                             .color(if hold { egui::Color32::from_rgb(255,200,0) } else { egui::Color32::GRAY });
                         if ui.button(hl).clicked() {
-                            arp_cfg.hold.store(!hold, Ordering::Relaxed);
+                            let new_hold = !hold;
+                            arp_cfg.hold.store(new_hold, Ordering::Relaxed);
+                            if !new_hold {
+                                let _ = self.control.try_send(ControlEvent::ChordHold {
+                                    track: ti as u8,
+                                    notes: Vec::new(),
+                                });
+                            }
                         }
                     });
                     cols[0].add_enabled_ui(arp_on, |ui| {
@@ -499,6 +589,9 @@ impl eframe::App for AmbientBoxApp {
                             .color(if walk_on { egui::Color32::from_rgb(100,180,255) } else { egui::Color32::GRAY });
                         if ui.button(lbl).clicked() {
                             walker_cfg.enabled.store(!walk_on, Ordering::Relaxed);
+                        }
+                        if ui.button("RST").on_hover_text("Restart walker phase/index.").clicked() {
+                            let _ = self.control.try_send(ControlEvent::WalkerRestart { track: ti as u8 });
                         }
                     });
                     cols[1].add_enabled_ui(walk_on, |ui| {

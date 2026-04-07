@@ -200,6 +200,7 @@ pub struct ArpState {
 
     rng:         Lcg,
     prev_enabled: bool,
+    restart_pending: bool,
 }
 
 impl ArpState {
@@ -209,6 +210,7 @@ impl ArpState {
             step_idx: 0, current: None, phase: 0.0, gate_fired: false,
             direction: 1, rng: Lcg::new(0xDEAD_BEEF_1234_5678),
             prev_enabled: false,
+            restart_pending: false,
         }
     }
 
@@ -252,15 +254,44 @@ impl ArpState {
         self.current.take()
     }
 
+    /// Restart arp sequencing without clearing the held chord.
+    /// Returns a note_off for the currently sounding note (if any).
+    pub fn restart(&mut self) -> Option<u8> {
+        let off = self.current.take();
+        self.step_idx = 0;
+        self.phase = 1.0; // force immediate retrigger on next tick
+        self.gate_fired = false;
+        self.direction = 1;
+        self.restart_pending = true;
+        off
+    }
+
     /// Advance the arpeggiator by `frames` samples. Call once per audio buffer.
     /// Returns optional note_off (gate end or step boundary) and note_on (new step).
     pub fn tick(&mut self, cfg: &ArpShared, frames: usize, sr: f64) -> ArpEvents {
         let enabled = cfg.enabled.load(Ordering::Relaxed);
 
-        // Transition: just disabled → fire NoteOff for sounding note
+        // Transition: just disabled -> fire NoteOff and fully reset arp state.
+        // Without this, stale held notes can survive a disable/enable cycle.
         if !enabled && self.prev_enabled {
+            let off = self.current.take();
+            self.held_count = 0;
+            self.step_idx = 0;
+            self.phase = 0.0;
+            self.gate_fired = false;
+            self.direction = 1;
+            self.restart_pending = false;
             self.prev_enabled = false;
-            return ArpEvents { note_on: None, note_off: self.current.take() };
+            return ArpEvents { note_on: None, note_off: off };
+        }
+
+        // Transition: just enabled -> restart from a clean step boundary.
+        if enabled && !self.prev_enabled {
+            self.step_idx = 0;
+            self.phase = 1.0; // force immediate first step note_on on this tick
+            self.gate_fired = false;
+            self.direction = 1;
+            self.restart_pending = true;
         }
         self.prev_enabled = enabled;
 
@@ -304,7 +335,12 @@ impl ArpState {
             if self.held_count > 0 {
                 let mode         = ArpMode::from_u8(cfg.mode.load(Ordering::Relaxed));
                 let octave_range = cfg.octave_range.load(Ordering::Relaxed).max(1).min(4) as usize;
-                let note         = self.advance(mode, octave_range);
+                let note = if self.restart_pending {
+                    self.restart_pending = false;
+                    self.note_at_index(mode, octave_range)
+                } else {
+                    self.advance(mode, octave_range)
+                };
                 self.current     = Some(note);
                 ev.note_on       = Some(note);
             }
@@ -316,6 +352,18 @@ impl ArpState {
     fn rebuild_sorted(&mut self) {
         self.held_sorted[..self.held_count].copy_from_slice(&self.held[..self.held_count]);
         self.held_sorted[..self.held_count].sort_unstable();
+    }
+
+    fn note_at_index(&mut self, mode: ArpMode, octave_range: usize) -> u8 {
+        let total = (self.held_count * octave_range).max(1);
+        self.step_idx = self.step_idx % total;
+        let octave   = self.step_idx / self.held_count;
+        let note_idx = self.step_idx % self.held_count;
+        let base = match mode {
+            ArpMode::AsPlayed => self.held[note_idx],
+            _                 => self.held_sorted[note_idx],
+        };
+        base.saturating_add(octave as u8 * 12)
     }
 
     fn advance(&mut self, mode: ArpMode, octave_range: usize) -> u8 {
@@ -345,13 +393,7 @@ impl ArpState {
             ArpMode::Random => self.rng.next_usize(total),
         };
 
-        let octave   = self.step_idx / self.held_count;
-        let note_idx = self.step_idx % self.held_count;
-        let base = match mode {
-            ArpMode::AsPlayed => self.held[note_idx],
-            _                 => self.held_sorted[note_idx],
-        };
-        base.saturating_add(octave as u8 * 12)
+        self.note_at_index(mode, octave_range)
     }
 }
 
@@ -400,6 +442,7 @@ pub struct ScaleWalker {
     gate_fired:   bool,
     rng:          Lcg,
     prev_enabled: bool,
+    restart_pending: bool,
     // cached to detect config changes
     prev_scale:   u8,
     prev_root:    u8,
@@ -414,6 +457,7 @@ impl ScaleWalker {
             phase: 0.0, gate_fired: false,
             rng: Lcg::new(0xFEED_FACE_CAFE_BABE),
             prev_enabled: false,
+            restart_pending: false,
             prev_scale: 255, prev_root: 255, prev_oct: 255,
         };
         w.rebuild(Scale::Major as u8, 60, 2);
@@ -435,10 +479,23 @@ impl ScaleWalker {
             self.prev_oct   = oct;
         }
 
-        // Transition: just disabled
+        // Transition: just disabled -> fire NoteOff and reset walker state.
         if !enabled && self.prev_enabled {
+            let off = self.current.take();
+            self.phase = 0.0;
+            self.gate_fired = false;
+            self.current_idx = 0;
+            self.restart_pending = false;
             self.prev_enabled = false;
-            return ArpEvents { note_on: None, note_off: self.current.take() };
+            return ArpEvents { note_on: None, note_off: off };
+        }
+
+        // Transition: just enabled -> restart from clean step boundary.
+        if enabled && !self.prev_enabled {
+            self.phase = 1.0; // force immediate first step note_on on this tick
+            self.gate_fired = false;
+            self.current_idx = 0;
+            self.restart_pending = true;
         }
         self.prev_enabled = enabled;
 
@@ -472,12 +529,28 @@ impl ScaleWalker {
                 ev.note_off = Some(note);
             }
 
-            let note     = self.walk_step();
+            let note = if self.restart_pending {
+                self.restart_pending = false;
+                self.scale_notes[self.current_idx]
+            } else {
+                self.walk_step()
+            };
             self.current = Some(note);
             ev.note_on   = Some(note);
         }
 
         ev
+    }
+
+    /// Restart walker sequencing at the first index.
+    /// Returns a note_off for the currently sounding note (if any).
+    pub fn restart(&mut self) -> Option<u8> {
+        let off = self.current.take();
+        self.phase = 1.0; // force immediate retrigger on next tick
+        self.gate_fired = false;
+        self.current_idx = 0;
+        self.restart_pending = true;
+        off
     }
 
     fn rebuild(&mut self, scale: u8, root: u8, octave_range: u8) {
