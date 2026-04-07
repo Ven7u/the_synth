@@ -894,7 +894,7 @@ This section defines the concrete implementation phases. Each phase builds on th
 is independently releasable, and does not break existing functionality. The plan reflects
 the **platform + two-app architecture** described in §3 and §13.
 
-### Current state (as of Phase 2 complete)
+### Current state (as of Phase 3 complete)
 
 | Area | Status |
 |---|---|
@@ -906,37 +906,42 @@ the **platform + two-app architecture** described in §3 and §13.
 | Workspace split (`synth-dsp`, `synth-engine`, root app) | ✅ Phase 1 done |
 | `synth-control` crate, `ControlEvent` bus | ✅ Phase 2 done |
 | Voice allocation on audio thread | ✅ Phase 2 done |
-| `the_synth` standalone app | ✅ Working, unchanged going forward |
-| `synth-ui` shared widget library | 🔲 Planned |
-| `ambient-engine` multi-track engine | 🔲 Planned |
-| `ambient-box` app binary | 🔲 Planned |
-| Arpeggiator | 🔲 Planned |
-| Shimmer reverb + Crystallizer | 🔲 Planned |
-| Macro + Scene system | 🔲 Planned |
-| Generative patterns + Automation | 🔲 Planned |
-| `synth-bevy` Bevy integration | 🔲 Planned |
+| `the_synth` standalone app | ✅ Working, frozen going forward |
+| `synth-ui` shared widget library | ✅ Phase 3 done (skeleton) |
+| `ambient-engine` multi-track engine | ✅ Phase 3 done (skeleton) |
+| `ambient-box` app binary | ✅ Phase 3 done (skeleton — minimal UX, intentional) |
+| Arpeggiator | 🔲 Phase 4 |
+| Shimmer reverb + Crystallizer | 🔲 Phase 5 |
+| `ambient-box` UX refinement | 🔲 Evolves naturally through Phases 4–6 |
+| Macro + Scene system | 🔲 Phase 6 |
+| Generative patterns + Automation | 🔲 Phase 8 |
+| `synth-bevy` Bevy integration | 🔲 Phase 7 |
 
 ---
 
-### Phase 3 — `ambient-box` skeleton + `ambient-engine` foundation
+### ✅ Phase 3 — `ambient-box` skeleton + `ambient-engine` foundation (done)
 
 **Goal:** Create the two new crates (`ambient-engine`, `ambient-box`) and the shared widget
 library (`synth-ui`). The `ambient-box` app launches, produces audio from four independent
 tracks, and the keyboard/MIDI can play each track. The existing `the_synth` is untouched.
 
-| Task | Description |
-|---|---|
-| 3.1 Create `synth-ui` | New platform lib crate; move shared widgets: oscilloscope, ADSR visualizer, keyboard, peak meter, knobs |
-| 3.2 Update `the_synth` to use `synth-ui` | Replace inline widget code with `synth-ui` calls; verify no regression |
-| 3.3 Create `ambient-engine` crate | `TrackState` struct (one `AudioState` + send levels per track); 4-track DSP graph builder; per-track `ControlEvent` routing with track index |
-| 3.4 `TrackMixer` | Sum 4 tracks with per-track volume `Shared`; normalize ÷4 before global buses |
-| 3.5 Placeholder global buses | Two `Shared`-controlled mix buses (shimmer send, crystal send) — dry passthrough until Phase 5 |
-| 3.6 Create `ambient-box` binary | Thin shell: cpal stream, egui window, MIDI, feeds `ambient-engine` |
-| 3.7 Track selector UI | Row of 4 track buttons; active track routes keyboard/MIDI input; existing synth panel renders active track's params |
-| 3.8 Per-track send knobs | Shimmer send + crystal send sliders per track strip |
+| Task | Status | Notes |
+|---|---|---|
+| 3.1 Create `synth-ui` | ✅ | `knob()` widget; boundary established |
+| 3.2 Update `the_synth` to use `synth-ui` | 🔲 deferred | Not blocking; `the_synth` is frozen |
+| 3.3 Create `ambient-engine` | ✅ | `TrackState` × 4, per-track DSP graph, `AmbientEngine` |
+| 3.4 Per-track volume + `TrackMixer` | ✅ | `track_vol` Shared, normalized sum |
+| 3.5 Placeholder global buses | ✅ | `shimmer_send` / `crystal_send` Shared per track |
+| 3.6 Create `ambient-box` binary | ✅ | cpal stream, egui window, MIDI |
+| 3.7 Track selector UI | ✅ | 4-button row, active track routes input |
+| 3.8 Per-track send knobs | ✅ | Volume, cutoff, resonance, shimmer, crystal |
 
-After Phase 3: `ambient-box` runs alongside `the_synth` as a separate binary. Four independent
-tracks, each with the full existing synth panel, plus placeholders for the effect buses.
+**Run:** `cargo run -p ambient-box`
+
+The UX is intentionally minimal at this stage. The full layer mixer, patch editor, and
+performance surface will emerge naturally as Phases 4–6 add the features that define what
+the controls need to do. Designing it in full before Shimmer and the Macro system exist
+would mean designing blind.
 
 ---
 
@@ -1026,7 +1031,7 @@ graph LR
     P0["✅ Phase 0\nSingle-voice\ncomplete"]
     P1["✅ Phase 1\nWorkspace\nsplit"]
     P2["✅ Phase 2\nControl layer"]
-    P3["Phase 3\nambient-box\nskeleton"]
+    P3["✅ Phase 3\nambient-box\nskeleton"]
     P4["Phase 4\nArpeggiator"]
     P5["Phase 5\nShimmer +\nCrystallizer"]
     P6["Phase 6\nMacro +\nScene"]
@@ -1043,7 +1048,7 @@ graph LR
     style P0 fill:#1a3a1a,stroke:#4aa54a
     style P1 fill:#1a3a1a,stroke:#4aa54a
     style P2 fill:#1a3a1a,stroke:#4aa54a
-    style P3 fill:#2a1a3a,stroke:#7f4aa5
+    style P3 fill:#1a3a1a,stroke:#4aa54a
     style P4 fill:#2a1a3a,stroke:#7f4aa5
     style P5 fill:#2a1a3a,stroke:#7f4aa5
     style P6 fill:#3a2a1a,stroke:#a57f4a
