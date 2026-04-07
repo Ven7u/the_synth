@@ -4,9 +4,7 @@
 #![allow(clippy::precedence)]
 
 mod audio;
-mod envelope;
 mod midi;
-mod osc;
 mod patch;
 mod sequencer;
 
