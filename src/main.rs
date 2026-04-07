@@ -4,16 +4,15 @@
 #![allow(clippy::precedence)]
 
 mod audio;
-mod midi;
 mod patch;
 mod sequencer;
 
-use audio::{AudioEngine, AudioState, VOICE_COUNT};
-use midi::{MidiEngine, MidiEvent};
+use audio::{AudioEngine, AudioState};
+use synth_control::midi::{MidiEngine, MidiEvent};
+use synth_control::{ControlEvent, ControlSender};
 use patch::{Patch, default_patches};
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, Rounding, Sense, Stroke, Vec2};
-use fundsp::prelude::midi_hz;
 use sequencer::{
     ChordKbState, ChordSeqState, NoteSeqState, SeqMode, ScaleType,
     NOTE_NAMES, DEGREE_LABELS, chord_name, chord_quality,
@@ -24,6 +23,7 @@ use std::sync::Arc;
 fn main() -> eframe::Result {
     let engine = AudioEngine::new().expect("Failed to start audio");
     let state = Arc::clone(&engine.state);
+    let control_tx = engine.control_tx.clone();
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -35,7 +35,7 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "The Synth",
         options,
-        Box::new(move |_cc| Ok(Box::new(SynthApp::new(state, engine)))),
+        Box::new(move |_cc| Ok(Box::new(SynthApp::new(state, engine, control_tx)))),
     )
 }
 
@@ -47,6 +47,7 @@ struct SynthApp {
     _audio: AudioEngine, // keeps cpal stream alive
     state: Arc<AudioState>,
     midi: MidiEngine,
+    control: ControlSender,
 
     // OSC bank
     osc_wave: [usize; 3], // 0=sine 1=saw 2=square 3=triangle
@@ -93,8 +94,6 @@ struct SynthApp {
     // Keyboard
     piano_octave: i32,
     piano_held_midi: std::collections::HashSet<u8>,
-    piano_voice_notes: [Option<u8>; VOICE_COUNT],
-    piano_steal_idx: usize,
     piano_mouse_midi: Option<u8>,
 
     // Peak meter
@@ -160,13 +159,14 @@ struct SynthApp {
 }
 
 impl SynthApp {
-    fn new(state: Arc<AudioState>, audio: AudioEngine) -> Self {
+    fn new(state: Arc<AudioState>, audio: AudioEngine, control: ControlSender) -> Self {
         let mut midi = MidiEngine::new();
         midi.list_ports(); // populate port list at startup
         Self {
             _audio: audio,
             state,
             midi,
+            control,
             osc_wave: [1, 0, 0], // OSC1=saw, OSC2=sine, OSC3=sine
             osc_octave: [0, 0, 0],
             osc_detune: [0.0, 0.0, 0.0],
@@ -198,8 +198,6 @@ impl SynthApp {
             master_vol: 0.5,
             piano_octave: 4,
             piano_held_midi: std::collections::HashSet::new(),
-            piano_voice_notes: [None; VOICE_COUNT],
-            piano_steal_idx: 0,
             piano_mouse_midi: None,
             peak_display: 0.0,
             peak_hold: 0.0,
@@ -257,59 +255,19 @@ impl SynthApp {
 // ---------------------------------------------------------------------------
 
 impl SynthApp {
-    fn voice_on(&mut self, midi: u8) {
-        // If this note is already playing at full gate, ignore (key repeat).
-        // If it's still in the slot but releasing (gate=0), fall through and retrigger it.
-        if self.piano_voice_notes.iter().enumerate().any(|(slot, &n)| {
-            n == Some(midi) && self.state.voice_gates[slot].value() > 0.5
-        }) {
-            return;
-        }
-        // Prefer the existing slot for this note (retrigger from release),
-        // then a free slot, then steal the oldest.
-        let slot = self
-            .piano_voice_notes
-            .iter()
-            .position(|&n| n == Some(midi))
-            .or_else(|| self.piano_voice_notes.iter().position(|n| n.is_none()))
-            .unwrap_or_else(|| {
-                let s = self.piano_steal_idx % VOICE_COUNT;
-                self.piano_steal_idx += 1;
-                s
-            });
-        self.piano_voice_notes[slot] = Some(midi);
-        self.state.voice_freq_targets[slot].set(midi_hz(midi as f64) as f32);
-        // Stamp the time just before setting the gate — the audio callback will
-        // measure how long it takes to reach this note.
+    /// Push a NoteOn event into the audio thread's control queue.
+    fn push_note_on(&mut self, midi: u8) {
+        // Stamp the time before enqueuing — audio callback measures how long it takes
+        // to consume this event (round-trip latency indicator).
         if let Ok(mut t) = self.state.note_on_time.lock() {
             *t = Some(std::time::Instant::now());
         }
-        self.state.voice_gates[slot].set(1.0);
+        let _ = self.control.try_send(ControlEvent::NoteOn { pitch: midi, velocity: 100 });
     }
 
-    fn voice_off(&mut self, midi: u8) {
-        for (slot, note) in self.piano_voice_notes.iter_mut().enumerate() {
-            if *note == Some(midi) {
-                // Set gate to 0 to start release, but keep the slot occupied so it
-                // isn't stolen before the release finishes. The slot is freed in
-                // tick_release_cleanup() once the envelope cursor returns to idle.
-                self.state.voice_gates[slot].set(0.0);
-                return;
-            }
-        }
-    }
-
-    /// Free voice slots whose envelopes have finished releasing (cursor == 0.0).
-    fn tick_release_cleanup(&mut self) {
-        for (slot, note) in self.piano_voice_notes.iter_mut().enumerate() {
-            if note.is_some() && self.state.voice_gates[slot].value() < 0.5 {
-                let cursor = self.state.amp_cursors[slot].value();
-                if cursor < 0.5 {
-                    // Envelope is idle — safe to free the slot
-                    *note = None;
-                }
-            }
-        }
+    /// Push a NoteOff event into the audio thread's control queue.
+    fn push_note_off(&mut self, midi: u8) {
+        let _ = self.control.try_send(ControlEvent::NoteOff { pitch: midi });
     }
 }
 
@@ -326,10 +284,10 @@ impl SynthApp {
                     // Scale velocity to master volume modulation is left for later.
                     // For now just trigger the note.
                     let _ = velocity;
-                    self.voice_on(note);
+                    self.push_note_on(note);
                 }
                 MidiEvent::NoteOff { note, .. } => {
-                    self.voice_off(note);
+                    self.push_note_off(note);
                 }
                 MidiEvent::CC { cc, value, .. } => {
                     // Normalised 0..1 value for most CCs
@@ -385,7 +343,7 @@ impl SynthApp {
 
         // Release all notes from the previous step
         let prev: Vec<u8> = self.seq_prev_notes.drain(..).collect();
-        for m in prev { self.voice_off(m); }
+        for m in prev { self.push_note_off(m); }
 
         let seq_length = match self.seq_mode {
             SeqMode::NoteSeq  => self.note_seq.length,
@@ -411,7 +369,7 @@ impl SynthApp {
         };
 
         for m in notes_to_play {
-            self.voice_on(m);
+            self.push_note_on(m);
             self.seq_prev_notes.push(m);
         }
         ctx.request_repaint_after(step_dur);
@@ -426,7 +384,6 @@ impl eframe::App for SynthApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.tick_midi();
         self.tick_sequencer(ctx);
-        self.tick_release_cleanup();
 
         self.ui_patch_browser(ctx);
 
@@ -1176,7 +1133,7 @@ impl SynthApp {
             }
             // Clear held midi so notes don't bleed if mode was previously normal
             let prev: Vec<u8> = self.piano_held_midi.drain().collect();
-            for m in prev { self.voice_off(m); }
+            for m in prev { self.push_note_off(m); }
         } else if self.seq_mode == SeqMode::ChordKb {
             let mut current_degrees = std::collections::HashSet::<usize>::new();
             ui.input(|inp| {
@@ -1187,7 +1144,7 @@ impl SynthApp {
             // Press new degrees
             for &deg in &current_degrees {
                 if !self.chord_kb.kb_held.contains(&deg) {
-                    for m in self.chord_kb.chord_notes(deg) { self.voice_on(m); }
+                    for m in self.chord_kb.chord_notes(deg) { self.push_note_on(m); }
                 }
             }
             // Release removed degrees
@@ -1195,18 +1152,18 @@ impl SynthApp {
                 .filter(|&&d| !current_degrees.contains(&d))
                 .copied().collect();
             for deg in released {
-                for m in self.chord_kb.chord_notes(deg) { self.voice_off(m); }
+                for m in self.chord_kb.chord_notes(deg) { self.push_note_off(m); }
             }
             self.chord_kb.kb_held = current_degrees;
             // Also clear piano_held_midi so notes don't leak when switching modes
             let prev_midi: Vec<u8> = self.piano_held_midi.drain().collect();
-            for m in prev_midi { self.voice_off(m); }
+            for m in prev_midi { self.push_note_off(m); }
         } else {
             // Normal note mode — release any chord KB notes held from previous mode
             if !self.chord_kb.kb_held.is_empty() {
                 let held: Vec<usize> = self.chord_kb.kb_held.drain().collect();
                 for deg in held {
-                    for m in self.chord_kb.chord_notes(deg) { self.voice_off(m); }
+                    for m in self.chord_kb.chord_notes(deg) { self.push_note_off(m); }
                 }
             }
             let mut current_held = std::collections::HashSet::<u8>::new();
@@ -1218,12 +1175,12 @@ impl SynthApp {
                 }
             });
             for &midi in &current_held {
-                if !self.piano_held_midi.contains(&midi) { self.voice_on(midi); }
+                if !self.piano_held_midi.contains(&midi) { self.push_note_on(midi); }
             }
             let released: Vec<u8> = self.piano_held_midi.iter()
                 .filter(|&&m| !current_held.contains(&m))
                 .copied().collect();
-            for midi in released { self.voice_off(midi); }
+            for midi in released { self.push_note_off(midi); }
             self.piano_held_midi = current_held;
         }
 
@@ -1301,14 +1258,14 @@ impl SynthApp {
             if let Some(midi) = clicked_midi {
                 if self.piano_mouse_midi != Some(midi) {
                     if let Some(old) = self.piano_mouse_midi {
-                        self.voice_off(old);
+                        self.push_note_off(old);
                     }
                     self.piano_mouse_midi = Some(midi);
-                    self.voice_on(midi);
+                    self.push_note_on(midi);
                 }
             }
         } else if let Some(midi) = self.piano_mouse_midi.take() {
-            self.voice_off(midi);
+            self.push_note_off(midi);
         }
     }
 }
@@ -1344,7 +1301,7 @@ impl SynthApp {
                 if ui.button(label).on_hover_text(tip).clicked() && !active {
                     // Stop playback when switching modes
                     let prev: Vec<u8> = self.seq_prev_notes.drain(..).collect();
-                    for m in prev { self.voice_off(m); }
+                    for m in prev { self.push_note_off(m); }
                     self.seq_playing = false;
                     self.seq_current_step = 0;
                     self.seq_mode = mode;
@@ -1360,7 +1317,7 @@ impl SynthApp {
                     self.seq_playing = !self.seq_playing;
                     if !self.seq_playing {
                         let prev: Vec<u8> = self.seq_prev_notes.drain(..).collect();
-                        for m in prev { self.voice_off(m); }
+                        for m in prev { self.push_note_off(m); }
                     }
                 }
                 ui.label("BPM:").on_hover_text("Sequencer tempo in beats per minute.");
@@ -1631,15 +1588,15 @@ impl SynthApp {
                 if resp.is_pointer_button_down_on() && !is_held_mouse {
                     // Release previous mouse-held chord if any
                     if let Some(prev) = self.chord_kb.held_degree {
-                        for m in self.chord_kb.chord_notes(prev) { self.voice_off(m); }
+                        for m in self.chord_kb.chord_notes(prev) { self.push_note_off(m); }
                     }
                     self.chord_kb.held_degree = Some(degree);
-                    for m in self.chord_kb.chord_notes(degree) { self.voice_on(m); }
+                    for m in self.chord_kb.chord_notes(degree) { self.push_note_on(m); }
                 }
                 // Mouse release — only fires if the mouse was the one holding this chord
                 if !resp.is_pointer_button_down_on() && is_held_mouse {
                     self.chord_kb.held_degree = None;
-                    for m in self.chord_kb.chord_notes(degree) { self.voice_off(m); }
+                    for m in self.chord_kb.chord_notes(degree) { self.push_note_off(m); }
                 }
             }
         });

@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/synth-dsp", "crates/synth-engine"]
+members = [".", "crates/synth-dsp", "crates/synth-engine", "crates/synth-control"]
 resolver = "2"
 
 [package]
@@ -10,6 +10,7 @@ edition = "2021"
 [dependencies]
 synth-dsp    = { path = "crates/synth-dsp" }
 synth-engine = { path = "crates/synth-engine" }
+synth-control = { path = "crates/synth-control" }
 fundsp      = { version = "0.23", features = ["files", "fft"] }
 cpal        = "0.15"
 anyhow      = "1"

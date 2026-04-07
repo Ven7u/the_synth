@@ -5,25 +5,30 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample, Stream};
 use fundsp::prelude32::*;
+use fundsp::prelude::midi_hz;
 use std::sync::Arc;
 
 use synth_engine::audio::build_synth_graph;
+use synth_control::{make_control_channel, ControlSender, ControlReceiver, ControlEvent, ParamId};
 
 // Re-export so main.rs can keep its existing import unchanged.
 pub use synth_engine::audio::{AudioState, VOICE_COUNT};
 
 pub struct AudioEngine {
     pub state: Arc<AudioState>,
+    pub control_tx: ControlSender,
     _stream: Stream,
 }
 
 impl AudioEngine {
     pub fn new() -> anyhow::Result<Self> {
         let state = Arc::new(AudioState::new());
-        let stream = build_stream(Arc::clone(&state))?;
+        let (tx, rx) = make_control_channel(1024);
+        let stream = build_stream(Arc::clone(&state), rx)?;
         stream.play()?;
         Ok(Self {
             state,
+            control_tx: tx,
             _stream: stream,
         })
     }
@@ -33,7 +38,7 @@ impl AudioEngine {
 // cpal stream
 // ---------------------------------------------------------------------------
 
-fn build_stream(state: Arc<AudioState>) -> anyhow::Result<Stream> {
+fn build_stream(state: Arc<AudioState>, rx: ControlReceiver) -> anyhow::Result<Stream> {
     let host = cpal::default_host();
     let device = host
         .default_output_device()
@@ -42,9 +47,9 @@ fn build_stream(state: Arc<AudioState>) -> anyhow::Result<Stream> {
     let sr = config.sample_rate().0 as f64;
 
     let stream = match config.sample_format() {
-        cpal::SampleFormat::F32 => make_stream::<f32>(&device, &config.into(), state, sr)?,
-        cpal::SampleFormat::I16 => make_stream::<i16>(&device, &config.into(), state, sr)?,
-        cpal::SampleFormat::U16 => make_stream::<u16>(&device, &config.into(), state, sr)?,
+        cpal::SampleFormat::F32 => make_stream::<f32>(&device, &config.into(), state, sr, rx)?,
+        cpal::SampleFormat::I16 => make_stream::<i16>(&device, &config.into(), state, sr, rx)?,
+        cpal::SampleFormat::U16 => make_stream::<u16>(&device, &config.into(), state, sr, rx)?,
         _ => anyhow::bail!("Unsupported sample format"),
     };
     Ok(stream)
@@ -55,6 +60,7 @@ fn make_stream<T>(
     config: &cpal::StreamConfig,
     state: Arc<AudioState>,
     sr: f64,
+    rx: ControlReceiver,
 ) -> anyhow::Result<Stream>
 where
     T: SizedSample + FromSample<f32>,
@@ -84,9 +90,64 @@ where
     let attack_coeff = (-1.0_f64 / (0.0001 * sr)).exp() as f32; // ~0.1ms attack
     let release_coeff = (-1.0_f64 / (0.05 * sr)).exp() as f32; // ~50ms release
 
+    // Voice allocation state — moved from UI thread to audio callback.
+    // slot → Option<MIDI pitch> for each of VOICE_COUNT voices.
+    let mut voice_notes: [Option<u8>; VOICE_COUNT] = [None; VOICE_COUNT];
+    let mut steal_idx: usize = 0;
+
     let stream = device.build_output_stream(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+            // --- Release cleanup: free slots whose envelopes have finished ---
+            for (slot, note) in voice_notes.iter_mut().enumerate() {
+                if note.is_some() && state.voice_gates[slot].value() < 0.5
+                    && state.amp_cursors[slot].value() < 0.5
+                {
+                    *note = None;
+                }
+            }
+
+            // --- Drain control events ---
+            while let Ok(ev) = rx.try_recv() {
+                match ev {
+                    ControlEvent::NoteOn { pitch, .. } => {
+                        // Ignore if this pitch is already playing at full gate (key repeat).
+                        if voice_notes.iter().enumerate().any(|(s, &n)| {
+                            n == Some(pitch) && state.voice_gates[s].value() > 0.5
+                        }) {
+                            continue;
+                        }
+                        let slot = voice_notes.iter().position(|&n| n == Some(pitch))
+                            .or_else(|| voice_notes.iter().position(|n| n.is_none()))
+                            .unwrap_or_else(|| {
+                                let s = steal_idx % VOICE_COUNT;
+                                steal_idx += 1;
+                                s
+                            });
+                        voice_notes[slot] = Some(pitch);
+                        state.voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
+                        state.voice_gates[slot].set(1.0);
+                    }
+                    ControlEvent::NoteOff { pitch } => {
+                        for (slot, note) in voice_notes.iter_mut().enumerate() {
+                            if *note == Some(pitch) {
+                                state.voice_gates[slot].set(0.0);
+                                break;
+                            }
+                        }
+                    }
+                    ControlEvent::SetParam { param, value } => {
+                        match param {
+                            ParamId::FilterCutoff    => state.cutoff.set(value),
+                            ParamId::FilterResonance => state.resonance.set(value),
+                            ParamId::LfoDepth        => state.lfo_depth.set(value),
+                            ParamId::MasterVolume    => state.master_vol.set(value),
+                            ParamId::LfoPitchMult    => state.lfo_pitch_mult.set(value),
+                        }
+                    }
+                }
+            }
+
             // Capture actual buffer size on first callback (cpal may use Default buffer size
             // which is only known at runtime).
             if !buffer_size_captured {

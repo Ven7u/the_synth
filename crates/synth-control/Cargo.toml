@@ -1,0 +1,9 @@
+[package]
+name = "synth-control"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crossbeam-channel = "0.5"
+midir   = "0.9"
+anyhow  = "1"
