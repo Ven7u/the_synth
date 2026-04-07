@@ -3788,6 +3788,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "synth-dsp"
+version = "0.1.0"
+dependencies = [
+ "fundsp",
+]
+
+[[package]]
+name = "synth-engine"
+version = "0.1.0"
+dependencies = [
+ "fundsp",
+ "synth-dsp",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3822,6 +3837,8 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "synth-dsp",
+ "synth-engine",
 ]
 
 [[package]]
