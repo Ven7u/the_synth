@@ -1,0 +1,518 @@
+//! Chord-responsive arpeggiator and scale walker.
+//!
+//! # Design
+//! - `ArpShared` / `ScaleWalkerShared` — atomic config structs shared between the UI thread
+//!   and the audio callback. Mirror the same pattern as `AudioState`.
+//! - `ArpState` / `ScaleWalker` — mutable algorithm state owned by the audio callback closure.
+//!   No atomics needed: audio thread only.
+//! - `tick(cfg, frames, sr)` — called once per audio buffer. Returns an `ArpEvents` pair
+//!   (optional note_on + optional note_off). Zero heap allocation.
+//!
+//! # Integration
+//! In the audio callback:
+//! 1. Route `ControlEvent::NoteOn/Off` to `arp.note_on/off()` when arp is enabled,
+//!    or directly to voice allocation when disabled.
+//! 2. `ControlEvent::ChordHold` → `arp.set_chord()` regardless of enabled state.
+//! 3. Call `arp.tick(cfg, frames, sr)` once per buffer; handle returned events as if they
+//!    were direct `NoteOn/Off` events hitting the voice allocator.
+//! 4. Same pattern for `ScaleWalker` (no input, just tick).
+
+use fundsp::prelude32::{shared, Shared};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::Arc;
+
+// ---------------------------------------------------------------------------
+// Simple RT-safe LCG — no std RNG, no heap
+// ---------------------------------------------------------------------------
+
+struct Lcg(u64);
+
+impl Lcg {
+    fn new(seed: u64) -> Self { Self(seed | 1) }
+    fn next_u32(&mut self) -> u32 {
+        self.0 = self.0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        ((self.0 >> 33) ^ self.0) as u32
+    }
+    fn next_usize(&mut self, n: usize) -> usize {
+        if n == 0 { return 0; }
+        self.next_u32() as usize % n
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ArpMode {
+    Up       = 0,
+    Down     = 1,
+    UpDown   = 2,
+    Random   = 3,
+    AsPlayed = 4,
+}
+
+impl ArpMode {
+    pub fn from_u8(v: u8) -> Self {
+        match v { 1 => Self::Down, 2 => Self::UpDown, 3 => Self::Random, 4 => Self::AsPlayed, _ => Self::Up }
+    }
+    pub const ALL: &'static [ArpMode] = &[Self::Up, Self::Down, Self::UpDown, Self::Random, Self::AsPlayed];
+    pub const LABELS: &'static [&'static str] = &["Up", "Down", "UpDn", "Rnd", "Played"];
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ClockDiv {
+    Quarter          = 0,
+    Eighth           = 1,
+    Sixteenth        = 2,
+    Thirtysecond     = 3,
+    EighthTriplet    = 4,
+    SixteenthTriplet = 5,
+}
+
+impl ClockDiv {
+    pub fn from_u8(v: u8) -> Self {
+        match v { 1 => Self::Eighth, 2 => Self::Sixteenth, 3 => Self::Thirtysecond,
+                  4 => Self::EighthTriplet, 5 => Self::SixteenthTriplet, _ => Self::Quarter }
+    }
+    /// Step duration as a fraction of one beat.
+    pub fn beats_per_step(self) -> f32 {
+        match self {
+            Self::Quarter          => 1.0,
+            Self::Eighth           => 0.5,
+            Self::Sixteenth        => 0.25,
+            Self::Thirtysecond     => 0.125,
+            Self::EighthTriplet    => 1.0 / 3.0,
+            Self::SixteenthTriplet => 1.0 / 6.0,
+        }
+    }
+    pub const ALL: &'static [ClockDiv] = &[Self::Quarter, Self::Eighth, Self::Sixteenth,
+        Self::Thirtysecond, Self::EighthTriplet, Self::SixteenthTriplet];
+    pub const LABELS: &'static [&'static str] = &["1/4", "1/8", "1/16", "1/32", "1/8T", "1/16T"];
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Scale {
+    Major         = 0,
+    Minor         = 1,
+    Dorian        = 2,
+    Phrygian      = 3,
+    Lydian        = 4,
+    Mixolydian    = 5,
+    Locrian       = 6,
+    Pentatonic    = 7,
+    MinorPenta    = 8,
+    Blues         = 9,
+    Chromatic     = 10,
+}
+
+impl Scale {
+    pub fn from_u8(v: u8) -> Self {
+        match v { 1 => Self::Minor, 2 => Self::Dorian, 3 => Self::Phrygian, 4 => Self::Lydian,
+                  5 => Self::Mixolydian, 6 => Self::Locrian, 7 => Self::Pentatonic,
+                  8 => Self::MinorPenta, 9 => Self::Blues, 10 => Self::Chromatic, _ => Self::Major }
+    }
+    pub fn intervals(self) -> &'static [u8] {
+        match self {
+            Self::Major         => &[0, 2, 4, 5, 7, 9, 11],
+            Self::Minor         => &[0, 2, 3, 5, 7, 8, 10],
+            Self::Dorian        => &[0, 2, 3, 5, 7, 9, 10],
+            Self::Phrygian      => &[0, 1, 3, 5, 7, 8, 10],
+            Self::Lydian        => &[0, 2, 4, 6, 7, 9, 11],
+            Self::Mixolydian    => &[0, 2, 4, 5, 7, 9, 10],
+            Self::Locrian       => &[0, 1, 3, 5, 6, 8, 10],
+            Self::Pentatonic    => &[0, 2, 4, 7, 9],
+            Self::MinorPenta    => &[0, 3, 5, 7, 10],
+            Self::Blues         => &[0, 3, 5, 6, 7, 10],
+            Self::Chromatic     => &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+        }
+    }
+    pub const ALL: &'static [Scale] = &[Self::Major, Self::Minor, Self::Dorian, Self::Phrygian,
+        Self::Lydian, Self::Mixolydian, Self::Locrian, Self::Pentatonic, Self::MinorPenta,
+        Self::Blues, Self::Chromatic];
+    pub const LABELS: &'static [&'static str] = &[
+        "Major", "Minor", "Dorian", "Phrygian", "Lydian", "Mixolyd.",
+        "Locrian", "Penta", "m.Penta", "Blues", "Chromatic",
+    ];
+}
+
+// ---------------------------------------------------------------------------
+// ArpEvents — zero-alloc output from tick()
+// ---------------------------------------------------------------------------
+
+#[derive(Default, Clone, Copy)]
+pub struct ArpEvents {
+    pub note_on:  Option<u8>,
+    pub note_off: Option<u8>,
+}
+
+// ---------------------------------------------------------------------------
+// ArpShared — UI-accessible config (atomics, safe to share across threads)
+// ---------------------------------------------------------------------------
+
+pub struct ArpShared {
+    pub enabled:      Arc<AtomicBool>,
+    pub mode:         Arc<AtomicU8>,  // ArpMode as u8
+    pub division:     Arc<AtomicU8>,  // ClockDiv as u8
+    pub octave_range: Arc<AtomicU8>,  // 1-4
+    pub gate:         Shared,         // 0.05-1.0  (fraction of step note is held)
+    pub hold:         Arc<AtomicBool>,// latch: keep chord after keys released
+    pub bpm:          Shared,         // 20-300
+}
+
+impl ArpShared {
+    pub fn new() -> Self {
+        Self {
+            enabled:      Arc::new(AtomicBool::new(false)),
+            mode:         Arc::new(AtomicU8::new(ArpMode::Up as u8)),
+            division:     Arc::new(AtomicU8::new(ClockDiv::Eighth as u8)),
+            octave_range: Arc::new(AtomicU8::new(1)),
+            gate:         shared(0.7),
+            hold:         Arc::new(AtomicBool::new(false)),
+            bpm:          shared(120.0),
+        }
+    }
+}
+
+impl Default for ArpShared { fn default() -> Self { Self::new() } }
+
+// ---------------------------------------------------------------------------
+// ArpState — mutable algorithm state, audio callback only
+// ---------------------------------------------------------------------------
+
+pub struct ArpState {
+    // Held notes — insertion order (for AsPlayed) and sorted (for Up/Down/UpDown)
+    held:        [u8; 32],
+    held_sorted: [u8; 32],
+    held_count:  usize,
+
+    // Sequencer
+    step_idx:    usize,
+    current:     Option<u8>,
+    phase:       f32,        // 0..1 within current step
+    gate_fired:  bool,
+    direction:   i8,         // +1 or -1, for UpDown mode
+
+    rng:         Lcg,
+    prev_enabled: bool,
+}
+
+impl ArpState {
+    pub fn new() -> Self {
+        Self {
+            held: [0; 32], held_sorted: [0; 32], held_count: 0,
+            step_idx: 0, current: None, phase: 0.0, gate_fired: false,
+            direction: 1, rng: Lcg::new(0xDEAD_BEEF_1234_5678),
+            prev_enabled: false,
+        }
+    }
+
+    /// Call from callback when arp is enabled and a NoteOn arrives.
+    pub fn note_on(&mut self, pitch: u8) {
+        if self.held_count >= 32 { return; }
+        // Avoid duplicates
+        if self.held[..self.held_count].contains(&pitch) { return; }
+        self.held[self.held_count] = pitch;
+        self.held_count += 1;
+        self.rebuild_sorted();
+    }
+
+    /// Call from callback when arp is enabled and a NoteOff arrives.
+    pub fn note_off(&mut self, pitch: u8, hold: bool) {
+        if hold { return; }
+        let Some(pos) = self.held[..self.held_count].iter().position(|&n| n == pitch) else { return; };
+        for i in pos..self.held_count - 1 {
+            self.held[i] = self.held[i + 1];
+        }
+        self.held_count -= 1;
+        if self.held_count > 0 {
+            self.step_idx = self.step_idx % self.held_count;
+        }
+        self.rebuild_sorted();
+    }
+
+    /// Latch a full chord (e.g. from ControlEvent::ChordHold or programmatic use).
+    pub fn set_chord(&mut self, notes: &[u8]) {
+        let n = notes.len().min(32);
+        self.held[..n].copy_from_slice(&notes[..n]);
+        self.held_count = n;
+        self.step_idx = 0;
+        self.rebuild_sorted();
+    }
+
+    /// Clear all held notes. Fires NoteOff for the current sounding note.
+    pub fn clear(&mut self) -> Option<u8> {
+        self.held_count = 0;
+        self.step_idx = 0;
+        self.current.take()
+    }
+
+    /// Advance the arpeggiator by `frames` samples. Call once per audio buffer.
+    /// Returns optional note_off (gate end or step boundary) and note_on (new step).
+    pub fn tick(&mut self, cfg: &ArpShared, frames: usize, sr: f64) -> ArpEvents {
+        let enabled = cfg.enabled.load(Ordering::Relaxed);
+
+        // Transition: just disabled → fire NoteOff for sounding note
+        if !enabled && self.prev_enabled {
+            self.prev_enabled = false;
+            return ArpEvents { note_on: None, note_off: self.current.take() };
+        }
+        self.prev_enabled = enabled;
+
+        if !enabled || self.held_count == 0 {
+            // Fire NoteOff for any still-sounding note before going silent
+            if let Some(note) = self.current.take() {
+                return ArpEvents { note_on: None, note_off: Some(note) };
+            }
+            return ArpEvents::default();
+        }
+
+        let bpm      = cfg.bpm.value().max(1.0) as f64;
+        let division = ClockDiv::from_u8(cfg.division.load(Ordering::Relaxed));
+        let gate     = cfg.gate.value().clamp(0.05, 0.99);
+
+        let step_secs = 60.0 / bpm * division.beats_per_step() as f64;
+        let delta     = frames as f32 / (step_secs * sr) as f32;
+
+        self.phase += delta;
+
+        let mut ev = ArpEvents::default();
+
+        // Gate off: NoteOff fires at `gate` fraction through the step
+        if !self.gate_fired && self.phase >= gate {
+            if let Some(note) = self.current.take() {
+                ev.note_off = Some(note);
+            }
+            self.gate_fired = true;
+        }
+
+        // Step boundary: advance pattern, fire NoteOn
+        if self.phase >= 1.0 {
+            self.phase -= 1.0;
+            self.gate_fired = false;
+
+            // NoteOff if gate=1.0 (current wasn't cleared above)
+            if let Some(note) = self.current.take() {
+                ev.note_off = Some(note);
+            }
+
+            if self.held_count > 0 {
+                let mode         = ArpMode::from_u8(cfg.mode.load(Ordering::Relaxed));
+                let octave_range = cfg.octave_range.load(Ordering::Relaxed).max(1).min(4) as usize;
+                let note         = self.advance(mode, octave_range);
+                self.current     = Some(note);
+                ev.note_on       = Some(note);
+            }
+        }
+
+        ev
+    }
+
+    fn rebuild_sorted(&mut self) {
+        self.held_sorted[..self.held_count].copy_from_slice(&self.held[..self.held_count]);
+        self.held_sorted[..self.held_count].sort_unstable();
+    }
+
+    fn advance(&mut self, mode: ArpMode, octave_range: usize) -> u8 {
+        let total = (self.held_count * octave_range).max(1);
+
+        self.step_idx = match mode {
+            ArpMode::Up | ArpMode::AsPlayed => (self.step_idx + 1) % total,
+            ArpMode::Down => {
+                if self.step_idx == 0 { total - 1 } else { self.step_idx - 1 }
+            }
+            ArpMode::UpDown => {
+                if total <= 1 {
+                    0
+                } else {
+                    let next = self.step_idx as i32 + self.direction as i32;
+                    if next >= total as i32 - 1 {
+                        self.direction = -1;
+                        (total - 1).saturating_sub(1)
+                    } else if next <= 0 {
+                        self.direction = 1;
+                        1.min(total - 1)
+                    } else {
+                        next as usize
+                    }
+                }
+            }
+            ArpMode::Random => self.rng.next_usize(total),
+        };
+
+        let octave   = self.step_idx / self.held_count;
+        let note_idx = self.step_idx % self.held_count;
+        let base = match mode {
+            ArpMode::AsPlayed => self.held[note_idx],
+            _                 => self.held_sorted[note_idx],
+        };
+        base.saturating_add(octave as u8 * 12)
+    }
+}
+
+impl Default for ArpState { fn default() -> Self { Self::new() } }
+
+// ---------------------------------------------------------------------------
+// ScaleWalkerShared — UI-accessible config
+// ---------------------------------------------------------------------------
+
+pub struct ScaleWalkerShared {
+    pub enabled:      Arc<AtomicBool>,
+    pub scale:        Arc<AtomicU8>,   // Scale as u8
+    pub root:         Arc<AtomicU8>,   // MIDI root note (0-127; typical: 48-72)
+    pub octave_range: Arc<AtomicU8>,   // 1-3
+    pub division:     Arc<AtomicU8>,   // ClockDiv as u8
+    pub gate:         Shared,          // 0.05-1.0
+    pub bpm:          Shared,          // 20-300
+}
+
+impl ScaleWalkerShared {
+    pub fn new() -> Self {
+        Self {
+            enabled:      Arc::new(AtomicBool::new(false)),
+            scale:        Arc::new(AtomicU8::new(Scale::Major as u8)),
+            root:         Arc::new(AtomicU8::new(60)), // middle C
+            octave_range: Arc::new(AtomicU8::new(2)),
+            division:     Arc::new(AtomicU8::new(ClockDiv::Eighth as u8)),
+            gate:         shared(0.6),
+            bpm:          shared(120.0),
+        }
+    }
+}
+
+impl Default for ScaleWalkerShared { fn default() -> Self { Self::new() } }
+
+// ---------------------------------------------------------------------------
+// ScaleWalker — autonomous random walk within a scale, audio callback only
+// ---------------------------------------------------------------------------
+
+pub struct ScaleWalker {
+    scale_notes:  [u8; 128],
+    scale_count:  usize,
+    current_idx:  usize,
+    current:      Option<u8>,
+    phase:        f32,
+    gate_fired:   bool,
+    rng:          Lcg,
+    prev_enabled: bool,
+    // cached to detect config changes
+    prev_scale:   u8,
+    prev_root:    u8,
+    prev_oct:     u8,
+}
+
+impl ScaleWalker {
+    pub fn new() -> Self {
+        let mut w = Self {
+            scale_notes: [0; 128], scale_count: 0,
+            current_idx: 0, current: None,
+            phase: 0.0, gate_fired: false,
+            rng: Lcg::new(0xFEED_FACE_CAFE_BABE),
+            prev_enabled: false,
+            prev_scale: 255, prev_root: 255, prev_oct: 255,
+        };
+        w.rebuild(Scale::Major as u8, 60, 2);
+        w
+    }
+
+    /// Advance the walker by `frames` samples. Call once per audio buffer.
+    pub fn tick(&mut self, cfg: &ScaleWalkerShared, frames: usize, sr: f64) -> ArpEvents {
+        let enabled = cfg.enabled.load(Ordering::Relaxed);
+
+        // Rebuild scale notes if config changed
+        let scale = cfg.scale.load(Ordering::Relaxed);
+        let root  = cfg.root.load(Ordering::Relaxed);
+        let oct   = cfg.octave_range.load(Ordering::Relaxed).max(1).min(3);
+        if scale != self.prev_scale || root != self.prev_root || oct != self.prev_oct {
+            self.rebuild(scale, root, oct);
+            self.prev_scale = scale;
+            self.prev_root  = root;
+            self.prev_oct   = oct;
+        }
+
+        // Transition: just disabled
+        if !enabled && self.prev_enabled {
+            self.prev_enabled = false;
+            return ArpEvents { note_on: None, note_off: self.current.take() };
+        }
+        self.prev_enabled = enabled;
+
+        if !enabled || self.scale_count == 0 {
+            return ArpEvents::default();
+        }
+
+        let bpm      = cfg.bpm.value().max(1.0) as f64;
+        let division = ClockDiv::from_u8(cfg.division.load(Ordering::Relaxed));
+        let gate     = cfg.gate.value().clamp(0.05, 0.99);
+
+        let step_secs = 60.0 / bpm * division.beats_per_step() as f64;
+        let delta     = frames as f32 / (step_secs * sr) as f32;
+
+        self.phase += delta;
+
+        let mut ev = ArpEvents::default();
+
+        if !self.gate_fired && self.phase >= gate {
+            if let Some(note) = self.current.take() {
+                ev.note_off = Some(note);
+            }
+            self.gate_fired = true;
+        }
+
+        if self.phase >= 1.0 {
+            self.phase -= 1.0;
+            self.gate_fired = false;
+
+            if let Some(note) = self.current.take() {
+                ev.note_off = Some(note);
+            }
+
+            let note     = self.walk_step();
+            self.current = Some(note);
+            ev.note_on   = Some(note);
+        }
+
+        ev
+    }
+
+    fn rebuild(&mut self, scale: u8, root: u8, octave_range: u8) {
+        self.scale_count = 0;
+        let intervals = Scale::from_u8(scale).intervals();
+        for oct in 0..octave_range {
+            for &interval in intervals {
+                let note = root.saturating_add(oct * 12).saturating_add(interval);
+                if note < 128 && self.scale_count < 128 {
+                    self.scale_notes[self.scale_count] = note;
+                    self.scale_count += 1;
+                }
+            }
+        }
+        // Reset index so we don't start out-of-bounds
+        if self.scale_count > 0 {
+            self.current_idx = self.current_idx % self.scale_count;
+        }
+    }
+
+    fn walk_step(&mut self) -> u8 {
+        if self.scale_count == 0 { return 60; }
+        // Random walk: step ±1 or ±2, wrap around the scale
+        let r = self.rng.next_u32() % 6;
+        let delta: i32 = match r {
+            0 => -2,
+            1 | 2 => -1,
+            3 | 4 => 1,
+            _ => 2,
+        };
+        let new_idx = ((self.current_idx as i32 + delta)
+            .rem_euclid(self.scale_count as i32)) as usize;
+        self.current_idx = new_idx;
+        self.scale_notes[new_idx]
+    }
+}
+
+impl Default for ScaleWalker { fn default() -> Self { Self::new() } }

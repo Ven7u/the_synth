@@ -107,6 +107,11 @@ pub struct AudioState {
     pub peak_l: Arc<AtomicU32>, // f32 bits stored as u32
     pub peak_r: Arc<AtomicU32>,
 
+    // Arpeggiator and scale walker config (UI-accessible atomics).
+    // The matching ArpState / ScaleWalker live in the callback closure.
+    pub arp:    crate::arp::ArpShared,
+    pub walker: crate::arp::ScaleWalkerShared,
+
     // Master limiter (envelope-follower, runs in callback before tanh)
     pub limiter_enabled: Arc<AtomicBool>,
     pub limiter_threshold: Shared, // 0.5..1.0
@@ -210,7 +215,7 @@ impl AudioState {
             amp_cursors:  (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
             fenv_cursors: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
             glide_time: shared(0.0),
-            master_vol: shared(0.4),
+            master_vol: shared(0.8),
             hard_sync_enabled: Arc::new(AtomicBool::new(false)),
             hard_sync_gen: (0..VOICE_COUNT).map(|_| Arc::new(AtomicU8::new(0))).collect(),
             fm_depth: shared(0.0),
@@ -227,6 +232,8 @@ impl AudioState {
             last_latency_us: Arc::new(AtomicU32::new(0)),
             peak_l: Arc::new(AtomicU32::new(0)),
             peak_r: Arc::new(AtomicU32::new(0)),
+            arp:    crate::arp::ArpShared::new(),
+            walker: crate::arp::ScaleWalkerShared::new(),
             limiter_enabled: Arc::new(AtomicBool::new(true)),
             limiter_threshold: shared(0.95),
             fx_overdrive_drive: shared(3.0),
@@ -263,7 +270,6 @@ impl Default for AudioState {
 /// Build the unified 6-voice poly graph.
 /// Each voice: 3 OSCs + noise → lowpass(effective_cutoff) → amp ADSR
 pub fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Send> {
-    let scale = 1.0 / VOICE_COUNT as f32;
 
     let make_voice = |vi: usize| {
         let vf = &state.voice_freqs[vi];
@@ -379,7 +385,7 @@ pub fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Sen
     let v4 = make_voice(4);
     let v5 = make_voice(5);
 
-    let voice_mix = (v0 + v1 + v2 + v3 + v4 + v5) * scale;
+    let voice_mix = v0 + v1 + v2 + v3 + v4 + v5;
 
     let chain = voice_mix >> An(FxChain::new(state, sr as f32));
 
@@ -658,8 +664,9 @@ impl AudioNode for FxChain {
             let delayed = self.del_buf[i0] * (1.0 - read_f.fract()) + self.del_buf[i1] * read_f.fract();
             self.del_buf[self.del_pos] = s3 + delayed * del_feedback;
             delayed
-        } else { s3 };
-        let s4 = s3 + del_mix * (del_wet - s3);
+        } else { 0.0 };
+        // Additive model: dry stays at full level, echo is added on top.
+        let s4 = s3 + del_mix * del_wet;
 
         self.del_pos = (self.del_pos + 1) % buf_len;
 
@@ -669,8 +676,9 @@ impl AudioNode for FxChain {
         let rev_damp = self.rev_damp.next(); // smoothed — prevents tail surge on damp change
         let rev_wet = if rev_mix > 0.0001 {
             self.rev.tick(s4, rev_size, rev_damp)
-        } else { s4 };
-        let s5 = s4 + rev_mix * (rev_wet - s4);
+        } else { 0.0 };
+        // Additive model: dry stays at full level, reverb tail is added on top.
+        let s5 = s4 + rev_mix * rev_wet;
 
         Frame::from([s5])
     }

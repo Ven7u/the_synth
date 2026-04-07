@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use synth_dsp::envelope::LiveAdsr;
 use synth_dsp::osc::{MultiWaveOsc, SyncRole};
+use crate::arp::{ArpShared, ScaleWalkerShared};
 
 pub const TRACK_COUNT: usize = 4;
 pub const VOICE_COUNT: usize = 6;
@@ -148,7 +149,6 @@ impl Default for TrackState {
 // ---------------------------------------------------------------------------
 
 fn build_track_graph(state: &TrackState, sr: f64) -> Box<dyn AudioUnit + Send> {
-    let scale = 1.0 / VOICE_COUNT as f32;
 
     let make_voice = |vi: usize| {
         let vf = &state.voice_freqs[vi];
@@ -254,7 +254,7 @@ fn build_track_graph(state: &TrackState, sr: f64) -> Box<dyn AudioUnit + Send> {
     let v4 = make_voice(4);
     let v5 = make_voice(5);
 
-    let voice_mix = (v0 + v1 + v2 + v3 + v4 + v5) * scale;
+    let voice_mix = v0 + v1 + v2 + v3 + v4 + v5;
     let track_out = voice_mix * var(&state.track_vol);
     let mut g: Box<dyn AudioUnit + Send> = Box::new(track_out);
     g.set_sample_rate(sr);
@@ -279,6 +279,12 @@ pub struct MultiTrackEngine {
     /// Master output volume.
     pub master_vol: Shared,
 
+    /// Per-track arpeggiator config (UI-accessible).
+    /// Matching ArpState lives in the audio callback closure.
+    pub arp_configs:    [ArpShared; TRACK_COUNT],
+    /// Per-track scale walker config (UI-accessible).
+    pub walker_configs: [ScaleWalkerShared; TRACK_COUNT],
+
     track_graphs: Vec<BlockRateAdapter>,
     sr: f64,
     smoothed_freqs: Vec<Vec<f32>>,
@@ -297,6 +303,8 @@ impl MultiTrackEngine {
             shimmer_mix: shared(0.0),
             crystal_mix: shared(0.0),
             master_vol: shared(0.7),
+            arp_configs:    std::array::from_fn(|_| ArpShared::new()),
+            walker_configs: std::array::from_fn(|_| ScaleWalkerShared::new()),
             track_graphs,
             sr,
             smoothed_freqs,
