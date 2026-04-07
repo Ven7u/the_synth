@@ -132,6 +132,7 @@ struct SynthApp {
     patch_browser_open: bool,
     patch_browser_category: String,
     patch_browser_model: String,
+    patch_load_fx: bool, // if false, loading a patch leaves the FX chain untouched
 
     // FX chain — per-effect enable + saved mix value
     fx_overdrive_on: bool,
@@ -224,6 +225,7 @@ impl SynthApp {
             patch_browser_open: false,
             patch_browser_category: "All".into(),
             patch_browser_model: "All".into(),
+            patch_load_fx: false,
             fx_overdrive_on: false,
             fx_overdrive_drive: 3.0,
             fx_overdrive_mix: 0.5,
@@ -1921,46 +1923,48 @@ impl SynthApp {
         s.glide_time.set(self.glide_time);
         s.master_vol.set(self.master_vol);
 
-        // FX chain
-        self.fx_overdrive_on    = p.fx_overdrive_on;
-        self.fx_overdrive_drive = p.fx_overdrive_drive;
-        self.fx_overdrive_mix   = p.fx_overdrive_mix;
-        self.fx_overdrive_tone  = p.fx_overdrive_tone;
-        self.fx_overdrive_asym  = p.fx_overdrive_asym;
-        self.fx_distortion_on   = p.fx_distortion_on;
-        self.fx_distortion_drive = p.fx_distortion_drive;
-        self.fx_distortion_mix  = p.fx_distortion_mix;
-        self.fx_distortion_tone = p.fx_distortion_tone;
-        self.fx_distortion_pre  = p.fx_distortion_pre;
-        self.fx_chorus_on       = p.fx_chorus_on;
-        self.fx_chorus_rate     = p.fx_chorus_rate;
-        self.fx_chorus_depth    = p.fx_chorus_depth;
-        self.fx_chorus_mix      = p.fx_chorus_mix;
-        self.fx_delay_on        = p.fx_delay_on;
-        self.fx_delay_time      = p.fx_delay_time;
-        self.fx_delay_feedback  = p.fx_delay_feedback;
-        self.fx_delay_mix       = p.fx_delay_mix;
-        self.fx_reverb_on       = p.fx_reverb_on;
-        self.fx_reverb_size     = p.fx_reverb_size;
-        self.fx_reverb_damp     = p.fx_reverb_damp;
-        self.fx_reverb_mix      = p.fx_reverb_mix;
-        s.fx_overdrive_drive.set_value(self.fx_overdrive_drive);
-        s.fx_overdrive_mix.set_value(if self.fx_overdrive_on { self.fx_overdrive_mix } else { 0.0 });
-        s.fx_overdrive_tone.set_value(self.fx_overdrive_tone);
-        s.fx_overdrive_asym.set_value(self.fx_overdrive_asym);
-        s.fx_distortion_drive.set_value(self.fx_distortion_drive);
-        s.fx_distortion_mix.set_value(if self.fx_distortion_on { self.fx_distortion_mix } else { 0.0 });
-        s.fx_distortion_tone.set_value(self.fx_distortion_tone);
-        s.fx_distortion_pre.set_value(self.fx_distortion_pre);
-        s.fx_chorus_rate.set_value(self.fx_chorus_rate);
-        s.fx_chorus_depth.set_value(self.fx_chorus_depth);
-        s.fx_chorus_mix.set_value(if self.fx_chorus_on { self.fx_chorus_mix } else { 0.0 });
-        s.fx_delay_time.set_value(self.fx_delay_time);
-        s.fx_delay_feedback.set_value(self.fx_delay_feedback);
-        s.fx_delay_mix.set_value(if self.fx_delay_on { self.fx_delay_mix } else { 0.0 });
-        s.fx_reverb_size.set_value(self.fx_reverb_size);
-        s.fx_reverb_damp.set_value(self.fx_reverb_damp);
-        s.fx_reverb_mix.set_value(if self.fx_reverb_on { self.fx_reverb_mix } else { 0.0 });
+        // FX chain — only applied when "Load FX" is enabled in the patch browser
+        if self.patch_load_fx {
+            self.fx_overdrive_on    = p.fx_overdrive_on;
+            self.fx_overdrive_drive = p.fx_overdrive_drive;
+            self.fx_overdrive_mix   = p.fx_overdrive_mix;
+            self.fx_overdrive_tone  = p.fx_overdrive_tone;
+            self.fx_overdrive_asym  = p.fx_overdrive_asym;
+            self.fx_distortion_on   = p.fx_distortion_on;
+            self.fx_distortion_drive = p.fx_distortion_drive;
+            self.fx_distortion_mix  = p.fx_distortion_mix;
+            self.fx_distortion_tone = p.fx_distortion_tone;
+            self.fx_distortion_pre  = p.fx_distortion_pre;
+            self.fx_chorus_on       = p.fx_chorus_on;
+            self.fx_chorus_rate     = p.fx_chorus_rate;
+            self.fx_chorus_depth    = p.fx_chorus_depth;
+            self.fx_chorus_mix      = p.fx_chorus_mix;
+            self.fx_delay_on        = p.fx_delay_on;
+            self.fx_delay_time      = p.fx_delay_time;
+            self.fx_delay_feedback  = p.fx_delay_feedback;
+            self.fx_delay_mix       = p.fx_delay_mix;
+            self.fx_reverb_on       = p.fx_reverb_on;
+            self.fx_reverb_size     = p.fx_reverb_size;
+            self.fx_reverb_damp     = p.fx_reverb_damp;
+            self.fx_reverb_mix      = p.fx_reverb_mix;
+            s.fx_overdrive_drive.set_value(self.fx_overdrive_drive);
+            s.fx_overdrive_mix.set_value(if self.fx_overdrive_on { self.fx_overdrive_mix } else { 0.0 });
+            s.fx_overdrive_tone.set_value(self.fx_overdrive_tone);
+            s.fx_overdrive_asym.set_value(self.fx_overdrive_asym);
+            s.fx_distortion_drive.set_value(self.fx_distortion_drive);
+            s.fx_distortion_mix.set_value(if self.fx_distortion_on { self.fx_distortion_mix } else { 0.0 });
+            s.fx_distortion_tone.set_value(self.fx_distortion_tone);
+            s.fx_distortion_pre.set_value(self.fx_distortion_pre);
+            s.fx_chorus_rate.set_value(self.fx_chorus_rate);
+            s.fx_chorus_depth.set_value(self.fx_chorus_depth);
+            s.fx_chorus_mix.set_value(if self.fx_chorus_on { self.fx_chorus_mix } else { 0.0 });
+            s.fx_delay_time.set_value(self.fx_delay_time);
+            s.fx_delay_feedback.set_value(self.fx_delay_feedback);
+            s.fx_delay_mix.set_value(if self.fx_delay_on { self.fx_delay_mix } else { 0.0 });
+            s.fx_reverb_size.set_value(self.fx_reverb_size);
+            s.fx_reverb_damp.set_value(self.fx_reverb_damp);
+            s.fx_reverb_mix.set_value(if self.fx_reverb_on { self.fx_reverb_mix } else { 0.0 });
+        }
     }
 }
 
@@ -2075,6 +2079,17 @@ impl SynthApp {
                             self.patch_browser_model = m.clone();
                         }
                     }
+                });
+
+                ui.separator();
+
+                // --- Load FX toggle ---
+                ui.horizontal(|ui| {
+                    let label = egui::RichText::new("Load FX with patch")
+                        .small()
+                        .color(if self.patch_load_fx { Color32::from_rgb(255, 180, 60) } else { Color32::GRAY });
+                    ui.checkbox(&mut self.patch_load_fx, label)
+                        .on_hover_text("When enabled, loading a patch also restores its FX chain settings.\nWhen disabled, your current FX chain stays untouched.");
                 });
 
                 ui.separator();

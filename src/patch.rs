@@ -205,6 +205,26 @@ pub fn default_patches() -> Vec<Patch> {
         include_str!("../assets/patches/FX/Serum Growl.json"),
         include_str!("../assets/patches/FX/Solar Wind.json"),
         include_str!("../assets/patches/FX/Phantom Signal.json"),
+        // Ambient
+        include_str!("../assets/patches/Ambient/Eno Space.json"),
+        include_str!("../assets/patches/Ambient/Tape Echo.json"),
+        include_str!("../assets/patches/Ambient/Crystal Cave.json"),
+        include_str!("../assets/patches/Ambient/Night Drift.json"),
+        // Synthwave
+        include_str!("../assets/patches/Synthwave/Neon Drive.json"),
+        include_str!("../assets/patches/Synthwave/Kavinsky Lead.json"),
+        include_str!("../assets/patches/Synthwave/Outrun Bass.json"),
+        include_str!("../assets/patches/Synthwave/Retrowave Keys.json"),
+        // Electronic
+        include_str!("../assets/patches/Electronic/Acid Drop.json"),
+        include_str!("../assets/patches/Electronic/Techno Stab.json"),
+        include_str!("../assets/patches/Electronic/Berlin Pad.json"),
+        include_str!("../assets/patches/Electronic/Detroit Bass.json"),
+        // Rock
+        include_str!("../assets/patches/Rock/Power Lead.json"),
+        include_str!("../assets/patches/Rock/Metal Zone.json"),
+        include_str!("../assets/patches/Rock/Blues Tone.json"),
+        include_str!("../assets/patches/Rock/Fuzz Face.json"),
     ];
     embedded.iter()
         .filter_map(|s| serde_json::from_str(s).ok())

@@ -611,13 +611,14 @@ impl AudioNode for FxChain {
         let od_tone  = self.od_tone.value() as f32;
         let od_asym  = self.od_asym.value() as f32;
         let od_wet = if od_mix > 0.0001 {
-            // Asymmetric bias: DC offset before clipper adds even harmonics (warmer).
-            // Subtract the clipped bias value to re-center the output.
-            let bias     = od_asym * 0.4;
-            let biased   = dry * od_drive * 5.0 + bias;
-            let clipped  = biased.tanh() - bias.tanh();
-            // Post-clipper tone LP: maps 0→1 to 400 Hz → 18 kHz (exponential)
-            let fc       = 400.0_f32 * (18000.0_f32 / 400.0).powf(od_tone);
+            // Asymmetric bias: scaled to match the driven signal level so it
+            // actually shifts the clipping point. bias up to ±2.0 in tanh space.
+            let driven_signal = dry * od_drive * 5.0;
+            let bias    = od_asym * 2.0;
+            let clipped = (driven_signal + bias).tanh() - bias.tanh();
+            // Post-clipper tone LP: 0 = 400 Hz (dark/muffled), 1 = 8 kHz (bright).
+            // Narrower range than before so movement is always audible.
+            let fc       = 400.0_f32 * (8000.0_f32 / 400.0).powf(od_tone);
             let lp_coeff = (-std::f32::consts::TAU * fc / self.sr).exp();
             self.od_tone_z = (1.0 - lp_coeff) * clipped + lp_coeff * self.od_tone_z;
             self.od_tone_z
