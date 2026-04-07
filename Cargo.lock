@@ -188,6 +188,7 @@ dependencies = [
  "fundsp",
  "midir",
  "synth-control",
+ "synth-engine",
  "synth-ui",
 ]
 

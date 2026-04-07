@@ -12,8 +12,10 @@ use fundsp::prelude::midi_hz;
 use std::sync::Arc;
 
 use ambient_engine::{AmbientEngine, TRACK_COUNT, VOICE_COUNT};
+use synth_engine::arp::{ArpMode, ArpState, ClockDiv, Scale, ScaleWalker};
 use synth_control::{ControlEvent, ControlSender, make_control_channel};
 use synth_control::midi::{MidiEngine, MidiEvent};
+use std::sync::atomic::Ordering;
 
 fn main() -> eframe::Result {
     let sr = get_default_sr().unwrap_or(44100.0);
@@ -87,6 +89,10 @@ where
     // Per-track LFO phase
     let mut lfo_phases: [f32; TRACK_COUNT] = [0.0; TRACK_COUNT];
 
+    // Per-track arpeggiator and scale walker (audio-thread state only)
+    let mut arp_states:    [ArpState;    TRACK_COUNT] = std::array::from_fn(|_| ArpState::new());
+    let mut walker_states: [ScaleWalker; TRACK_COUNT] = std::array::from_fn(|_| ScaleWalker::new());
+
     let stream = device.build_output_stream(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
@@ -111,24 +117,55 @@ where
                 match ev {
                     ControlEvent::NoteOn { pitch, velocity: _, track } => {
                         let ti = track as usize % TRACK_COUNT;
-                        if voice_notes[ti].iter().enumerate().any(|(s, &n)| {
-                            n == Some(pitch) && eng.tracks[ti].voice_gates[s].value() > 0.5
-                        }) {
-                            continue;
+                        if eng.arp_configs[ti].enabled.load(Ordering::Relaxed) {
+                            arp_states[ti].note_on(pitch);
+                        } else {
+                            if voice_notes[ti].iter().enumerate().any(|(s, &n)| {
+                                n == Some(pitch) && eng.tracks[ti].voice_gates[s].value() > 0.5
+                            }) {
+                                continue;
+                            }
+                            let slot = voice_notes[ti].iter().position(|&n| n == Some(pitch))
+                                .or_else(|| voice_notes[ti].iter().position(|n| n.is_none()))
+                                .unwrap_or_else(|| {
+                                    let s = steal_idx[ti] % VOICE_COUNT;
+                                    steal_idx[ti] += 1;
+                                    s
+                                });
+                            voice_notes[ti][slot] = Some(pitch);
+                            eng.tracks[ti].voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
+                            eng.tracks[ti].voice_gates[slot].set(1.0);
                         }
-                        let slot = voice_notes[ti].iter().position(|&n| n == Some(pitch))
-                            .or_else(|| voice_notes[ti].iter().position(|n| n.is_none()))
-                            .unwrap_or_else(|| {
-                                let s = steal_idx[ti] % VOICE_COUNT;
-                                steal_idx[ti] += 1;
-                                s
-                            });
-                        voice_notes[ti][slot] = Some(pitch);
-                        eng.tracks[ti].voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
-                        eng.tracks[ti].voice_gates[slot].set(1.0);
                     }
                     ControlEvent::NoteOff { pitch, track } => {
                         let ti = track as usize % TRACK_COUNT;
+                        if eng.arp_configs[ti].enabled.load(Ordering::Relaxed) {
+                            let hold = eng.arp_configs[ti].hold.load(Ordering::Relaxed);
+                            arp_states[ti].note_off(pitch, hold);
+                        } else {
+                            for (slot, note) in voice_notes[ti].iter_mut().enumerate() {
+                                if *note == Some(pitch) {
+                                    eng.tracks[ti].voice_gates[slot].set(0.0);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    ControlEvent::SetParam { .. } => {}
+                    ControlEvent::ChordHold { track, notes } => {
+                        let ti = track as usize % TRACK_COUNT;
+                        arp_states[ti].set_chord(&notes);
+                    }
+                }
+            }
+
+            // --- Arp + walker tick (once per buffer, per track) ---
+            for ti in 0..TRACK_COUNT {
+                for ev in [
+                    arp_states[ti].tick(&eng.arp_configs[ti], frames, sr),
+                    walker_states[ti].tick(&eng.walker_configs[ti], frames, sr),
+                ] {
+                    if let Some(pitch) = ev.note_off {
                         for (slot, note) in voice_notes[ti].iter_mut().enumerate() {
                             if *note == Some(pitch) {
                                 eng.tracks[ti].voice_gates[slot].set(0.0);
@@ -136,7 +173,22 @@ where
                             }
                         }
                     }
-                    ControlEvent::SetParam { .. } => {}
+                    if let Some(pitch) = ev.note_on {
+                        if !voice_notes[ti].iter().enumerate().any(|(s, &n)| {
+                            n == Some(pitch) && eng.tracks[ti].voice_gates[s].value() > 0.5
+                        }) {
+                            let slot = voice_notes[ti].iter().position(|&n| n == Some(pitch))
+                                .or_else(|| voice_notes[ti].iter().position(|n| n.is_none()))
+                                .unwrap_or_else(|| {
+                                    let s = steal_idx[ti] % VOICE_COUNT;
+                                    steal_idx[ti] += 1;
+                                    s
+                                });
+                            voice_notes[ti][slot] = Some(pitch);
+                            eng.tracks[ti].voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
+                            eng.tracks[ti].voice_gates[slot].set(1.0);
+                        }
+                    }
                 }
             }
 
@@ -180,6 +232,21 @@ struct AmbientBoxApp {
     // Per-track keyboard state
     held_midi: [std::collections::HashSet<u8>; TRACK_COUNT],
     piano_octave: i32,
+
+    // Per-track arp UI state (mirrors AtomicU8 config in engine)
+    arp_bpm:      [f32; TRACK_COUNT],
+    arp_mode:     [u8;  TRACK_COUNT],
+    arp_division: [u8;  TRACK_COUNT],
+    arp_oct:      [u8;  TRACK_COUNT],
+    arp_gate:     [f32; TRACK_COUNT],
+
+    // Per-track scale walker UI state
+    walker_bpm:   [f32; TRACK_COUNT],
+    walker_scale: [u8;  TRACK_COUNT],
+    walker_root:  [u8;  TRACK_COUNT],
+    walker_oct:   [u8;  TRACK_COUNT],
+    walker_div:   [u8;  TRACK_COUNT],
+    walker_gate:  [f32; TRACK_COUNT],
 }
 
 impl AmbientBoxApp {
@@ -198,6 +265,17 @@ impl AmbientBoxApp {
             active_track: 0,
             held_midi: std::array::from_fn(|_| std::collections::HashSet::new()),
             piano_octave: 4,
+            arp_bpm:      [120.0; TRACK_COUNT],
+            arp_mode:     [0;     TRACK_COUNT],
+            arp_division: [1;     TRACK_COUNT],
+            arp_oct:      [1;     TRACK_COUNT],
+            arp_gate:     [0.7;   TRACK_COUNT],
+            walker_bpm:   [120.0; TRACK_COUNT],
+            walker_scale: [0;     TRACK_COUNT],
+            walker_root:  [60;    TRACK_COUNT],
+            walker_oct:   [2;     TRACK_COUNT],
+            walker_div:   [1;     TRACK_COUNT],
+            walker_gate:  [0.6;   TRACK_COUNT],
         }
     }
 
@@ -301,6 +379,127 @@ impl eframe::App for AmbientBoxApp {
                     if synth_ui::knob(ui, "Master Vol", &mut mvol, 0.0, 1.0) {
                         eng.master_vol.set(mvol);
                     }
+                });
+            }
+
+            ui.separator();
+
+            // --- Per-track arp + walker ---
+            if let Ok(eng) = self.engine.try_lock() {
+                let ti = self.active_track;
+                let arp_cfg    = &eng.arp_configs[ti];
+                let walker_cfg = &eng.walker_configs[ti];
+
+                ui.columns(2, |cols| {
+                    // Arp column
+                    let arp_on = arp_cfg.enabled.load(Ordering::Relaxed);
+                    cols[0].horizontal(|ui| {
+                        let lbl = egui::RichText::new("ARP").strong()
+                            .color(if arp_on { egui::Color32::from_rgb(0,220,160) } else { egui::Color32::GRAY });
+                        if ui.button(lbl).clicked() {
+                            arp_cfg.enabled.store(!arp_on, Ordering::Relaxed);
+                        }
+                        let hold = arp_cfg.hold.load(Ordering::Relaxed);
+                        let hl = egui::RichText::new("HOLD")
+                            .color(if hold { egui::Color32::from_rgb(255,200,0) } else { egui::Color32::GRAY });
+                        if ui.button(hl).clicked() {
+                            arp_cfg.hold.store(!hold, Ordering::Relaxed);
+                        }
+                    });
+                    cols[0].add_enabled_ui(arp_on, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("BPM:");
+                            if ui.add(egui::Slider::new(&mut self.arp_bpm[ti], 20.0..=300.0)).changed() {
+                                arp_cfg.bpm.set(self.arp_bpm[ti]);
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Div:");
+                            for (i, &lbl) in ClockDiv::LABELS.iter().enumerate() {
+                                if ui.selectable_label(self.arp_division[ti] == i as u8, lbl).clicked() {
+                                    self.arp_division[ti] = i as u8;
+                                    arp_cfg.division.store(i as u8, Ordering::Relaxed);
+                                }
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Mode:");
+                            for (i, &lbl) in ArpMode::LABELS.iter().enumerate() {
+                                if ui.selectable_label(self.arp_mode[ti] == i as u8, lbl).clicked() {
+                                    self.arp_mode[ti] = i as u8;
+                                    arp_cfg.mode.store(i as u8, Ordering::Relaxed);
+                                }
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Oct:");
+                            for oct in 1u8..=4 {
+                                if ui.selectable_label(self.arp_oct[ti] == oct, oct.to_string()).clicked() {
+                                    self.arp_oct[ti] = oct;
+                                    arp_cfg.octave_range.store(oct, Ordering::Relaxed);
+                                }
+                            }
+                            ui.label(" Gate:");
+                            if ui.add(egui::Slider::new(&mut self.arp_gate[ti], 0.05..=1.0)).changed() {
+                                arp_cfg.gate.set(self.arp_gate[ti]);
+                            }
+                        });
+                    });
+
+                    // Walker column
+                    let walk_on = walker_cfg.enabled.load(Ordering::Relaxed);
+                    cols[1].horizontal(|ui| {
+                        let lbl = egui::RichText::new("WALKER").strong()
+                            .color(if walk_on { egui::Color32::from_rgb(100,180,255) } else { egui::Color32::GRAY });
+                        if ui.button(lbl).clicked() {
+                            walker_cfg.enabled.store(!walk_on, Ordering::Relaxed);
+                        }
+                    });
+                    cols[1].add_enabled_ui(walk_on, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("BPM:");
+                            if ui.add(egui::Slider::new(&mut self.walker_bpm[ti], 20.0..=300.0)).changed() {
+                                walker_cfg.bpm.set(self.walker_bpm[ti]);
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Div:");
+                            for (i, &lbl) in ClockDiv::LABELS.iter().enumerate() {
+                                if ui.selectable_label(self.walker_div[ti] == i as u8, lbl).clicked() {
+                                    self.walker_div[ti] = i as u8;
+                                    walker_cfg.division.store(i as u8, Ordering::Relaxed);
+                                }
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Scale:");
+                            for (i, &lbl) in Scale::LABELS.iter().enumerate() {
+                                if ui.selectable_label(self.walker_scale[ti] == i as u8, lbl).clicked() {
+                                    self.walker_scale[ti] = i as u8;
+                                    walker_cfg.scale.store(i as u8, Ordering::Relaxed);
+                                }
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Root:");
+                            if ui.add(egui::Slider::new(&mut self.walker_root[ti], 36u8..=84)).changed() {
+                                walker_cfg.root.store(self.walker_root[ti], Ordering::Relaxed);
+                            }
+                            ui.label(" Oct:");
+                            for oct in 1u8..=3 {
+                                if ui.selectable_label(self.walker_oct[ti] == oct, oct.to_string()).clicked() {
+                                    self.walker_oct[ti] = oct;
+                                    walker_cfg.octave_range.store(oct, Ordering::Relaxed);
+                                }
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Gate:");
+                            if ui.add(egui::Slider::new(&mut self.walker_gate[ti], 0.05..=1.0)).changed() {
+                                walker_cfg.gate.set(self.walker_gate[ti]);
+                            }
+                        });
+                    });
                 });
             }
 

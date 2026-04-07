@@ -13,6 +13,10 @@ pub enum ControlEvent {
     NoteOff { pitch: u8, track: u8 },
     /// Write a named parameter directly.
     SetParam { param: ParamId, value: f32 },
+    /// Latch a chord into the track's arpeggiator.
+    /// The arp iterates these pitches until a new ChordHold arrives.
+    /// Sent by the UI/MIDI layer; heap allocation is fine on the sender thread.
+    ChordHold { track: u8, notes: Vec<u8> },
 }
 
 /// Addressable engine parameters reachable via `ControlEvent::SetParam`.

@@ -9,6 +9,7 @@ use fundsp::prelude::midi_hz;
 use std::sync::Arc;
 
 use synth_engine::audio::build_synth_graph;
+use synth_engine::arp::{ArpState, ScaleWalker};
 use synth_control::{make_control_channel, ControlSender, ControlReceiver, ControlEvent, ParamId};
 
 // Re-export so main.rs can keep its existing import unchanged.
@@ -95,6 +96,11 @@ where
     let mut voice_notes: [Option<u8>; VOICE_COUNT] = [None; VOICE_COUNT];
     let mut steal_idx: usize = 0;
 
+    // Arpeggiator and scale walker internal state (audio thread only).
+    // Config is read each tick from state.arp / state.walker (Shared atomics).
+    let mut arp    = ArpState::new();
+    let mut walker = ScaleWalker::new();
+
     let stream = device.build_output_stream(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
@@ -111,28 +117,37 @@ where
             while let Ok(ev) = rx.try_recv() {
                 match ev {
                     ControlEvent::NoteOn { pitch, track: _, .. } => {
-                        // Ignore if this pitch is already playing at full gate (key repeat).
-                        if voice_notes.iter().enumerate().any(|(s, &n)| {
-                            n == Some(pitch) && state.voice_gates[s].value() > 0.5
-                        }) {
-                            continue;
+                        if state.arp.enabled.load(std::sync::atomic::Ordering::Relaxed) {
+                            arp.note_on(pitch);
+                        } else {
+                            // Ignore key repeat
+                            if voice_notes.iter().enumerate().any(|(s, &n)| {
+                                n == Some(pitch) && state.voice_gates[s].value() > 0.5
+                            }) {
+                                continue;
+                            }
+                            let slot = voice_notes.iter().position(|&n| n == Some(pitch))
+                                .or_else(|| voice_notes.iter().position(|n| n.is_none()))
+                                .unwrap_or_else(|| {
+                                    let s = steal_idx % VOICE_COUNT;
+                                    steal_idx += 1;
+                                    s
+                                });
+                            voice_notes[slot] = Some(pitch);
+                            state.voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
+                            state.voice_gates[slot].set(1.0);
                         }
-                        let slot = voice_notes.iter().position(|&n| n == Some(pitch))
-                            .or_else(|| voice_notes.iter().position(|n| n.is_none()))
-                            .unwrap_or_else(|| {
-                                let s = steal_idx % VOICE_COUNT;
-                                steal_idx += 1;
-                                s
-                            });
-                        voice_notes[slot] = Some(pitch);
-                        state.voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
-                        state.voice_gates[slot].set(1.0);
                     }
                     ControlEvent::NoteOff { pitch, track: _ } => {
-                        for (slot, note) in voice_notes.iter_mut().enumerate() {
-                            if *note == Some(pitch) {
-                                state.voice_gates[slot].set(0.0);
-                                break;
+                        if state.arp.enabled.load(std::sync::atomic::Ordering::Relaxed) {
+                            let hold = state.arp.hold.load(std::sync::atomic::Ordering::Relaxed);
+                            arp.note_off(pitch, hold);
+                        } else {
+                            for (slot, note) in voice_notes.iter_mut().enumerate() {
+                                if *note == Some(pitch) {
+                                    state.voice_gates[slot].set(0.0);
+                                    break;
+                                }
                             }
                         }
                     }
@@ -144,6 +159,41 @@ where
                             ParamId::MasterVolume    => state.master_vol.set(value),
                             ParamId::LfoPitchMult    => state.lfo_pitch_mult.set(value),
                         }
+                    }
+                    ControlEvent::ChordHold { notes, .. } => {
+                        arp.set_chord(&notes);
+                    }
+                }
+            }
+
+            // --- Arp + scale walker tick (once per buffer) ---
+            let frames = data.len() / channels;
+            let arp_ev = arp.tick(&state.arp, frames, sr);
+            let walk_ev = walker.tick(&state.walker, frames, sr);
+
+            for ev in [arp_ev, walk_ev] {
+                if let Some(pitch) = ev.note_off {
+                    for (slot, note) in voice_notes.iter_mut().enumerate() {
+                        if *note == Some(pitch) {
+                            state.voice_gates[slot].set(0.0);
+                            break;
+                        }
+                    }
+                }
+                if let Some(pitch) = ev.note_on {
+                    if !voice_notes.iter().enumerate().any(|(s, &n)| {
+                        n == Some(pitch) && state.voice_gates[s].value() > 0.5
+                    }) {
+                        let slot = voice_notes.iter().position(|&n| n == Some(pitch))
+                            .or_else(|| voice_notes.iter().position(|n| n.is_none()))
+                            .unwrap_or_else(|| {
+                                let s = steal_idx % VOICE_COUNT;
+                                steal_idx += 1;
+                                s
+                            });
+                        voice_notes[slot] = Some(pitch);
+                        state.voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
+                        state.voice_gates[slot].set(1.0);
                     }
                 }
             }
@@ -159,7 +209,6 @@ where
             }
 
             // Read per-buffer params once (cheap; avoids repeated atomic loads per sample)
-            let frames = data.len() / channels;
             let sr_f = sr as f32;
             let lfo_rate  = state.lfo_rate.value();
             let lfo_depth = state.lfo_depth.value();

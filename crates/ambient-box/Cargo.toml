@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 ambient-engine = { path = "../ambient-engine" }
+synth-engine   = { path = "../synth-engine" }
 synth-control  = { path = "../synth-control" }
 synth-ui       = { path = "../synth-ui" }
 fundsp         = { version = "0.23", features = ["files", "fft"] }

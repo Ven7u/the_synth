@@ -118,6 +118,21 @@ struct SynthApp {
     chord_seq: ChordSeqState,
     chord_kb: ChordKbState,
 
+    // Arpeggiator UI state
+    arp_bpm: f32,
+    arp_mode: u8,
+    arp_division: u8,
+    arp_octave_range: u8,
+    arp_gate: f32,
+
+    // Scale walker UI state
+    walker_scale: u8,
+    walker_root: u8,
+    walker_oct: u8,
+    walker_division: u8,
+    walker_gate: f32,
+    walker_bpm: f32,
+
     // Oscilloscope
     scope_height: f32,
     scope_x_scale: f32,
@@ -195,7 +210,7 @@ impl SynthApp {
             fenv_adsr: [0.01, 0.3, 0.0, 0.2],
             amp_adsr: [0.01, 0.15, 0.7, 0.4],
             glide_time: 0.0,
-            master_vol: 0.5,
+            master_vol: 0.8,
             piano_octave: 4,
             piano_held_midi: std::collections::HashSet::new(),
             piano_mouse_midi: None,
@@ -213,6 +228,17 @@ impl SynthApp {
             note_seq: NoteSeqState::new(),
             chord_seq: ChordSeqState::new(),
             chord_kb: ChordKbState::new(),
+            arp_bpm: 120.0,
+            arp_mode: 0,
+            arp_division: 1, // 1/8 default
+            arp_octave_range: 1,
+            arp_gate: 0.7,
+            walker_scale: 0,
+            walker_root: 60,
+            walker_oct: 2,
+            walker_division: 1,
+            walker_gate: 0.6,
+            walker_bpm: 120.0,
             scope_height: 140.0,
             scope_x_scale: 1.0,
             scope_y_scale: 2.5,
@@ -388,6 +414,8 @@ impl eframe::App for SynthApp {
         self.ui_patch_browser(ctx);
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+
             // Patch bar
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| { self.ui_patch_bar(ui); });
@@ -445,6 +473,19 @@ impl eframe::App for SynthApp {
 
             ui.add_space(4.0);
 
+            // Row 4b: Arp + Scale Walker
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("ARPEGGIATOR & SCALE WALKER").strong().small());
+            });
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.columns(2, |cols| {
+                    self.ui_arp_panel(&mut cols[0]);
+                    self.ui_walker_panel(&mut cols[1]);
+                });
+            });
+
+            ui.add_space(4.0);
+
             // Row 5: FX Chain
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("FX CHAIN").strong().small());
@@ -464,6 +505,8 @@ impl eframe::App for SynthApp {
 
             // Oscilloscope footer
             self.ui_oscilloscope(ui);
+
+            }); // end ScrollArea
         });
 
         ctx.request_repaint();
@@ -920,6 +963,134 @@ impl SynthApp {
                         self.lfo_dest = d;
                         self.state.lfo_dest.store(d as u8, Ordering::Relaxed);
                     }
+                }
+            });
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Arpeggiator panel
+// ---------------------------------------------------------------------------
+
+impl SynthApp {
+    fn ui_arp_panel(&mut self, ui: &mut egui::Ui) {
+        use synth_engine::arp::{ArpMode, ClockDiv};
+
+        let enabled = self.state.arp.enabled.load(Ordering::Relaxed);
+        ui.horizontal(|ui| {
+            let label = egui::RichText::new("ARP").strong()
+                .color(if enabled { Color32::from_rgb(0, 220, 160) } else { Color32::GRAY });
+            if ui.button(label).clicked() {
+                self.state.arp.enabled.store(!enabled, Ordering::Relaxed);
+            }
+            let hold = self.state.arp.hold.load(Ordering::Relaxed);
+            let hold_label = egui::RichText::new("HOLD")
+                .color(if hold { Color32::from_rgb(255, 200, 0) } else { Color32::GRAY });
+            if ui.button(hold_label).clicked() {
+                self.state.arp.hold.store(!hold, Ordering::Relaxed);
+            }
+        });
+
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("BPM:");
+                if ui.add(egui::Slider::new(&mut self.arp_bpm, 20.0..=300.0)).changed() {
+                    self.state.arp.bpm.set(self.arp_bpm);
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Div:");
+                for (i, &label) in ClockDiv::LABELS.iter().enumerate() {
+                    if ui.selectable_label(self.arp_division == i as u8, label).clicked() {
+                        self.arp_division = i as u8;
+                        self.state.arp.division.store(i as u8, Ordering::Relaxed);
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Mode:");
+                for (i, &label) in ArpMode::LABELS.iter().enumerate() {
+                    if ui.selectable_label(self.arp_mode == i as u8, label).clicked() {
+                        self.arp_mode = i as u8;
+                        self.state.arp.mode.store(i as u8, Ordering::Relaxed);
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Oct:");
+                for oct in 1u8..=4 {
+                    if ui.selectable_label(self.arp_octave_range == oct, oct.to_string()).clicked() {
+                        self.arp_octave_range = oct;
+                        self.state.arp.octave_range.store(oct, Ordering::Relaxed);
+                    }
+                }
+                ui.label("  Gate:");
+                if ui.add(egui::Slider::new(&mut self.arp_gate, 0.05..=1.0)).changed() {
+                    self.state.arp.gate.set(self.arp_gate);
+                }
+            });
+        });
+    }
+
+    fn ui_walker_panel(&mut self, ui: &mut egui::Ui) {
+        use synth_engine::arp::{Scale, ClockDiv};
+
+        let enabled = self.state.walker.enabled.load(Ordering::Relaxed);
+        ui.horizontal(|ui| {
+            let label = egui::RichText::new("WALKER").strong()
+                .color(if enabled { Color32::from_rgb(100, 180, 255) } else { Color32::GRAY });
+            if ui.button(label).on_hover_text("Scale Walker — autonomous random walk within a scale. Generates notes independently of keyboard input.").clicked() {
+                self.state.walker.enabled.store(!enabled, Ordering::Relaxed);
+            }
+        });
+
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("BPM:");
+                if ui.add(egui::Slider::new(&mut self.walker_bpm, 20.0..=300.0)).changed() {
+                    self.state.walker.bpm.set(self.walker_bpm);
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Div:");
+                for (i, &label) in ClockDiv::LABELS.iter().enumerate() {
+                    if ui.selectable_label(self.walker_division == i as u8, label).clicked() {
+                        self.walker_division = i as u8;
+                        self.state.walker.division.store(i as u8, Ordering::Relaxed);
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Scale:");
+                for (i, &label) in Scale::LABELS.iter().enumerate() {
+                    if ui.selectable_label(self.walker_scale == i as u8, label).clicked() {
+                        self.walker_scale = i as u8;
+                        self.state.walker.scale.store(i as u8, Ordering::Relaxed);
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Root:");
+                let note_names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+                let name = note_names[(self.walker_root % 12) as usize];
+                let octave = (self.walker_root as i32 / 12) - 1;
+                ui.label(format!("{}{}", name, octave));
+                if ui.add(egui::Slider::new(&mut self.walker_root, 36u8..=84)).changed() {
+                    self.state.walker.root.store(self.walker_root, Ordering::Relaxed);
+                }
+                ui.label("  Oct:");
+                for oct in 1u8..=3 {
+                    if ui.selectable_label(self.walker_oct == oct, oct.to_string()).clicked() {
+                        self.walker_oct = oct;
+                        self.state.walker.octave_range.store(oct, Ordering::Relaxed);
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Gate:");
+                if ui.add(egui::Slider::new(&mut self.walker_gate, 0.05..=1.0)).changed() {
+                    self.state.walker.gate.set(self.walker_gate);
                 }
             });
         });
