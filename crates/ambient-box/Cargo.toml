@@ -1,0 +1,19 @@
+[package]
+name = "ambient-box"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "ambient-box"
+path = "src/main.rs"
+
+[dependencies]
+ambient-engine = { path = "../ambient-engine" }
+synth-control  = { path = "../synth-control" }
+synth-ui       = { path = "../synth-ui" }
+fundsp         = { version = "0.23", features = ["files", "fft"] }
+cpal           = "0.15"
+anyhow         = "1"
+eframe         = "0.29"
+egui           = "0.29"
+midir          = "0.9"

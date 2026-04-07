@@ -1,0 +1,9 @@
+[package]
+name = "ambient-engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+synth-dsp     = { path = "../synth-dsp" }
+synth-control = { path = "../synth-control" }
+fundsp        = { version = "0.23", features = ["files", "fft"] }

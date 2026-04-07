@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/synth-dsp", "crates/synth-engine", "crates/synth-control"]
+members = [".", "crates/synth-dsp", "crates/synth-engine", "crates/synth-control", "crates/synth-ui", "crates/ambient-engine", "crates/ambient-box"]
 resolver = "2"
 
 [package]

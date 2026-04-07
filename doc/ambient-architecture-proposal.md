@@ -59,44 +59,93 @@ net. See `dsp-guidelines.md` for the full rules.
 
 ---
 
-## 3. Proposed Crate Structure
+## 3. Platform Architecture
 
-The project should evolve from a single crate into a **Cargo workspace** with three crates.
+The workspace is organized as a **platform** — a set of reusable library crates that any
+number of applications can assemble independently. Each app picks what it needs and builds its
+own experience on top. No app logic leaks into the platform.
+
+### The platform rule
+
+> Platform crates never depend on app crates or on each other upward.
+> Engine crates depend only on platform crates.
+> Apps depend on one or more engine crates plus platform crates.
+
+This makes every platform crate independently usable: a future drum machine, a VST plugin, a
+Bevy game, or a CLI generative tool can each pull in exactly what they need.
+
+### Full workspace layout
 
 ```mermaid
 graph TD
-    subgraph Workspace["Cargo Workspace — the_synth"]
-        DSP["synth-dsp  ·  lib\n───────────────\nDSP primitives\nMultiWaveOsc · LiveAdsr\nMoog filter · FxNodes\nShimmer · Crystallizer\nAll fundsp AudioNodes"]
-        ENGINE["synth-engine  ·  lib\n───────────────\nLayer system\nArpeggiator\nMacro engine\nScene management\nMIDI routing\nPatch serialization"]
-        APP["synth-app  ·  bin\n───────────────\negui UI panels\ncpal audio stream\nMIDI device mgmt\nFile dialogs"]
+    subgraph PLATFORM["Platform crates  ·  no app logic"]
+        DSP["synth-dsp  ·  lib\n──────────────────\nDSP primitives\nMultiWaveOsc · LiveAdsr\nMoog filter · FxChain\nShimmer · Crystallizer"]
+        CTRL["synth-control  ·  lib\n──────────────────\nControlEvent bus\nControlSource trait\nMidiEngine\nCC → param mapping"]
+        UI["synth-ui  ·  lib\n──────────────────\nShared egui widgets\nADSR visualizer\nOscilloscope\nKeyboard widget\nPatch browser\nPeak meter · Knobs"]
     end
 
-    DSP -->|"DSP nodes + Shared params"| ENGINE
-    ENGINE -->|"AudioState + event bus"| APP
+    subgraph ENGINES["Engine crates  ·  instrument assembly"]
+        SE["synth-engine  ·  lib\n──────────────────\nSingle-voice engine\nAudioState\nbuild_synth_graph\nFxChain\nprocess_block API"]
+        AE["ambient-engine  ·  lib\n──────────────────\nMulti-track engine\n4 × Track\nGlobal buses\nArpeggiator\nMacro · Scene system\nGenerative patterns\nAutomation"]
+    end
 
-    style DSP fill:#1a2a3a,stroke:#4a7fa5
-    style ENGINE fill:#1a3a2a,stroke:#4aa57f
-    style APP fill:#3a2a1a,stroke:#a57f4a
+    subgraph APPS["Application binaries"]
+        TS["the_synth  ·  bin\n──────────────────\nMono-timbral synth\ncpal + egui\nExisting UX, unchanged"]
+        AB["ambient-box  ·  bin\n──────────────────\nMulti-track ambient\nelectronic music maker\ncpal + egui\nLayer mixer · Macros\nScene browser"]
+        FUT["[future apps]\n──────────────────\nBevy game\nVST3/CLAP plugin\nDrum machine\nGenerative installation"]
+    end
+
+    DSP --> SE & AE
+    CTRL --> SE & AE & TS & AB
+    UI --> TS & AB
+    SE --> TS
+    AE --> AB
+    DSP & CTRL & UI & AE --> FUT
+
+    style DSP  fill:#1a2a3a,stroke:#4a7fa5
+    style CTRL fill:#2a1a3a,stroke:#7f4aa5
+    style UI   fill:#1a3a3a,stroke:#4aa5a5
+    style SE   fill:#1a3a2a,stroke:#4aa57f
+    style AE   fill:#1a3a2a,stroke:#4aa57f
+    style TS   fill:#3a2a1a,stroke:#a57f4a
+    style AB   fill:#3a1a2a,stroke:#a54a7f
+    style FUT  fill:#2a2a2a,stroke:#888888
 ```
 
-### `synth-dsp` (library crate)
-Pure signal processing. No I/O, no UI, no serialization. Depends only on `fundsp` and `std`.
-This crate contains every `AudioNode` implementation:
-- `MultiWaveOsc` — band-limited oscillator (already exists, move here)
-- `LiveAdsr` — fully parametric ADSR (already exists, move here)
-- `FxChain` — series effects chain (already exists, move here)
-- `ShimmerReverb` — new: pitch-shifted feedback reverb
-- `Crystallizer` — new: granular pitch-shift delay
+### Platform crates
 
-### `synth-engine` (library crate)
-Assembles DSP nodes into a complete instrument. Manages the layer system, arpeggiator, macro
-engine, and scene state. Exposes a clean API: `Engine::new()`, `Engine::process_block()`,
-`Engine::set_macro()`, `Engine::load_scene()`. Depends on `synth-dsp`, `serde`, `midir`.
+**`synth-dsp`** (exists) — Pure signal processing. No I/O, no UI, no serialization.
+Depends only on `fundsp` and `std`. Contains every `AudioNode` implementation:
+`MultiWaveOsc`, `LiveAdsr`, `FxChain`, and future `ShimmerReverb`, `Crystallizer`.
 
-### `synth-app` (binary crate)
-The egui application. Creates an `Engine`, opens a cpal stream, drives the MIDI engine, and
-renders the UI. Contains no DSP logic — it only translates user actions into `Engine` API calls.
-Depends on `synth-engine`, `cpal`, `egui/eframe`, `rfd`.
+**`synth-control`** (exists) — Event bus and input abstraction. `ControlEvent` enum,
+`ControlSender`/`ControlReceiver` (lock-free channel), `ControlSource` trait, `MidiEngine`.
+Depends on `crossbeam-channel`, `midir`, `anyhow`.
+
+**`synth-ui`** (planned) — Shared egui widgets. No audio dependencies — pure UI.
+ADSR visualizer, oscilloscope, on-screen keyboard, patch browser panel, VU meter, knobs.
+Both `the_synth` and `ambient-box` use this crate for their common UI components.
+
+### Engine crates
+
+**`synth-engine`** (exists) — Single-voice engine powering `the_synth`. `AudioState`,
+`build_synth_graph`, `FxChain`. Exposes `process_block()` and `AudioState` parameter Shareds.
+
+**`ambient-engine`** (planned) — Multi-track engine powering `ambient-box`. Four independent
+`Track` instances each with their own voice bank, arpeggiator, and effect sends. Global shimmer
+and crystal buses. Macro and scene system. Generative pattern engine. Automation.
+
+### Application binaries
+
+**`the_synth`** (exists) — The original mono-timbral synthesizer. Stays exactly as it is.
+No changes forced by platform evolution.
+
+**`ambient-box`** (planned) — The multi-track ambient/electronic music maker. Layer mixer,
+macro performance surface, scene browser, BPM-sync. Built entirely on `ambient-engine` and
+`synth-ui`.
+
+**Future apps** depend on the same platform crates. A Bevy game adds `synth-bevy` as a shell
+over `ambient-engine`. A VST plugin wraps any engine with a `nih-plug` shell.
 
 ---
 
@@ -556,62 +605,71 @@ These decisions should be made before implementation begins:
 
 ---
 
-## 13. Music Generation Library — Revised Architecture
+## 13. Platform Architecture — Detailed Design
 
-This section supersedes and extends the crate structure proposed in §3. It reflects two
-additional use cases that have become priorities: **embedding the engine in a Bevy game** and
-**music generation** (generative ambient / adaptive game audio), alongside the original standalone
-Mac app goal.
+This section provides the detailed design for the platform described in §3. It supersedes
+earlier single-engine proposals. The key shift is from "one engine, one app" to a **platform
+of reusable crates** that multiple independent applications can assemble.
 
-### 13.1 The Three Use Cases
+### 13.1 Use Cases and Hosts
 
-| Use case | Host | Audio thread owner | Control source |
-|---|---|---|---|
-| **Standalone Mac app** | `synth-app` | cpal | MIDI + keyboard + mouse + UI |
-| **Bevy game / interactive** | `synth-bevy` plugin | Bevy audio system | Bevy ECS events + game state |
-| **DAW plugin** (future) | VST3/CLAP host | DAW | MIDI + automation |
+Each use case is an independent application (or library shell) that assembles platform crates:
 
-All three use cases share the same `synth-engine` library. The host is a thin shell — it owns
-the audio thread and calls `Engine::process_block()`. It does not contain DSP logic.
+| Use case | Binary / crate | Engine | Audio thread owner | Control source |
+|---|---|---|---|---|
+| **Mono-timbral synth** | `the_synth` | `synth-engine` | cpal | MIDI + keyboard + mouse + UI |
+| **Ambient / electronic maker** | `ambient-box` | `ambient-engine` | cpal | MIDI + keyboard + macro knobs + UI |
+| **Bevy game** | `synth-bevy` plugin | `ambient-engine` | Bevy audio | Bevy ECS events + game state |
+| **DAW plugin** (future) | `synth-vst` | any engine | DAW host | MIDI + automation |
 
-### 13.2 Revised Crate Architecture
+No engine crate knows which application is hosting it. The host is always a thin shell that
+owns the audio thread and calls `process_block()`.
 
-The original three-crate split (§3) is extended to five crates plus one optional Bevy crate:
+### 13.2 Platform Crate Dependency Rules
 
 ```mermaid
 graph TD
-    subgraph Workspace["Cargo Workspace — the_synth"]
-        DSP["synth-dsp  ·  lib\n──────────────────\nAudioNode primitives\nMultiWaveOsc · LiveAdsr\nMoog filter · FxNodes\nShimmer · Crystallizer\nNo I/O · No std::time"]
-
-        VOICE["synth-voice  ·  lib\n──────────────────\nInstrument trait\nSubtractive voice\nSample player voice\nPolyphony + voice stealing\nPatch (parameter snapshot)"]
-
-        ENGINE["synth-engine  ·  lib\n──────────────────\nMulti-track engine\nTrack = Instrument + Arp + sends\nGlobal effect buses\nMacro system · Scene\nGenerative pattern engine\nAutomation\nprocess_block() API"]
-
-        CONTROL["synth-control  ·  lib\n──────────────────\nControlEvent type\nControlSource trait\nMIDI adapter (midir)\nKeyboard adapter\nCC → param mapping table"]
-
-        APP["synth-app  ·  bin\n──────────────────\ncpal stream\negui UI panels\nMIDI device management\nFile dialogs"]
-
-        BEVY["synth-bevy  ·  lib\n──────────────────\nBevy Plugin\nAudioSource registration\nECS ↔ ControlEvent bridge\nBevy Resource wrappers\nDev inspector panel (bevy-egui)"]
+    subgraph PLATFORM["Platform crates  (no app logic, no engine assembly)"]
+        DSP["synth-dsp\nDSP nodes · AudioNode impls"]
+        CTRL["synth-control\nControlEvent · MidiEngine\nControlSource trait"]
+        UI["synth-ui\nShared egui widgets"]
     end
 
-    DSP --> VOICE --> ENGINE
-    CONTROL --> ENGINE
-    ENGINE --> APP
-    ENGINE --> BEVY
+    subgraph ENGINES["Engine crates  (instrument assembly, no I/O)"]
+        SE["synth-engine\nSingle-voice · AudioState\nbuild_synth_graph"]
+        AE["ambient-engine\n4-track · buses · arp\nmacros · scenes · generative"]
+    end
 
-    style DSP    fill:#1a2a3a,stroke:#4a7fa5
-    style VOICE  fill:#1a2a3a,stroke:#4a7fa5
-    style ENGINE fill:#1a3a2a,stroke:#4aa57f
-    style CONTROL fill:#2a1a3a,stroke:#7f4aa5
-    style APP    fill:#3a2a1a,stroke:#a57f4a
-    style BEVY   fill:#3a1a2a,stroke:#a54a7f
+    subgraph APPS["Applications  (I/O shells)"]
+        TS["the_synth  bin"]
+        AB["ambient-box  bin"]
+        BEVY["synth-bevy  lib"]
+        VST["synth-vst  lib  (future)"]
+    end
+
+    DSP --> SE & AE
+    CTRL --> SE & AE & TS & AB & BEVY
+    UI  --> TS & AB
+    SE  --> TS
+    AE  --> AB & BEVY & VST
+
+    style DSP  fill:#1a2a3a,stroke:#4a7fa5
+    style CTRL fill:#2a1a3a,stroke:#7f4aa5
+    style UI   fill:#1a3a3a,stroke:#4aa5a5
+    style SE   fill:#1a3a2a,stroke:#4aa57f
+    style AE   fill:#1a3a2a,stroke:#4aa57f
+    style TS   fill:#3a2a1a,stroke:#a57f4a
+    style AB   fill:#3a1a2a,stroke:#a54a7f
+    style BEVY fill:#3a1a2a,stroke:#a54a7f
+    style VST  fill:#2a2a2a,stroke:#888888
 ```
 
-**Dependency rules:**
-- `synth-dsp` and `synth-voice` depend only on `fundsp` and `std` — never on any I/O crate
-- `synth-engine` depends on `synth-dsp`, `synth-voice`, and `synth-control` — never on cpal, egui, or bevy
-- `synth-control` depends on nothing project-internal; it defines the shared event vocabulary
-- `synth-app` and `synth-bevy` are the only crates that may depend on I/O (cpal, egui, bevy)
+**Hard rules:**
+- Platform crates (`synth-dsp`, `synth-control`, `synth-ui`) never depend on each other upward
+  and never depend on engine or app crates
+- Engine crates depend only on platform crates — never on cpal, egui, or bevy
+- Apps are the only crates that may import I/O libraries (cpal, egui, bevy)
+- `synth-ui` depends on egui only — no audio, no engine dependency
 
 ### 13.3 The Four Architectural Layers
 
@@ -833,204 +891,158 @@ Bevy, and any future DAW host.
 ## 14. Engineering Plan
 
 This section defines the concrete implementation phases. Each phase builds on the previous,
-is independently releasable, and does not break existing functionality.
+is independently releasable, and does not break existing functionality. The plan reflects
+the **platform + two-app architecture** described in §3 and §13.
 
-### Current state assessment
+### Current state (as of Phase 2 complete)
 
-| Area | Current status | Gap |
-|---|---|---|
-| Oscillator bank (3 OSC + unison + FM + ring) | Complete | — |
-| Amp ADSR | Complete | — |
-| Filter ADSR | State + UI only | Not wired to DSP graph |
-| Moog ladder filter | Planned | Not implemented |
-| LFO DSP wiring | State + UI only | Not wired to DSP graph |
-| FX chain (overdrive, distortion, chorus, delay, reverb) | Complete | — |
-| Step sequencer | Complete | — |
-| MIDI input | Basic | Channel filtering, multi-track routing missing |
-| Crate structure | Single crate | Workspace split needed |
-| Multi-track / layer system | None | Full implementation needed |
-| Arpeggiator | None | Full implementation needed |
-| Shimmer reverb | None | Full implementation needed |
-| Crystallizer | None | Full implementation needed |
-| Control layer (ControlEvent bus) | None | Full implementation needed |
-| Macro system | None | Full implementation needed |
-| Scene system | Patches only | Multi-layer scenes needed |
-| Generative patterns | None | Full implementation needed |
-| Automation engine | None | Full implementation needed |
-| Bevy integration | None | Full implementation needed |
+| Area | Status |
+|---|---|
+| Oscillator bank (3 OSC + unison + FM + ring) | ✅ Complete |
+| Amp ADSR, Filter ADSR, LFO DSP, Moog ladder, Noise | ✅ Complete |
+| FX chain (overdrive, distortion, chorus, delay, reverb) | ✅ Complete |
+| Step sequencer + chord keyboard | ✅ Complete |
+| MIDI input (`MidiEngine`) | ✅ Complete |
+| Workspace split (`synth-dsp`, `synth-engine`, root app) | ✅ Phase 1 done |
+| `synth-control` crate, `ControlEvent` bus | ✅ Phase 2 done |
+| Voice allocation on audio thread | ✅ Phase 2 done |
+| `the_synth` standalone app | ✅ Working, unchanged going forward |
+| `synth-ui` shared widget library | 🔲 Planned |
+| `ambient-engine` multi-track engine | 🔲 Planned |
+| `ambient-box` app binary | 🔲 Planned |
+| Arpeggiator | 🔲 Planned |
+| Shimmer reverb + Crystallizer | 🔲 Planned |
+| Macro + Scene system | 🔲 Planned |
+| Generative patterns + Automation | 🔲 Planned |
+| `synth-bevy` Bevy integration | 🔲 Planned |
 
-### Phase 0 — Complete the single-voice engine (pre-refactor)
+---
 
-**Goal:** Finish the work already started before restructuring anything. These are low-risk
-changes within the current single-crate structure. The audio output of the app improves
-immediately.
+### Phase 3 — `ambient-box` skeleton + `ambient-engine` foundation
 
-| Task | Description | Complexity |
-|---|---|---|
-| 0.1 Moog ladder filter | Wire `moog_ladder` fundsp node in place of placeholder | Low |
-| 0.2 Filter ADSR DSP | Connect `fenv_*` Shared values to actual filter cutoff modulation | Low |
-| 0.3 LFO DSP wiring | Connect `lfo_*` Shared values to pitch / filter / amp | Low |
-| 0.4 Glide live param | Replace hardcoded `follow(0.002)` with `glide_time` Shared | Low |
-| 0.5 Noise node in graph | Connect noise generator to mixer | Low |
-
-All tasks in Phase 0 are independent. They can be done in any order.
-
-### Phase 1 — Cargo workspace split
-
-**Goal:** Reorganize the codebase into the five-crate workspace without changing any behavior.
-Audio output must be bit-identical before and after this phase.
+**Goal:** Create the two new crates (`ambient-engine`, `ambient-box`) and the shared widget
+library (`synth-ui`). The `ambient-box` app launches, produces audio from four independent
+tracks, and the keyboard/MIDI can play each track. The existing `the_synth` is untouched.
 
 | Task | Description |
 |---|---|
-| 1.1 Create workspace `Cargo.toml` | Add `[workspace]` manifest at repo root |
-| 1.2 Create `synth-dsp` | Move `osc.rs`, `envelope.rs`, and the FX nodes into a new library crate |
-| 1.3 Create `synth-voice` | Move the voice pool logic (6-voice poly, `AudioState` core) into a new library crate |
-| 1.4 Create `synth-control` | Define `ControlEvent` enum; move `midi.rs` here; define `ControlSource` trait |
-| 1.5 Create `synth-engine` | Move `audio.rs` core into a new library crate; expose `process_block` and `push_event` |
-| 1.6 `synth-app` becomes a bin crate | Thin shell: opens cpal stream, renders egui, calls engine API |
-| 1.7 Verify | Run existing tests; confirm audio output unchanged |
+| 3.1 Create `synth-ui` | New platform lib crate; move shared widgets: oscilloscope, ADSR visualizer, keyboard, peak meter, knobs |
+| 3.2 Update `the_synth` to use `synth-ui` | Replace inline widget code with `synth-ui` calls; verify no regression |
+| 3.3 Create `ambient-engine` crate | `TrackState` struct (one `AudioState` + send levels per track); 4-track DSP graph builder; per-track `ControlEvent` routing with track index |
+| 3.4 `TrackMixer` | Sum 4 tracks with per-track volume `Shared`; normalize ÷4 before global buses |
+| 3.5 Placeholder global buses | Two `Shared`-controlled mix buses (shimmer send, crystal send) — dry passthrough until Phase 5 |
+| 3.6 Create `ambient-box` binary | Thin shell: cpal stream, egui window, MIDI, feeds `ambient-engine` |
+| 3.7 Track selector UI | Row of 4 track buttons; active track routes keyboard/MIDI input; existing synth panel renders active track's params |
+| 3.8 Per-track send knobs | Shimmer send + crystal send sliders per track strip |
 
-This phase is purely structural. It unlocks all subsequent phases by creating clear dependency
-boundaries.
+After Phase 3: `ambient-box` runs alongside `the_synth` as a separate binary. Four independent
+tracks, each with the full existing synth panel, plus placeholders for the effect buses.
 
-### Phase 2 — Control layer and MIDI routing
+---
 
-**Goal:** All input sources speak `ControlEvent`. The engine has no direct dependency on
-`midir` or keyboard state.
+### Phase 4 — Arpeggiator (in `ambient-engine`)
 
-| Task | Description |
-|---|---|
-| 2.1 `ControlEvent` bus | Implement lock-free MPSC queue (ringbuf); integrate into engine callback |
-| 2.2 `MidiSource` | Wrap existing `midi.rs` into `ControlSource` impl; map MIDI to `ControlEvent` |
-| 2.3 `KeyboardSource` | Wrap existing keyboard handling into `ControlSource` |
-| 2.4 CC → param mapping | `HashMap<u8, ParamAddress>` table; CC events write to `set_param` |
-| 2.5 Per-track MIDI channel | Route incoming MIDI channel to the corresponding track |
-
-After Phase 2, any input source that implements `ControlSource` can drive the engine. This is
-the prerequisite for the Bevy bridge.
-
-### Phase 3 — Multi-track engine and layer system
-
-**Goal:** The engine manages four independent tracks. Each track has its own voice bank,
-arpeggiator stub, and effect sends. The existing single-voice behavior becomes "Track 1, all
-other tracks silent."
+**Goal:** Each track in `ambient-box` has a chord-responsive arpeggiator. The step sequencer
+remains available as an alternative in `the_synth`.
 
 | Task | Description |
 |---|---|
-| 3.1 `Track` struct | Bundles voice bank, patch, arp state, shimmer send, crystal send |
-| 3.2 `TrackMixer` | Sums four tracks with per-track volume; normalizes before buses |
-| 3.3 Layer UI | Tab bar in `synth-app`: one tab per track, existing UI panel per tab |
-| 3.4 Global shimmer bus | Shimmer `Shared` mix bus; all tracks feed it; output added to master |
-| 3.5 Global crystal bus | Crystal `Shared` mix bus (dry delay for now, crystallizer in Phase 5) |
-| 3.6 Per-track send knobs | UI: shimmer send and crystal send sliders per track |
-
-After Phase 3 the musician can run four independent synth voices simultaneously, each with
-different patches and independent routing to the two effect buses.
-
-### Phase 4 — Arpeggiator
-
-**Goal:** Each track has a chord-responsive arpeggiator. The step sequencer remains available
-as an alternative trigger source.
-
-| Task | Description |
-|---|---|
-| 4.1 `ArpState` | Internal state: held notes, pattern mode, current step, BPM clock phase |
+| 4.1 `ArpState` | Held notes, pattern mode, BPM clock phase, gate length — lives in `ambient-engine` |
 | 4.2 Pattern modes | Up · Down · UpDown · Random · AsPlayed |
 | 4.3 BPM-sync clock | Global BPM → per-arp division clock derived from sample counter |
-| 4.4 `ChordHold` | `ControlEvent::ChordHold` latches a set of notes for the arp to iterate |
-| 4.5 Octave range | Arp transposes the pattern up N octaves and back |
-| 4.6 Gate length | Configurable note length as a fraction of the step |
-| 4.7 Arp UI panel | Per-track controls: mode, division, octave range, gate, hold toggle |
-| 4.8 Generative: scale walker | Basic random walk within scale; produces `NoteOn/Off` events |
+| 4.4 `ChordHold` event | `ControlEvent::ChordHold` latches a chord for the arp to iterate |
+| 4.5 Octave range + gate length | Per-arp configuration |
+| 4.6 Arp UI panel | Per-track controls in `ambient-box`: mode, division, octave range, gate, hold toggle |
+| 4.7 Scale walker | Basic random walk within a scale — shares BPM clock, produces `NoteOn/Off` |
 
-The scale walker (4.8) is the simplest generative primitive — it can be added in this phase
-as it shares the BPM clock infrastructure with the arpeggiator.
+---
 
-### Phase 5 — Shimmer reverb and Crystallizer
+### Phase 5 — Shimmer reverb and Crystallizer (in `synth-dsp`)
 
-**Goal:** Both signature spatial effects are implemented as proper DSP nodes and wired into
-the global buses.
+**Goal:** Both signature spatial effects implemented as `AudioNode`s in `synth-dsp`, wired
+into `ambient-engine`'s global buses. Testable in isolation without any app.
 
 | Task | Description |
 |---|---|
 | 5.1 `ShimmerReverb` AudioNode | Schroeder reverb + granular pitch-shifter in feedback loop |
-| 5.2 Pitch shifter | Circular buffer with moving read head; overlap-add for smoothness |
-| 5.3 Shimmer parameters | Room size, damping, pitch interval, shimmer mix, dry/wet |
-| 5.4 `Crystallizer` AudioNode | Granular pitch-shift delay: grain size, scatter, pitch ratio, feedback |
-| 5.5 Crystal parameters | Grain size, scatter, pitch ratio, feedback, dry/wet |
-| 5.6 Wire into global buses | Replace placeholder dry buses with the new nodes |
+| 5.2 Granular pitch shifter | Circular buffer + moving read head + overlap-add smoothing |
+| 5.3 `Crystallizer` AudioNode | Granular pitch-shift delay: grain size, scatter, pitch ratio, feedback |
+| 5.4 Wire into `ambient-engine` global buses | Replace dry placeholders with the new nodes |
+| 5.5 Shimmer + Crystal UI in `ambient-box` | Global bus controls: room size, pitch interval, grain size, scatter, wet/dry |
 
-Both effects are in `synth-dsp` — no dependency on the engine or app. They can be developed
-and tested in isolation with simple unit tests feeding silence or a sine wave.
+---
 
-### Phase 6 — Macro and Scene system
+### Phase 6 — Macro and Scene system (in `ambient-engine`)
 
-**Goal:** The musician can define 4–8 named macro knobs per scene. A macro writes to multiple
-parameters simultaneously. Scenes are serializable.
+**Goal:** The musician can define named macro knobs per scene that simultaneously modulate
+multiple parameters. Scenes are serializable and load/save from disk.
 
 | Task | Description |
 |---|---|
-| 6.1 `Macro` and `MacroTarget` structs | As defined in §8 |
-| 6.2 Macro evaluation in callback | Read macro Shared value; iterate targets; write param Shared values |
-| 6.3 `Scene` struct | Bundles four track patches + macro definitions + BPM + key + scale |
-| 6.4 Scene serialization | `serde` + JSON/TOML; backward-compatible single-layer migration |
-| 6.5 Macro panel UI | 4–8 large knobs labelled by scene; replaces per-parameter sliders during performance |
-| 6.6 Scene browser UI | Load / save / name scenes |
+| 6.1 `Macro` + `MacroTarget` structs | As defined in §8 |
+| 6.2 Macro evaluation in audio callback | Read macro `Shared`; iterate targets; write param `Shared`s |
+| 6.3 `Scene` struct | 4 track patches + macro definitions + BPM + key + scale |
+| 6.4 Scene serialization | `serde` + JSON; migration utility wraps a single `Patch` into a Scene |
+| 6.5 Macro panel UI in `ambient-box` | 4–8 large labelled knobs — the primary performance surface |
+| 6.6 Scene browser UI | Load / save / name scenes; preview patch names per slot |
 
-### Phase 7 — Bevy integration
+---
 
-**Goal:** A game can embed `synth-engine` and drive it through the ECS event system.
+### Phase 7 — Bevy integration (`synth-bevy`)
+
+**Goal:** A Bevy game can embed `ambient-engine` and drive it through ECS events. See §15
+for the full integration design.
 
 | Task | Description |
 |---|---|
 | 7.1 Create `synth-bevy` crate | Bevy plugin skeleton; feature-gated `bevy` dependency |
-| 7.2 `SynthPlugin` | Registers engine as Bevy `AudioSource`; initializes event channel |
-| 7.3 `SynthEvent` Bevy event | Mirror of `ControlEvent` but as a regular Bevy event (heap-ok) |
-| 7.4 `BevyBridge` system | Reads `SynthEvent`s, translates, pushes into engine lock-free queue |
-| 7.5 `SynthParam` Resource | Wraps `Arc<AtomicF32>` parameter handles; game systems write directly |
-| 7.6 Dev inspector panel | `bevy-egui` panel behind `inspector` Cargo feature; matches standalone UI |
-| 7.7 Example game | Minimal Bevy app: moving entity → Macro 0; demonstrates adaptive audio loop |
+| 7.2 `AmbientPlugin` | Registers `ambient-engine` as Bevy `AudioSource`; initializes event channel |
+| 7.3 `SynthEvent` Bevy event | Mirror of `ControlEvent` as a regular Bevy event (heap-ok) |
+| 7.4 `BevyBridge` system | Reads `SynthEvent`s; translates; pushes into engine lock-free queue |
+| 7.5 `SynthParam` Resource | `Arc<AtomicF32>` handles; game systems write macros directly |
+| 7.6 Dev inspector | `bevy-egui` panel behind `inspector` Cargo feature |
+| 7.7 Example Bevy app | Moving entity → Macro 0; demonstrates adaptive audio |
 
-### Phase 8 — Generative patterns and automation (ambient / game audio)
+---
 
-**Goal:** The engine can generate music autonomously from rules. Essential for ambient
-background and adaptive game audio.
+### Phase 8 — Generative patterns and Automation (in `ambient-engine`)
+
+**Goal:** `ambient-box` and Bevy games can generate music autonomously from rules.
 
 | Task | Description |
 |---|---|
-| 8.1 Euclidean rhythm generator | Bjorklund algorithm; configurable N hits / M steps per track |
-| 8.2 Probability table generator | (note, probability) table evaluated each step; tension param |
-| 8.3 `AutomationClip` | Breakpoint curve; evaluated in audio callback from beat position |
-| 8.4 Automation engine | Manages a list of active clips; interpolates and writes Shared params |
-| 8.5 Generative source UI | Controls for walker range, euclidean N/M, probability table editor |
-| 8.6 Automation UI | Drag-point curve editor per param (simplified — no full DAW timeline) |
+| 8.1 Euclidean rhythm generator | Bjorklund algorithm; N hits / M steps per track |
+| 8.2 Probability table generator | (note, probability) table; tension parameter |
+| 8.3 `AutomationClip` | Breakpoint curve; evaluated in callback from beat position |
+| 8.4 Automation engine | Manages active clips; interpolates and writes `Shared` params |
+| 8.5 Generative + automation UI | Controls in `ambient-box`; no full DAW timeline |
+
+---
 
 ### Phase summary and dependencies
 
 ```mermaid
 graph LR
-    P0["Phase 0\nComplete\nsingle-voice"]
-    P1["Phase 1\nWorkspace\nsplit"]
-    P2["Phase 2\nControl layer\n+ MIDI routing"]
-    P3["Phase 3\nMulti-track\n+ layers"]
+    P0["✅ Phase 0\nSingle-voice\ncomplete"]
+    P1["✅ Phase 1\nWorkspace\nsplit"]
+    P2["✅ Phase 2\nControl layer"]
+    P3["Phase 3\nambient-box\nskeleton"]
     P4["Phase 4\nArpeggiator"]
     P5["Phase 5\nShimmer +\nCrystallizer"]
     P6["Phase 6\nMacro +\nScene"]
-    P7["Phase 7\nBevy\nintegration"]
+    P7["Phase 7\nBevy"]
     P8["Phase 8\nGenerative +\nautomation"]
 
     P0 --> P1 --> P2 --> P3
-    P3 --> P4
-    P3 --> P5
-    P4 --> P6
-    P5 --> P6
+    P3 --> P4 & P5
+    P4 & P5 --> P6
     P2 --> P7
     P6 --> P8
     P4 --> P8
 
     style P0 fill:#1a3a1a,stroke:#4aa54a
-    style P1 fill:#1a2a3a,stroke:#4a7fa5
-    style P2 fill:#1a2a3a,stroke:#4a7fa5
+    style P1 fill:#1a3a1a,stroke:#4aa54a
+    style P2 fill:#1a3a1a,stroke:#4aa54a
     style P3 fill:#2a1a3a,stroke:#7f4aa5
     style P4 fill:#2a1a3a,stroke:#7f4aa5
     style P5 fill:#2a1a3a,stroke:#7f4aa5
@@ -1039,19 +1051,14 @@ graph LR
     style P8 fill:#3a2a1a,stroke:#a57f4a
 ```
 
-Phases 0 and 1 are blocking for everything else. Phases 3, 4, and 5 can be parallelized once
-Phase 2 is complete. Phase 7 (Bevy) only requires Phase 2 — it does not depend on layers,
-arp, or effects being finished. This means Bevy integration can proceed in parallel with the
-ambient music feature work.
+Phase 7 (Bevy) only requires Phase 2 and can proceed in parallel with ambient music work.
+`the_synth` is never modified after Phase 2.
 
-### Non-goals for all phases
+### Non-goals
 
-- **iOS / iPadOS** — AUv3 requires a full Swift project shell; out of scope until the Mac
-  standalone and Bevy targets are mature.
-- **VST3 / CLAP plugin format** — `nih-plug` integration is possible after Phase 1, but is
-  not required for the primary use cases. Tracked separately.
-- **DAW-style timeline / MIDI clip editor** — the automation UI in Phase 8 is intentionally
-  minimal. A full piano-roll is a separate product, not a feature.
+- **iOS / iPadOS** — AUv3 requires a full Swift project shell; out of scope.
+- **VST3 / CLAP** — `nih-plug` wrapping any engine crate is possible after Phase 3; tracked separately.
+- **DAW-style piano roll** — automation UI in Phase 8 is minimal; a full timeline editor is a separate product.
 
 ---
 

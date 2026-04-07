@@ -110,7 +110,7 @@ where
             // --- Drain control events ---
             while let Ok(ev) = rx.try_recv() {
                 match ev {
-                    ControlEvent::NoteOn { pitch, .. } => {
+                    ControlEvent::NoteOn { pitch, track: _, .. } => {
                         // Ignore if this pitch is already playing at full gate (key repeat).
                         if voice_notes.iter().enumerate().any(|(s, &n)| {
                             n == Some(pitch) && state.voice_gates[s].value() > 0.5
@@ -128,7 +128,7 @@ where
                         state.voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
                         state.voice_gates[slot].set(1.0);
                     }
-                    ControlEvent::NoteOff { pitch } => {
+                    ControlEvent::NoteOff { pitch, track: _ } => {
                         for (slot, note) in voice_notes.iter_mut().enumerate() {
                             if *note == Some(pitch) {
                                 state.voice_gates[slot].set(0.0);
