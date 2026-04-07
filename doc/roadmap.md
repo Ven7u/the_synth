@@ -14,7 +14,7 @@ Status of all planned features, in implementation order.
 | OSC on/off toggle | ✅ Done | |
 | Pulse width (Square) | ✅ Done | With PolyBLEP at variable duty cycle |
 | Unison / spread | ✅ Done | Up to 5 voices, 0–50¢ spread |
-| PWM (LFO → pulse width) | 🔲 Planned | MultiWaveOsc gains 2nd input; LFO routed in |
+| PWM (LFO → pulse width) | 🔲 Planned | LFO dest routing exists; PWM destination not yet wired |
 | Hard sync (OSC1 resets OSC2) | ✅ Done | Generation counter per voice; all OSC2 unison copies are slaves |
 | FM (OSC2 → OSC1 frequency) | ✅ Done | fm_tap Shared per voice; pitch-tracking linear FM |
 | Ring modulation (OSC1 × OSC2) | ✅ Done | ring_tap + fm_tap Shared per voice; added to mix |
@@ -48,10 +48,10 @@ Status of all planned features, in implementation order.
 
 | Feature | Status | Notes |
 |---|---|---|
-| Rate + depth | ✅ Done (UI + state) | Not yet wired to DSP graph |
-| Shape: Sin / Tri / Saw | ✅ Done (UI + state) | |
-| Destination: Pitch / Filter / Amp | ✅ Done (UI + state) | |
-| PWM destination | 🔲 Planned | After PWM oscillator feature |
+| Rate + depth | ✅ Done | Wired in audio callback |
+| Shape: Sin / Tri / Saw | ✅ Done | |
+| Destination: Pitch / Filter / Amp | ✅ Done | All three destinations active in callback |
+| PWM destination | 🔲 Planned | |
 
 ---
 
@@ -68,8 +68,8 @@ Status of all planned features, in implementation order.
 
 | Feature | Status | Notes |
 |---|---|---|
-| Portamento time | ✅ Done (UI + state) | `follow(0.002)` hardcoded; param not yet live |
-| Live glide time control | 🔲 Planned | Control-side smoothing approach |
+| Portamento time | ✅ Done | Smoothed per-buffer in audio callback via `glide_time` Shared |
+| Live glide time control | ✅ Done | |
 
 ---
 
@@ -117,4 +117,4 @@ flowchart LR
     LFO -->|mod| AENV
 ```
 
-Greyed sections (filter, LFO DSP wiring, glide) are implemented in UI/state but not yet connected in the DSP graph.
+All sections are connected. Remaining planned items: PWM LFO destination, noise type toggle, triangle PolyBLEP.

@@ -910,12 +910,29 @@ the **platform + two-app architecture** described in §3 and §13.
 | `synth-ui` shared widget library | ✅ Phase 3 done (skeleton) |
 | `ambient-engine` multi-track engine | ✅ Phase 3 done (skeleton) |
 | `ambient-box` app binary | ✅ Phase 3 done (skeleton — minimal UX, intentional) |
-| Arpeggiator | 🔲 Phase 4 |
+| Arpeggiator + Scale walker | ✅ Phase 4 done |
 | Shimmer reverb + Crystallizer | 🔲 Phase 5 |
 | `ambient-box` UX refinement | 🔲 Evolves naturally through Phases 4–6 |
 | Macro + Scene system | 🔲 Phase 6 |
 | Generative patterns + Automation | 🔲 Phase 8 |
 | `synth-bevy` Bevy integration | 🔲 Phase 7 |
+
+---
+
+### ✅ Phase 4 — Arpeggiator + Scale walker (done)
+
+**Goal:** Each track in `ambient-box` and `the_synth` has a chord-responsive arpeggiator and a
+scale walker. All logic lives in `synth-engine::arp`; apps provide callback wiring only.
+
+| Task | Status | Notes |
+|---|---|---|
+| 4.1 `ArpState` | ✅ | Fixed-size arrays, zero heap on audio thread |
+| 4.2 Pattern modes | ✅ | Up · Down · UpDown · Random · AsPlayed |
+| 4.3 BPM-sync clock | ✅ | Per-arp BPM + ClockDiv; phase-based gate model |
+| 4.4 `ChordHold` event | ✅ | `ControlEvent::ChordHold`; allocation on sender thread only |
+| 4.5 Octave range + gate length | ✅ | Per-arp `ArpShared` atomics |
+| 4.6 Arp UI panel | ✅ | In both `the_synth` and `ambient-box` |
+| 4.7 Scale walker | ✅ | `ScaleWalker` + `ScaleWalkerShared`; 11 scales, random walk ±1/±2 steps |
 
 ---
 
@@ -942,23 +959,6 @@ The UX is intentionally minimal at this stage. The full layer mixer, patch edito
 performance surface will emerge naturally as Phases 4–6 add the features that define what
 the controls need to do. Designing it in full before Shimmer and the Macro system exist
 would mean designing blind.
-
----
-
-### Phase 4 — Arpeggiator (in `ambient-engine`)
-
-**Goal:** Each track in `ambient-box` has a chord-responsive arpeggiator. The step sequencer
-remains available as an alternative in `the_synth`.
-
-| Task | Description |
-|---|---|
-| 4.1 `ArpState` | Held notes, pattern mode, BPM clock phase, gate length — lives in `ambient-engine` |
-| 4.2 Pattern modes | Up · Down · UpDown · Random · AsPlayed |
-| 4.3 BPM-sync clock | Global BPM → per-arp division clock derived from sample counter |
-| 4.4 `ChordHold` event | `ControlEvent::ChordHold` latches a chord for the arp to iterate |
-| 4.5 Octave range + gate length | Per-arp configuration |
-| 4.6 Arp UI panel | Per-track controls in `ambient-box`: mode, division, octave range, gate, hold toggle |
-| 4.7 Scale walker | Basic random walk within a scale — shares BPM clock, produces `NoteOn/Off` |
 
 ---
 
@@ -1032,7 +1032,7 @@ graph LR
     P1["✅ Phase 1\nWorkspace\nsplit"]
     P2["✅ Phase 2\nControl layer"]
     P3["✅ Phase 3\nambient-box\nskeleton"]
-    P4["Phase 4\nArpeggiator"]
+    P4["✅ Phase 4\nArpeggiator"]
     P5["Phase 5\nShimmer +\nCrystallizer"]
     P6["Phase 6\nMacro +\nScene"]
     P7["Phase 7\nBevy"]
@@ -1049,7 +1049,7 @@ graph LR
     style P1 fill:#1a3a1a,stroke:#4aa54a
     style P2 fill:#1a3a1a,stroke:#4aa54a
     style P3 fill:#1a3a1a,stroke:#4aa54a
-    style P4 fill:#2a1a3a,stroke:#7f4aa5
+    style P4 fill:#1a3a1a,stroke:#4aa54a
     style P5 fill:#2a1a3a,stroke:#7f4aa5
     style P6 fill:#3a2a1a,stroke:#a57f4a
     style P7 fill:#3a1a2a,stroke:#a54a7f
