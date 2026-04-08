@@ -912,6 +912,7 @@ the **platform + two-app architecture** described in §3 and §13.
 | `ambient-box` app binary | ✅ Phase 3 done (skeleton — minimal UX, intentional) |
 | Arpeggiator + Scale walker | ✅ Phase 4 done |
 | Shimmer reverb + Crystallizer | 🔲 Phase 5 |
+| Advanced core DSP effects (modern "wow" set) | 🔲 Phase 9 |
 | `ambient-box` UX refinement | 🔲 Evolves naturally through Phases 4–6 |
 | Macro + Scene system | 🔲 Phase 6 |
 | Generative patterns + Automation | 🔲 Phase 8 |
@@ -1024,6 +1025,31 @@ for the full integration design.
 
 ---
 
+### Phase 9 — Advanced core DSP effects (in `synth-dsp`)
+
+**Goal:** Add modern, reusable high-impact effects at the platform DSP level, so all hosts
+(`the_synth`, `ambient-box`, future plugin/game integrations) can share the same signature
+sound design primitives.
+
+| Category | Task | Description |
+|---|---|---|
+| Stereo image | 9.1 Micro-pitch doubler (mono-safe) | Eventide-style width enhancer with low-end mono protection |
+| Time / space | 9.2 Multi-tap diffusion delay | Dense rhythmic echoes with diffusion control |
+| Resonance / tone | 9.3 Resonator bank | Modal resonator for organic/acoustic drone coloration |
+| Spectral | 9.4 Spectral freeze / blur | Capture and smear spectral frames for cinematic pads |
+| Pitch / harmony | 9.5 Polyphonic harmonizer | Scale/key-aware interval generation beyond octave shimmer |
+| Spatial realism | 9.6 Convolution reverb (partitioned) | IR-based spaces (hall/plate/chamber) with RT-safe partitioning |
+
+**Recommended order (wow-per-complexity):**
+1. 9.1 Micro-pitch doubler
+2. 9.2 Multi-tap diffusion delay
+3. 9.3 Resonator bank
+4. 9.4 Spectral freeze / blur
+5. 9.5 Polyphonic harmonizer
+6. 9.6 Convolution reverb (partitioned)
+
+---
+
 ### Phase summary and dependencies
 
 ```mermaid
@@ -1037,6 +1063,7 @@ graph LR
     P6["Phase 6\nMacro +\nScene"]
     P7["Phase 7\nBevy"]
     P8["Phase 8\nGenerative +\nautomation"]
+    P9["Phase 9\nAdvanced\ncore DSP"]
 
     P0 --> P1 --> P2 --> P3
     P3 --> P4 & P5
@@ -1044,6 +1071,8 @@ graph LR
     P2 --> P7
     P6 --> P8
     P4 --> P8
+    P5 --> P9
+    P6 --> P9
 
     style P0 fill:#1a3a1a,stroke:#4aa54a
     style P1 fill:#1a3a1a,stroke:#4aa54a
@@ -1054,6 +1083,7 @@ graph LR
     style P6 fill:#3a2a1a,stroke:#a57f4a
     style P7 fill:#3a1a2a,stroke:#a54a7f
     style P8 fill:#3a2a1a,stroke:#a57f4a
+    style P9 fill:#2a1a3a,stroke:#7f4aa5
 ```
 
 Phase 7 (Bevy) only requires Phase 2 and can proceed in parallel with ambient music work.
