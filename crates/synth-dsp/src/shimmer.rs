@@ -255,3 +255,21 @@ impl ShimmerReverb {
         out
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ShimmerReverb;
+
+    #[test]
+    fn shimmer_output_is_finite_across_modes() {
+        let mut s = ShimmerReverb::new(44_100.0);
+        for i in 0..30_000 {
+            let inp = if i % 4_000 == 0 { 1.0 } else { 0.0 };
+            // Sweep through pitch modes while shimmer is active to stress the feedback path.
+            let pitch = ((i / 10_000) % 3) as u8;
+            let x = s.tick(inp, 0.95, 0.35, 0.85, pitch);
+            assert!(x.is_finite());
+            assert!(x.abs() < 8.0);
+        }
+    }
+}
