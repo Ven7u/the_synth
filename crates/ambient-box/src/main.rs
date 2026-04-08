@@ -11,11 +11,22 @@ use eframe::egui;
 use fundsp::prelude::midi_hz;
 use std::sync::Arc;
 
-use ambient_engine::{AmbientEngine, TRACK_COUNT, VOICE_COUNT};
+use ambient_engine::{
+    ACTIVE_MACRO_KNOBS, AmbientEngine, AmbientPatch, MacroSetKind, MACRO_COUNT, TRACK_COUNT,
+    VOICE_COUNT, load_scene_json, save_scene_json,
+};
 use synth_engine::arp::{ArpMode, ArpState, ClockDiv, Scale, ScaleWalker};
 use synth_control::{ControlEvent, ControlSender, make_control_channel};
 use synth_control::midi::{MidiEngine, MidiEvent};
 use std::sync::atomic::Ordering;
+
+#[derive(Clone)]
+struct PatchEntry {
+    path: String,
+    category: String,
+    name: String,
+    patch: AmbientPatch,
+}
 
 fn main() -> eframe::Result {
     let sr = get_default_sr().unwrap_or(44100.0);
@@ -98,7 +109,15 @@ where
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             let frames = data.len() / channels;
 
-            let Ok(mut eng) = engine.try_lock() else { return; };
+            let Ok(mut eng) = engine.try_lock() else {
+                // If UI briefly holds the engine lock, never leave the output buffer untouched.
+                // Output explicit silence for this callback to avoid random garbage/distortion.
+                let z = T::from_sample(0.0_f32);
+                for smp in data.iter_mut() {
+                    *smp = z;
+                }
+                return;
+            };
 
             // --- Release cleanup ---
             for ti in 0..TRACK_COUNT {
@@ -269,6 +288,17 @@ struct AmbientBoxApp {
     walker_oct:   [u8;  TRACK_COUNT],
     walker_div:   [u8;  TRACK_COUNT],
     walker_gate:  [f32; TRACK_COUNT],
+    arp_enabled_ui: [bool; TRACK_COUNT],
+    arp_hold_ui:    [bool; TRACK_COUNT],
+    walker_enabled_ui: [bool; TRACK_COUNT],
+    clock_sync_enabled: bool,
+    bar_quantize_start: bool,
+    transport_playing: bool,
+    transport_bpm: u32,
+    transport_current_step: usize,
+    transport_last_tick: std::time::Instant,
+    arp_restart_pending: [bool; TRACK_COUNT],
+    walker_restart_pending: [bool; TRACK_COUNT],
 
     // Global shimmer UI state
     shimmer_on:    bool,
@@ -286,9 +316,81 @@ struct AmbientBoxApp {
     crystal_feedback: f32,
     crystal_delay_ms: f32,
     crystal_pitch:    u8,
+
+    // Macro + scene UI state (Phase 6)
+    macro_ui_values: [f32; MACRO_COUNT],
+    macro_set_ui: MacroSetKind,
+    scene_name: String,
+    scene_bpm: u32,
+    scene_key: u8,
+    scene_scale_minor: bool,
+    scene_status: String,
+    scene_files: Vec<String>,
+    scene_selected: usize,
+
+    // UI cache for lock-contented engine fields.
+    track_vol_ui: [f32; TRACK_COUNT],
+    track_cutoff_ui: [f32; TRACK_COUNT],
+    track_resonance_ui: [f32; TRACK_COUNT],
+    track_shimmer_send_ui: [f32; TRACK_COUNT],
+    track_crystal_send_ui: [f32; TRACK_COUNT],
+    master_vol_ui: f32,
+    macro_ui_names: [String; MACRO_COUNT],
+    patch_library: Vec<PatchEntry>,
+    track_patch_choice: [usize; TRACK_COUNT],
 }
 
 impl AmbientBoxApp {
+    fn collect_patch_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return; };
+        for ent in entries.flatten() {
+            let p = ent.path();
+            if p.is_dir() {
+                Self::collect_patch_files(&p, out);
+            } else if p.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("json")).unwrap_or(false) {
+                out.push(p);
+            }
+        }
+    }
+
+    fn load_patch_library() -> Vec<PatchEntry> {
+        let mut files = Vec::new();
+        Self::collect_patch_files(std::path::Path::new("assets/patches"), &mut files);
+        let mut out = Vec::new();
+        for p in files {
+            if let Ok(patch) = AmbientPatch::from_file(&p) {
+                out.push(PatchEntry {
+                    path: p.to_string_lossy().to_string(),
+                    category: patch.category.clone(),
+                    name: patch.name.clone(),
+                    patch,
+                });
+            }
+        }
+        out.sort_by(|a, b| {
+            a.category
+                .cmp(&b.category)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        out
+    }
+
+    fn list_scene_files() -> Vec<String> {
+        let mut out = Vec::new();
+        let dir = std::path::Path::new("scenes");
+        let Ok(entries) = std::fs::read_dir(dir) else { return out; };
+        for ent in entries.flatten() {
+            let p = ent.path();
+            if p.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("json")).unwrap_or(false) {
+                if let Some(s) = p.file_stem().and_then(|s| s.to_str()) {
+                    out.push(s.to_string());
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
     fn new(
         engine: Arc<std::sync::Mutex<AmbientEngine>>,
         control: ControlSender,
@@ -296,6 +398,8 @@ impl AmbientBoxApp {
     ) -> Self {
         let mut midi = MidiEngine::new();
         midi.list_ports();
+        let patch_library = Self::load_patch_library();
+        let scene_files = Self::list_scene_files();
         Self {
             engine,
             control,
@@ -315,6 +419,17 @@ impl AmbientBoxApp {
             walker_oct:   [2;     TRACK_COUNT],
             walker_div:   [1;     TRACK_COUNT],
             walker_gate:  [0.6;   TRACK_COUNT],
+            arp_enabled_ui: [false; TRACK_COUNT],
+            arp_hold_ui: [false; TRACK_COUNT],
+            walker_enabled_ui: [false; TRACK_COUNT],
+            clock_sync_enabled: true,
+            bar_quantize_start: false,
+            transport_playing: false,
+            transport_bpm: 120,
+            transport_current_step: 0,
+            transport_last_tick: std::time::Instant::now(),
+            arp_restart_pending: [false; TRACK_COUNT],
+            walker_restart_pending: [false; TRACK_COUNT],
             shimmer_on:    false,
             shimmer_mix:   0.4,
             shimmer_amt:   0.5,
@@ -328,6 +443,24 @@ impl AmbientBoxApp {
             crystal_feedback: 0.35,
             crystal_delay_ms: 260.0,
             crystal_pitch:    2,
+            macro_ui_values: [0.0; MACRO_COUNT],
+            macro_set_ui: MacroSetKind::AmbientCore,
+            scene_name: "ambient_01".to_string(),
+            scene_bpm: 120,
+            scene_key: 0,
+            scene_scale_minor: false,
+            scene_status: String::new(),
+            scene_files,
+            scene_selected: 0,
+            track_vol_ui: [1.0; TRACK_COUNT],
+            track_cutoff_ui: [3000.0; TRACK_COUNT],
+            track_resonance_ui: [0.3; TRACK_COUNT],
+            track_shimmer_send_ui: [0.0; TRACK_COUNT],
+            track_crystal_send_ui: [0.0; TRACK_COUNT],
+            master_vol_ui: 0.7,
+            macro_ui_names: std::array::from_fn(|i| format!("Macro {}", i + 1)),
+            patch_library,
+            track_patch_choice: [0; TRACK_COUNT],
         }
     }
 
@@ -356,6 +489,58 @@ impl AmbientBoxApp {
             }
         }
     }
+
+    fn sync_transport_now(&mut self) {
+        self.transport_current_step = 0;
+        self.transport_last_tick = std::time::Instant::now();
+        self.arp_restart_pending.fill(false);
+        self.walker_restart_pending.fill(false);
+        for ti in 0..TRACK_COUNT {
+            let _ = self.control.try_send(ControlEvent::ArpRestart { track: ti as u8 });
+            let _ = self.control.try_send(ControlEvent::WalkerRestart { track: ti as u8 });
+        }
+    }
+
+    fn schedule_or_restart_arp(&mut self, track: usize) {
+        if self.clock_sync_enabled && self.bar_quantize_start && self.transport_playing {
+            self.arp_restart_pending[track] = true;
+        } else {
+            let _ = self.control.try_send(ControlEvent::ArpRestart { track: track as u8 });
+        }
+    }
+
+    fn schedule_or_restart_walker(&mut self, track: usize) {
+        if self.clock_sync_enabled && self.bar_quantize_start && self.transport_playing {
+            self.walker_restart_pending[track] = true;
+        } else {
+            let _ = self.control.try_send(ControlEvent::WalkerRestart { track: track as u8 });
+        }
+    }
+
+    fn tick_transport_sync(&mut self) {
+        if !self.transport_playing {
+            return;
+        }
+        let step_dur = std::time::Duration::from_millis(60_000 / self.transport_bpm as u64 / 2);
+        if self.transport_last_tick.elapsed() < step_dur {
+            return;
+        }
+        self.transport_last_tick = std::time::Instant::now();
+        self.transport_current_step = (self.transport_current_step + 1) % 8;
+        let bar_boundary = self.transport_current_step == 0;
+        if bar_boundary {
+            for ti in 0..TRACK_COUNT {
+                if self.arp_restart_pending[ti] {
+                    let _ = self.control.try_send(ControlEvent::ArpRestart { track: ti as u8 });
+                    self.arp_restart_pending[ti] = false;
+                }
+                if self.walker_restart_pending[ti] {
+                    let _ = self.control.try_send(ControlEvent::WalkerRestart { track: ti as u8 });
+                    self.walker_restart_pending[ti] = false;
+                }
+            }
+        }
+    }
 }
 
 // Keyboard note mapping (same as the_synth)
@@ -370,6 +555,7 @@ const KEY_MAP: &[(egui::Key, i32)] = &[
 impl eframe::App for AmbientBoxApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.tick_midi();
+        self.tick_transport_sync();
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Ambient Box");
@@ -397,249 +583,529 @@ impl eframe::App for AmbientBoxApp {
 
             ui.separator();
 
-            // --- Active track basic controls ---
             if let Ok(eng) = self.engine.try_lock() {
-                let track = &eng.tracks[self.active_track];
-                ui.horizontal(|ui| {
-                    let mut vol = track.track_vol.value();
-                    if synth_ui::knob(ui, "Volume", &mut vol, 0.0, 1.0) {
-                        track.track_vol.set(vol);
-                    }
-                    let mut cutoff = track.cutoff.value();
-                    if synth_ui::knob(ui, "Cutoff", &mut cutoff, 80.0, 18000.0) {
-                        track.cutoff.set(cutoff);
-                    }
-                    let mut res = track.resonance.value();
-                    if synth_ui::knob(ui, "Resonance", &mut res, 0.1, 10.0) {
-                        track.resonance.set(res);
-                    }
-                    let mut shim = track.shimmer_send.value();
-                    if synth_ui::knob(ui, "Shimmer", &mut shim, 0.0, 1.0) {
-                        track.shimmer_send.set(shim);
-                    }
-                    let mut crys = track.crystal_send.value();
-                    if synth_ui::knob(ui, "Crystal", &mut crys, 0.0, 1.0) {
-                        track.crystal_send.set(crys);
-                    }
-                });
+                let ti = self.active_track;
+                let track = &eng.tracks[ti];
+                self.track_vol_ui[ti] = track.track_vol.value();
+                self.track_cutoff_ui[ti] = track.cutoff.value();
+                self.track_resonance_ui[ti] = track.resonance.value();
+                self.track_shimmer_send_ui[ti] = track.shimmer_send.value();
+                self.track_crystal_send_ui[ti] = track.crystal_send.value();
+                self.master_vol_ui = eng.master_vol.value();
+                for i in 0..MACRO_COUNT {
+                    self.macro_ui_values[i] = eng.macro_value(i);
+                    self.macro_ui_names[i] = eng.macro_names[i].clone();
+                }
+                self.macro_set_ui = eng.macro_set_kind();
+                let arp_cfg = &eng.arp_configs[ti];
+                self.arp_enabled_ui[ti] = arp_cfg.enabled.load(Ordering::Relaxed);
+                self.arp_hold_ui[ti] = arp_cfg.hold.load(Ordering::Relaxed);
+                self.arp_bpm[ti] = arp_cfg.bpm.value();
+                self.arp_division[ti] = arp_cfg.division.load(Ordering::Relaxed);
+                self.arp_mode[ti] = arp_cfg.mode.load(Ordering::Relaxed);
+                self.arp_oct[ti] = arp_cfg.octave_range.load(Ordering::Relaxed);
+                self.arp_gate[ti] = arp_cfg.gate.value();
 
-                ui.separator();
+                let walker_cfg = &eng.walker_configs[ti];
+                self.walker_enabled_ui[ti] = walker_cfg.enabled.load(Ordering::Relaxed);
+                self.walker_bpm[ti] = walker_cfg.bpm.value();
+                self.walker_div[ti] = walker_cfg.division.load(Ordering::Relaxed);
+                self.walker_scale[ti] = walker_cfg.scale.load(Ordering::Relaxed);
+                self.walker_root[ti] = walker_cfg.root.load(Ordering::Relaxed);
+                self.walker_oct[ti] = walker_cfg.octave_range.load(Ordering::Relaxed);
+                self.walker_gate[ti] = walker_cfg.gate.value();
 
-                // Global controls
-                ui.horizontal(|ui| {
-                    let mut mvol = eng.master_vol.value();
-                    if synth_ui::knob(ui, "Master Vol", &mut mvol, 0.0, 1.0) {
-                        eng.master_vol.set(mvol);
+                if !eng.track_patch_paths[ti].is_empty() {
+                    if let Some(idx) = self.patch_library.iter().position(|p| p.path == eng.track_patch_paths[ti]) {
+                        self.track_patch_choice[ti] = idx;
                     }
-                });
-
-                ui.separator();
-
-                // --- Shimmer reverb global bus ---
-                ui.horizontal(|ui| {
-                    let col = egui::Color32::from_rgb(120, 200, 255);
-                    let lbl = egui::RichText::new("SHIMMER").strong()
-                        .color(if self.shimmer_on { col } else { egui::Color32::GRAY });
-                    if ui.button(lbl).on_hover_text("Global shimmer reverb bus.").clicked() {
-                        self.shimmer_on = !self.shimmer_on;
-                        eng.shimmer.mix.set(if self.shimmer_on { self.shimmer_mix } else { 0.0 });
-                    }
-                    if synth_ui::knob(ui, "Mix", &mut self.shimmer_mix, 0.0, 1.0) {
-                        if self.shimmer_on { eng.shimmer.mix.set(self.shimmer_mix); }
-                    }
-                    if synth_ui::knob(ui, "Shim", &mut self.shimmer_amt, 0.0, 1.0) {
-                        eng.shimmer.shimmer.set(self.shimmer_amt);
-                    }
-                    if synth_ui::knob(ui, "Size", &mut self.shimmer_size, 0.0, 1.0) {
-                        eng.shimmer.size.set(self.shimmer_size);
-                    }
-                    if synth_ui::knob(ui, "Damp", &mut self.shimmer_damp, 0.0, 1.0) {
-                        eng.shimmer.damp.set(self.shimmer_damp);
-                    }
-                    ui.label("Pitch:");
-                    for (i, lbl) in ["0", "+12", "+24"].iter().enumerate() {
-                        if ui.selectable_label(self.shimmer_pitch == i as u8, *lbl).clicked() {
-                            self.shimmer_pitch = i as u8;
-                            eng.shimmer.pitch.store(i as u8, Ordering::Relaxed);
-                        }
-                    }
-                });
-
-                ui.separator();
-
-                // --- Crystal global bus ---
-                ui.horizontal(|ui| {
-                    let col = egui::Color32::from_rgb(255, 170, 90);
-                    let lbl = egui::RichText::new("CRYSTAL").strong()
-                        .color(if self.crystal_on { col } else { egui::Color32::GRAY });
-                    if ui.button(lbl).on_hover_text("Global crystallizer bus (granular pitch-shift delay).").clicked() {
-                        self.crystal_on = !self.crystal_on;
-                        eng.crystal.mix.set(if self.crystal_on { self.crystal_mix } else { 0.0 });
-                    }
-                    if synth_ui::knob(ui, "Mix", &mut self.crystal_mix, 0.0, 1.0) {
-                        if self.crystal_on { eng.crystal.mix.set(self.crystal_mix); }
-                    }
-                    if synth_ui::knob(ui, "Grain", &mut self.crystal_grain_ms, 10.0, 400.0) {
-                        eng.crystal.grain_ms.set(self.crystal_grain_ms);
-                    }
-                    if synth_ui::knob(ui, "Scatter", &mut self.crystal_scatter, 0.0, 1.0) {
-                        eng.crystal.scatter.set(self.crystal_scatter);
-                    }
-                    if synth_ui::knob(ui, "Delay", &mut self.crystal_delay_ms, 20.0, 1200.0) {
-                        eng.crystal.delay_ms.set(self.crystal_delay_ms);
-                    }
-                    if synth_ui::knob(ui, "Feedback", &mut self.crystal_feedback, 0.0, 0.95) {
-                        eng.crystal.feedback.set(self.crystal_feedback);
-                    }
-                    ui.label("Pitch:");
-                    for (i, lbl) in ["0.5x", "1x", "2x", "4x"].iter().enumerate() {
-                        if ui.selectable_label(self.crystal_pitch == i as u8, *lbl).clicked() {
-                            self.crystal_pitch = i as u8;
-                            eng.crystal.pitch.store(i as u8, Ordering::Relaxed);
-                        }
-                    }
-                });
+                }
             }
+
+            let mut request_patch_load: Option<(usize, usize)> = None;
+            let mut request_scene_save = false;
+            let mut request_scene_load_path: Option<String> = None;
+            let mut trigger_arp_restart: Option<usize> = None;
+            let mut trigger_walker_restart: Option<usize> = None;
+
+            // --- Per-track patch slot (Phase 6.7) ---
+            let ti = self.active_track;
+            ui.horizontal(|ui| {
+                ui.label("Patch Slot:");
+                if self.patch_library.is_empty() {
+                    ui.label(egui::RichText::new("No patches found in assets/patches").small().weak());
+                } else {
+                    if self.track_patch_choice[ti] >= self.patch_library.len() {
+                        self.track_patch_choice[ti] = 0;
+                    }
+                    let selected = &self.patch_library[self.track_patch_choice[ti]];
+                    egui::ComboBox::from_id_salt(format!("patch_slot_track_{ti}"))
+                        .selected_text(format!("{} / {}", selected.category, selected.name))
+                        .show_ui(ui, |ui| {
+                            for (i, p) in self.patch_library.iter().enumerate() {
+                                ui.selectable_value(
+                                    &mut self.track_patch_choice[ti],
+                                    i,
+                                    format!("{} / {}", p.category, p.name),
+                                );
+                            }
+                        });
+                    if ui.button("Load To Track").clicked() {
+                        request_patch_load = Some((ti, self.track_patch_choice[ti]));
+                    }
+                }
+            });
+
+            // --- Active track basic controls ---
+            ui.horizontal(|ui| {
+                let _ = synth_ui::knob(ui, "Volume", &mut self.track_vol_ui[ti], 0.0, 1.0);
+                let _ = synth_ui::knob(ui, "Cutoff", &mut self.track_cutoff_ui[ti], 80.0, 18000.0);
+                let _ = synth_ui::knob(ui, "Resonance", &mut self.track_resonance_ui[ti], 0.1, 10.0);
+                let _ = synth_ui::knob(ui, "Shimmer", &mut self.track_shimmer_send_ui[ti], 0.0, 1.0);
+                let _ = synth_ui::knob(ui, "Crystal", &mut self.track_crystal_send_ui[ti], 0.0, 1.0);
+            });
+
+            ui.separator();
+
+            // Global controls
+            ui.horizontal(|ui| {
+                let _ = synth_ui::knob(ui, "Master Vol", &mut self.master_vol_ui, 0.0, 1.0);
+            });
+
+            ui.horizontal(|ui| {
+                let btn = if self.transport_playing { "Stop" } else { "Play" };
+                if ui.button(btn).on_hover_text("Start or stop the global sync transport.").clicked() {
+                    self.transport_playing = !self.transport_playing;
+                    if self.transport_playing {
+                        self.transport_last_tick = std::time::Instant::now();
+                        if self.clock_sync_enabled && self.bar_quantize_start && self.transport_current_step == 0 {
+                            for ti in 0..TRACK_COUNT {
+                                if self.arp_restart_pending[ti] {
+                                    let _ = self.control.try_send(ControlEvent::ArpRestart { track: ti as u8 });
+                                    self.arp_restart_pending[ti] = false;
+                                }
+                                if self.walker_restart_pending[ti] {
+                                    let _ = self.control.try_send(ControlEvent::WalkerRestart { track: ti as u8 });
+                                    self.walker_restart_pending[ti] = false;
+                                }
+                            }
+                        }
+                    } else {
+                        self.arp_restart_pending.fill(false);
+                        self.walker_restart_pending.fill(false);
+                    }
+                }
+                ui.label("BPM:");
+                ui.add(egui::Slider::new(&mut self.transport_bpm, 40..=300));
+                if ui.checkbox(&mut self.clock_sync_enabled, "Clock Sync")
+                    .on_hover_text("Lock all track ARP/WALKER BPM to global transport BPM and align phase.")
+                    .changed() && self.clock_sync_enabled
+                {
+                    self.sync_transport_now();
+                }
+                if !self.clock_sync_enabled {
+                    self.arp_restart_pending.fill(false);
+                    self.walker_restart_pending.fill(false);
+                }
+                ui.add_enabled_ui(self.clock_sync_enabled, |ui| {
+                    ui.checkbox(&mut self.bar_quantize_start, "Bar Quantize")
+                        .on_hover_text("When enabled, ARP/WALKER restart on next bar instead of immediately.");
+                });
+                if ui.button("SYNC NOW")
+                    .on_hover_text("Restart all ARP/WALKER engines together.")
+                    .clicked()
+                {
+                    self.sync_transport_now();
+                }
+            });
+
+            ui.separator();
+
+            // --- Macro panel (Phase 6) ---
+            ui.label(egui::RichText::new("MACROS").strong());
+            ui.horizontal(|ui| {
+                ui.label("Set:");
+                egui::ComboBox::from_id_salt("macro_set_selector")
+                    .selected_text(self.macro_set_ui.label())
+                    .show_ui(ui, |ui| {
+                        for set in AmbientEngine::macro_set_catalog() {
+                            ui.selectable_value(&mut self.macro_set_ui, *set, set.label());
+                        }
+                    });
+            });
+            ui.horizontal(|ui| {
+                for i in 0..ACTIVE_MACRO_KNOBS {
+                    let label = self.macro_ui_names[i].clone();
+                    let _ = synth_ui::knob(ui, &label, &mut self.macro_ui_values[i], 0.0, 1.0);
+                }
+            });
+
+            ui.separator();
+
+            // --- Scene panel (Phase 6) ---
+            ui.label(egui::RichText::new("SCENE").strong());
+            ui.horizontal(|ui| {
+                ui.label("Name:");
+                ui.text_edit_singleline(&mut self.scene_name);
+                ui.label("BPM:");
+                ui.add(egui::Slider::new(&mut self.scene_bpm, 40..=300));
+                ui.label("Key:");
+                let note_names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+                egui::ComboBox::from_id_salt("scene_key")
+                    .selected_text(note_names[(self.scene_key % 12) as usize])
+                    .show_ui(ui, |ui| {
+                        for (i, name) in note_names.iter().enumerate() {
+                            ui.selectable_value(&mut self.scene_key, i as u8, *name);
+                        }
+                    });
+                ui.checkbox(&mut self.scene_scale_minor, "Minor");
+            });
+            ui.horizontal(|ui| {
+                let scene_path = format!("scenes/{}.json", self.scene_name.trim());
+                if ui.button("Save Scene").clicked() {
+                    request_scene_save = true;
+                }
+                if ui.button("Load Scene").clicked() {
+                    request_scene_load_path = Some(scene_path.clone());
+                }
+                if ui.button("Refresh").clicked() {
+                    self.scene_files = Self::list_scene_files();
+                    if self.scene_selected >= self.scene_files.len() {
+                        self.scene_selected = 0;
+                    }
+                }
+                if !self.scene_files.is_empty() {
+                    egui::ComboBox::from_id_salt("scene_file_list")
+                        .selected_text(self.scene_files[self.scene_selected].clone())
+                        .show_ui(ui, |ui| {
+                            for (i, name) in self.scene_files.iter().enumerate() {
+                                ui.selectable_value(&mut self.scene_selected, i, name.clone());
+                            }
+                        });
+                    if ui.button("Load Selected").clicked() {
+                        let name = self.scene_files[self.scene_selected].clone();
+                        let selected_path = format!("scenes/{name}.json");
+                        request_scene_load_path = Some(selected_path);
+                    }
+                }
+                if !self.scene_status.is_empty() {
+                    ui.label(egui::RichText::new(&self.scene_status).small());
+                }
+            });
+
+            ui.separator();
+
+            // --- Shimmer reverb global bus ---
+            ui.horizontal(|ui| {
+                let col = egui::Color32::from_rgb(120, 200, 255);
+                let lbl = egui::RichText::new("SHIMMER").strong()
+                    .color(if self.shimmer_on { col } else { egui::Color32::GRAY });
+                if ui.button(lbl).on_hover_text("Global shimmer reverb bus.").clicked() {
+                    self.shimmer_on = !self.shimmer_on;
+                }
+                if synth_ui::knob(ui, "Mix", &mut self.shimmer_mix, 0.0, 1.0) {
+                }
+                if synth_ui::knob(ui, "Shim", &mut self.shimmer_amt, 0.0, 1.0) {
+                }
+                if synth_ui::knob(ui, "Size", &mut self.shimmer_size, 0.0, 1.0) {
+                }
+                if synth_ui::knob(ui, "Damp", &mut self.shimmer_damp, 0.0, 1.0) {
+                }
+                ui.label("Pitch:");
+                for (i, lbl) in ["0", "+12", "+24"].iter().enumerate() {
+                    if ui.selectable_label(self.shimmer_pitch == i as u8, *lbl).clicked() {
+                        self.shimmer_pitch = i as u8;
+                    }
+                }
+            });
+
+            ui.separator();
+
+            // --- Crystal global bus ---
+            ui.horizontal(|ui| {
+                let col = egui::Color32::from_rgb(255, 170, 90);
+                let lbl = egui::RichText::new("CRYSTAL").strong()
+                    .color(if self.crystal_on { col } else { egui::Color32::GRAY });
+                if ui.button(lbl).on_hover_text("Global crystallizer bus (granular pitch-shift delay).").clicked() {
+                    self.crystal_on = !self.crystal_on;
+                }
+                if synth_ui::knob(ui, "Mix", &mut self.crystal_mix, 0.0, 1.0) {
+                }
+                if synth_ui::knob(ui, "Grain", &mut self.crystal_grain_ms, 10.0, 400.0) {
+                }
+                if synth_ui::knob(ui, "Scatter", &mut self.crystal_scatter, 0.0, 1.0) {
+                }
+                if synth_ui::knob(ui, "Delay", &mut self.crystal_delay_ms, 20.0, 1200.0) {
+                }
+                if synth_ui::knob(ui, "Feedback", &mut self.crystal_feedback, 0.0, 0.95) {
+                }
+                ui.label("Pitch:");
+                for (i, lbl) in ["0.5x", "1x", "2x", "4x"].iter().enumerate() {
+                    if ui.selectable_label(self.crystal_pitch == i as u8, *lbl).clicked() {
+                        self.crystal_pitch = i as u8;
+                    }
+                }
+            });
 
             ui.separator();
 
             // --- Per-track arp + walker ---
-            if let Ok(eng) = self.engine.try_lock() {
-                let ti = self.active_track;
-                let arp_cfg    = &eng.arp_configs[ti];
-                let walker_cfg = &eng.walker_configs[ti];
-
-                ui.columns(2, |cols| {
-                    // Arp column
-                    let arp_on = arp_cfg.enabled.load(Ordering::Relaxed);
-                    cols[0].horizontal(|ui| {
-                        let lbl = egui::RichText::new("ARP").strong()
-                            .color(if arp_on { egui::Color32::from_rgb(0,220,160) } else { egui::Color32::GRAY });
-                        if ui.button(lbl).clicked() {
-                            let new_on = !arp_on;
-                            arp_cfg.enabled.store(new_on, Ordering::Relaxed);
-                            if !new_on {
-                                let _ = self.control.try_send(ControlEvent::ChordHold {
-                                    track: ti as u8,
-                                    notes: Vec::new(),
-                                });
-                            }
+            let ti = self.active_track;
+            ui.columns(2, |cols| {
+                // Arp column
+                let arp_on = self.arp_enabled_ui[ti];
+                cols[0].horizontal(|ui| {
+                    let lbl = egui::RichText::new("ARP").strong()
+                        .color(if arp_on { egui::Color32::from_rgb(0,220,160) } else { egui::Color32::GRAY });
+                    if ui.button(lbl).clicked() {
+                        self.arp_enabled_ui[ti] = !arp_on;
+                        if !self.arp_enabled_ui[ti] {
+                            let _ = self.control.try_send(ControlEvent::ChordHold {
+                                track: ti as u8,
+                                notes: Vec::new(),
+                            });
                         }
-                        if ui.button("RST").on_hover_text("Restart arp phase/step.").clicked() {
-                            let _ = self.control.try_send(ControlEvent::ArpRestart { track: ti as u8 });
+                    }
+                    if ui.button("RST").on_hover_text("Restart arp phase/step.").clicked() {
+                        let _ = self.control.try_send(ControlEvent::ArpRestart { track: ti as u8 });
+                    }
+                    let hold = self.arp_hold_ui[ti];
+                    let hl = egui::RichText::new("HOLD")
+                        .color(if hold { egui::Color32::from_rgb(255,200,0) } else { egui::Color32::GRAY });
+                    if ui.button(hl).clicked() {
+                        self.arp_hold_ui[ti] = !hold;
+                        if !self.arp_hold_ui[ti] {
+                            let _ = self.control.try_send(ControlEvent::ChordHold {
+                                track: ti as u8,
+                                notes: Vec::new(),
+                            });
                         }
-                        let hold = arp_cfg.hold.load(Ordering::Relaxed);
-                        let hl = egui::RichText::new("HOLD")
-                            .color(if hold { egui::Color32::from_rgb(255,200,0) } else { egui::Color32::GRAY });
-                        if ui.button(hl).clicked() {
-                            let new_hold = !hold;
-                            arp_cfg.hold.store(new_hold, Ordering::Relaxed);
-                            if !new_hold {
-                                let _ = self.control.try_send(ControlEvent::ChordHold {
-                                    track: ti as u8,
-                                    notes: Vec::new(),
-                                });
+                    }
+                });
+                cols[0].add_enabled_ui(arp_on, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("BPM:");
+                        if self.clock_sync_enabled {
+                            self.arp_bpm[ti] = self.transport_bpm as f32;
+                        }
+                        ui.add_enabled_ui(!self.clock_sync_enabled, |ui| {
+                            ui.add(egui::Slider::new(&mut self.arp_bpm[ti], 20.0..=300.0));
+                        });
+                        if self.clock_sync_enabled {
+                            ui.label(egui::RichText::new("SYNC").small().weak());
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Div:");
+                        for (i, &lbl) in ClockDiv::LABELS.iter().enumerate() {
+                            if ui.selectable_label(self.arp_division[ti] == i as u8, lbl).clicked() {
+                                self.arp_division[ti] = i as u8;
                             }
                         }
                     });
-                    cols[0].add_enabled_ui(arp_on, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("BPM:");
-                            if ui.add(egui::Slider::new(&mut self.arp_bpm[ti], 20.0..=300.0)).changed() {
-                                arp_cfg.bpm.set(self.arp_bpm[ti]);
+                    ui.horizontal(|ui| {
+                        ui.label("Mode:");
+                        for (i, &lbl) in ArpMode::LABELS.iter().enumerate() {
+                            if ui.selectable_label(self.arp_mode[ti] == i as u8, lbl).clicked() {
+                                self.arp_mode[ti] = i as u8;
                             }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Div:");
-                            for (i, &lbl) in ClockDiv::LABELS.iter().enumerate() {
-                                if ui.selectable_label(self.arp_division[ti] == i as u8, lbl).clicked() {
-                                    self.arp_division[ti] = i as u8;
-                                    arp_cfg.division.store(i as u8, Ordering::Relaxed);
-                                }
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Mode:");
-                            for (i, &lbl) in ArpMode::LABELS.iter().enumerate() {
-                                if ui.selectable_label(self.arp_mode[ti] == i as u8, lbl).clicked() {
-                                    self.arp_mode[ti] = i as u8;
-                                    arp_cfg.mode.store(i as u8, Ordering::Relaxed);
-                                }
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Oct:");
-                            for oct in 1u8..=4 {
-                                if ui.selectable_label(self.arp_oct[ti] == oct, oct.to_string()).clicked() {
-                                    self.arp_oct[ti] = oct;
-                                    arp_cfg.octave_range.store(oct, Ordering::Relaxed);
-                                }
-                            }
-                            ui.label(" Gate:");
-                            if ui.add(egui::Slider::new(&mut self.arp_gate[ti], 0.05..=1.0)).changed() {
-                                arp_cfg.gate.set(self.arp_gate[ti]);
-                            }
-                        });
-                    });
-
-                    // Walker column
-                    let walk_on = walker_cfg.enabled.load(Ordering::Relaxed);
-                    cols[1].horizontal(|ui| {
-                        let lbl = egui::RichText::new("WALKER").strong()
-                            .color(if walk_on { egui::Color32::from_rgb(100,180,255) } else { egui::Color32::GRAY });
-                        if ui.button(lbl).clicked() {
-                            walker_cfg.enabled.store(!walk_on, Ordering::Relaxed);
-                        }
-                        if ui.button("RST").on_hover_text("Restart walker phase/index.").clicked() {
-                            let _ = self.control.try_send(ControlEvent::WalkerRestart { track: ti as u8 });
                         }
                     });
-                    cols[1].add_enabled_ui(walk_on, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("BPM:");
-                            if ui.add(egui::Slider::new(&mut self.walker_bpm[ti], 20.0..=300.0)).changed() {
-                                walker_cfg.bpm.set(self.walker_bpm[ti]);
+                    ui.horizontal(|ui| {
+                        ui.label("Oct:");
+                        for oct in 1u8..=4 {
+                            if ui.selectable_label(self.arp_oct[ti] == oct, oct.to_string()).clicked() {
+                                self.arp_oct[ti] = oct;
                             }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Div:");
-                            for (i, &lbl) in ClockDiv::LABELS.iter().enumerate() {
-                                if ui.selectable_label(self.walker_div[ti] == i as u8, lbl).clicked() {
-                                    self.walker_div[ti] = i as u8;
-                                    walker_cfg.division.store(i as u8, Ordering::Relaxed);
-                                }
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Scale:");
-                            for (i, &lbl) in Scale::LABELS.iter().enumerate() {
-                                if ui.selectable_label(self.walker_scale[ti] == i as u8, lbl).clicked() {
-                                    self.walker_scale[ti] = i as u8;
-                                    walker_cfg.scale.store(i as u8, Ordering::Relaxed);
-                                }
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Root:");
-                            if ui.add(egui::Slider::new(&mut self.walker_root[ti], 36u8..=84)).changed() {
-                                walker_cfg.root.store(self.walker_root[ti], Ordering::Relaxed);
-                            }
-                            ui.label(" Oct:");
-                            for oct in 1u8..=3 {
-                                if ui.selectable_label(self.walker_oct[ti] == oct, oct.to_string()).clicked() {
-                                    self.walker_oct[ti] = oct;
-                                    walker_cfg.octave_range.store(oct, Ordering::Relaxed);
-                                }
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Gate:");
-                            if ui.add(egui::Slider::new(&mut self.walker_gate[ti], 0.05..=1.0)).changed() {
-                                walker_cfg.gate.set(self.walker_gate[ti]);
-                            }
-                        });
+                        }
+                        ui.label(" Gate:");
+                        ui.add(egui::Slider::new(&mut self.arp_gate[ti], 0.05..=1.0));
                     });
                 });
+
+                // Walker column
+                let walk_on = self.walker_enabled_ui[ti];
+                cols[1].horizontal(|ui| {
+                    let lbl = egui::RichText::new("WALKER").strong()
+                        .color(if walk_on { egui::Color32::from_rgb(100,180,255) } else { egui::Color32::GRAY });
+                    if ui.button(lbl).clicked() {
+                        self.walker_enabled_ui[ti] = !walk_on;
+                    }
+                    if ui.button("RST").on_hover_text("Restart walker phase/index.").clicked() {
+                        let _ = self.control.try_send(ControlEvent::WalkerRestart { track: ti as u8 });
+                    }
+                });
+                cols[1].add_enabled_ui(walk_on, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("BPM:");
+                        if self.clock_sync_enabled {
+                            self.walker_bpm[ti] = self.transport_bpm as f32;
+                        }
+                        ui.add_enabled_ui(!self.clock_sync_enabled, |ui| {
+                            ui.add(egui::Slider::new(&mut self.walker_bpm[ti], 20.0..=300.0));
+                        });
+                        if self.clock_sync_enabled {
+                            ui.label(egui::RichText::new("SYNC").small().weak());
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Div:");
+                        for (i, &lbl) in ClockDiv::LABELS.iter().enumerate() {
+                            if ui.selectable_label(self.walker_div[ti] == i as u8, lbl).clicked() {
+                                self.walker_div[ti] = i as u8;
+                            }
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Scale:");
+                        for (i, &lbl) in Scale::LABELS.iter().enumerate() {
+                            if ui.selectable_label(self.walker_scale[ti] == i as u8, lbl).clicked() {
+                                self.walker_scale[ti] = i as u8;
+                            }
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Root:");
+                        ui.add(egui::Slider::new(&mut self.walker_root[ti], 36u8..=84));
+                        ui.label(" Oct:");
+                        for oct in 1u8..=3 {
+                            if ui.selectable_label(self.walker_oct[ti] == oct, oct.to_string()).clicked() {
+                                self.walker_oct[ti] = oct;
+                            }
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Gate:");
+                        ui.add(egui::Slider::new(&mut self.walker_gate[ti], 0.05..=1.0));
+                    });
+                });
+            });
+            if let Ok(mut eng) = self.engine.try_lock() {
+                let track = &eng.tracks[ti];
+                track.track_vol.set(self.track_vol_ui[ti].clamp(0.0, 1.0));
+                track.cutoff.set(self.track_cutoff_ui[ti].clamp(80.0, 18000.0));
+                track.resonance.set(self.track_resonance_ui[ti].clamp(0.1, 10.0));
+                track.shimmer_send.set(self.track_shimmer_send_ui[ti].clamp(0.0, 1.0));
+                track.crystal_send.set(self.track_crystal_send_ui[ti].clamp(0.0, 1.0));
+
+                eng.master_vol.set(self.master_vol_ui.clamp(0.0, 1.0));
+
+                if eng.macro_set_kind() != self.macro_set_ui {
+                    eng.set_macro_set(self.macro_set_ui);
+                }
+                for i in 0..ACTIVE_MACRO_KNOBS {
+                    eng.set_macro_value(i, self.macro_ui_values[i]);
+                }
+
+                let arp_cfg = &eng.arp_configs[ti];
+                let prev_arp_enabled = arp_cfg.enabled.load(Ordering::Relaxed);
+                arp_cfg.enabled.store(self.arp_enabled_ui[ti], Ordering::Relaxed);
+                arp_cfg.hold.store(self.arp_hold_ui[ti], Ordering::Relaxed);
+                arp_cfg.bpm.set(self.arp_bpm[ti]);
+                arp_cfg.division.store(self.arp_division[ti], Ordering::Relaxed);
+                arp_cfg.mode.store(self.arp_mode[ti], Ordering::Relaxed);
+                arp_cfg.octave_range.store(self.arp_oct[ti], Ordering::Relaxed);
+                arp_cfg.gate.set(self.arp_gate[ti]);
+                if !prev_arp_enabled && self.arp_enabled_ui[ti] && self.clock_sync_enabled {
+                    trigger_arp_restart = Some(ti);
+                }
+
+                let walker_cfg = &eng.walker_configs[ti];
+                let prev_walker_enabled = walker_cfg.enabled.load(Ordering::Relaxed);
+                walker_cfg.enabled.store(self.walker_enabled_ui[ti], Ordering::Relaxed);
+                walker_cfg.bpm.set(self.walker_bpm[ti]);
+                walker_cfg.division.store(self.walker_div[ti], Ordering::Relaxed);
+                walker_cfg.scale.store(self.walker_scale[ti], Ordering::Relaxed);
+                walker_cfg.root.store(self.walker_root[ti], Ordering::Relaxed);
+                walker_cfg.octave_range.store(self.walker_oct[ti], Ordering::Relaxed);
+                walker_cfg.gate.set(self.walker_gate[ti]);
+                if !prev_walker_enabled && self.walker_enabled_ui[ti] && self.clock_sync_enabled {
+                    trigger_walker_restart = Some(ti);
+                }
+
+                if self.clock_sync_enabled {
+                    let bpm = self.transport_bpm as f32;
+                    for track_idx in 0..TRACK_COUNT {
+                        self.arp_bpm[track_idx] = bpm;
+                        self.walker_bpm[track_idx] = bpm;
+                        eng.arp_configs[track_idx].bpm.set(bpm);
+                        eng.walker_configs[track_idx].bpm.set(bpm);
+                    }
+                }
+
+                eng.shimmer.shimmer.set(self.shimmer_amt);
+                eng.shimmer.size.set(self.shimmer_size);
+                eng.shimmer.damp.set(self.shimmer_damp);
+                eng.shimmer.pitch.store(self.shimmer_pitch, Ordering::Relaxed);
+                eng.shimmer.mix.set(if self.shimmer_on {
+                    self.shimmer_mix.clamp(0.0, 1.0)
+                } else { 0.0 });
+
+                eng.crystal.grain_ms.set(self.crystal_grain_ms);
+                eng.crystal.scatter.set(self.crystal_scatter);
+                eng.crystal.delay_ms.set(self.crystal_delay_ms);
+                eng.crystal.feedback.set(self.crystal_feedback);
+                eng.crystal.pitch.store(self.crystal_pitch, Ordering::Relaxed);
+                eng.crystal.mix.set(if self.crystal_on {
+                    self.crystal_mix.clamp(0.0, 1.0)
+                } else { 0.0 });
+
+                if let Some((track_idx, patch_idx)) = request_patch_load.take() {
+                    if patch_idx < self.patch_library.len() {
+                        let p = &self.patch_library[patch_idx];
+                        eng.apply_patch_to_track(track_idx, p.path.clone(), &p.patch);
+                        self.scene_status = format!("Loaded patch '{}' on Track {}", p.name, track_idx + 1);
+                    }
+                }
+
+                if request_scene_save {
+                    let scene_path = format!("scenes/{}.json", self.scene_name.trim());
+                    let scale = if self.scene_scale_minor { "minor" } else { "major" };
+                    let scene = eng.capture_scene(
+                        self.scene_name.clone(),
+                        self.scene_bpm,
+                        self.scene_key,
+                        scale,
+                    );
+                    match save_scene_json(&scene_path, &scene) {
+                        Ok(()) => {
+                            self.scene_status = format!("Saved {scene_path}");
+                            self.scene_files = Self::list_scene_files();
+                            if let Some(pos) = self.scene_files.iter().position(|s| s == self.scene_name.trim()) {
+                                self.scene_selected = pos;
+                            }
+                        }
+                        Err(e) => self.scene_status = format!("Save failed: {e}"),
+                    }
+                }
+
+                if let Some(path) = request_scene_load_path.take() {
+                    match load_scene_json(&path) {
+                        Ok(scene) => {
+                            self.scene_name = scene.name.clone();
+                            self.scene_bpm = scene.bpm;
+                            self.scene_key = scene.key % 12;
+                            self.scene_scale_minor = scene.scale.eq_ignore_ascii_case("minor");
+                            eng.apply_scene(&scene);
+                            self.scene_status = format!("Loaded {path}");
+                        }
+                        Err(e) => self.scene_status = format!("Load failed: {e}"),
+                    }
+                }
+            } else {
+                if request_patch_load.is_some() {
+                    self.scene_status = "Patch load skipped: engine busy".to_string();
+                }
+                if request_scene_save || request_scene_load_path.is_some() {
+                    self.scene_status = "Scene action skipped: engine busy".to_string();
+                }
+            }
+
+            if let Some(track_idx) = trigger_arp_restart {
+                self.schedule_or_restart_arp(track_idx);
+            }
+            if let Some(track_idx) = trigger_walker_restart {
+                self.schedule_or_restart_walker(track_idx);
             }
 
             ui.separator();

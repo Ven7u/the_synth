@@ -196,7 +196,10 @@ dependencies = [
 name = "ambient-engine"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "fundsp",
+ "serde",
+ "serde_json",
  "synth-control",
  "synth-engine",
 ]

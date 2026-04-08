@@ -441,6 +441,46 @@ MacroTarget {
 }
 ```
 
+### Phase 6 macro strategy (macro-set first)
+
+To keep `ambient-box` fast and musical, Phase 6 prioritizes curated **Macro Sets** instead of
+a free-form macro editor UI.
+
+1. Expose exactly **6 fixed knobs** in `ambient-box`.
+2. A **Macro Set** defines knob names, targets, ranges, and curves.
+3. Ship one default set that covers most ambient/soundtrack performance needs without requiring
+set switching in normal use.
+4. Optional mapping editor can be added later as an advanced feature.
+
+#### Default set: `Ambient Core` (6 knobs)
+
+| Knob | Intent | Primary targets (summary) |
+|---|---|---|
+| `K1 Space` | increase perceived space/tail | shimmer/crystal sends, shimmer mix/size |
+| `K2 Tone` | dark ↔ bright tilt | per-track cutoff/resonance, shimmer damp (inverse) |
+| `K3 Motion` | rhythmic/modulation movement | arp/walker gate and activity, crystal scatter |
+| `K4 Density` | arrangement thickness | track balances, crystal mix/feedback |
+| `K5 Tension` | harmonic/emotional intensity | resonance, shimmer amount/pitch behavior |
+| `K6 Texture` | smooth pad ↔ granular sparkle | crystal grain/delay/scatter/mix |
+
+#### Default ranges (v1)
+
+| Knob | Recommended ranges |
+|---|---|
+| `K1 Space` | `shimmer_send 0.05→0.85`, `crystal_send 0.00→0.45`, `shimmer_mix 0.12→0.75`, `shimmer_size 0.45→1.00` |
+| `K2 Tone` | `cutoff 900→9000 Hz`, `shimmer_damp 0.75→0.25`, `resonance 0.20→1.20` |
+| `K3 Motion` | `arp_gate 0.35→0.85`, `walker_gate 0.30→0.85`, `walker_bpm_mul 0.75x→1.35x`, `crystal_scatter 0.10→0.70` |
+| `K4 Density` | `track2_vol 0.45→0.90`, `track3_vol 0.35→0.85`, `track4_vol 0.30→0.80`, `crystal_mix 0.00→0.35`, `crystal_feedback 0.20→0.60` |
+| `K5 Tension` | `resonance 0.25→1.60`, `shimmer_amt 0.25→0.90`, `shimmer_pitch_mode +12→blend→+24` |
+| `K6 Texture` | `crystal_grain_ms 220→70`, `crystal_delay_ms 420→140`, `crystal_scatter 0.05→0.85`, `crystal_mix 0.05→0.45` |
+
+#### Safety clamps
+
+- `shimmer_mix <= 0.80`
+- `crystal_mix <= 0.45`
+- `crystal_feedback <= 0.65`
+- cap combined wet sum (`shimmer_mix + crystal_mix`) to prevent overload
+
 ### Signal flow
 
 ```mermaid
@@ -1019,6 +1059,8 @@ multiple parameters. Scenes are serializable and load/save from disk.
 | 6.5 Macro panel UI in `ambient-box` | 4–8 large labelled knobs — the primary performance surface |
 | 6.6 Scene browser UI | Load / save / name scenes; preview patch names per slot |
 | 6.7 Per-track patch slot UI in `ambient-box` | Select/load patch assets per track; no deep patch editing in this app |
+| 6.8 Macro set library (curated presets) | Ship `Ambient Core` first; optional additional sets for pulse/cinematic/dark styles |
+| 6.9 Macro set selector UI | Same 6 knobs, different mapping set selected per scene/performance context |
 
 ---
 
