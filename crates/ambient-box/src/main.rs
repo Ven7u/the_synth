@@ -348,6 +348,7 @@ struct AmbientBoxApp {
     scene_status: String,
     scene_files: Vec<String>,
     scene_selected: usize,
+    scene_preview_patch_names: [String; TRACK_COUNT],
 
     // UI cache for lock-contented engine fields.
     track_vol_ui: [f32; TRACK_COUNT],
@@ -413,6 +414,23 @@ impl AmbientBoxApp {
         out
     }
 
+    fn scene_preview_for_name(name: &str) -> [String; TRACK_COUNT] {
+        let mut out: [String; TRACK_COUNT] = std::array::from_fn(|_| "—".to_string());
+        let path = format!("scenes/{name}.json");
+        let Ok(scene) = load_scene_json(&path) else { return out; };
+        for (i, t) in scene.tracks.iter().enumerate() {
+            let nm = t.patch.name.trim();
+            out[i] = if !nm.is_empty() {
+                nm.to_string()
+            } else if !t.patch_path.trim().is_empty() {
+                t.patch_path.clone()
+            } else {
+                "Init".to_string()
+            };
+        }
+        out
+    }
+
     fn new(
         engine: Arc<std::sync::Mutex<AmbientEngine>>,
         control: ControlSender,
@@ -422,6 +440,11 @@ impl AmbientBoxApp {
         midi.list_ports();
         let patch_library = Self::load_patch_library();
         let scene_files = Self::list_scene_files();
+        let scene_preview_patch_names = if scene_files.is_empty() {
+            std::array::from_fn(|_| "—".to_string())
+        } else {
+            Self::scene_preview_for_name(&scene_files[0])
+        };
         Self {
             engine,
             control,
@@ -467,6 +490,7 @@ impl AmbientBoxApp {
             scene_status: String::new(),
             scene_files,
             scene_selected: 0,
+            scene_preview_patch_names,
             track_vol_ui: [1.0; TRACK_COUNT],
             track_cutoff_ui: [3000.0; TRACK_COUNT],
             track_resonance_ui: [0.3; TRACK_COUNT],
@@ -756,8 +780,14 @@ impl eframe::App for AmbientBoxApp {
                     if self.scene_selected >= self.scene_files.len() {
                         self.scene_selected = 0;
                     }
+                    self.scene_preview_patch_names = if self.scene_files.is_empty() {
+                        std::array::from_fn(|_| "—".to_string())
+                    } else {
+                        Self::scene_preview_for_name(&self.scene_files[self.scene_selected])
+                    };
                 }
                 if !self.scene_files.is_empty() {
+                    let prev_scene_selected = self.scene_selected;
                     egui::ComboBox::from_id_salt("scene_file_list")
                         .selected_text(self.scene_files[self.scene_selected].clone())
                         .show_ui(ui, |ui| {
@@ -765,6 +795,10 @@ impl eframe::App for AmbientBoxApp {
                                 ui.selectable_value(&mut self.scene_selected, i, name.clone());
                             }
                         });
+                    if self.scene_selected != prev_scene_selected {
+                        self.scene_preview_patch_names =
+                            Self::scene_preview_for_name(&self.scene_files[self.scene_selected]);
+                    }
                     if ui.button("Load Selected").clicked() {
                         let name = self.scene_files[self.scene_selected].clone();
                         let selected_path = format!("scenes/{name}.json");
@@ -775,6 +809,17 @@ impl eframe::App for AmbientBoxApp {
                     ui.label(egui::RichText::new(&self.scene_status).small());
                 }
             });
+            if !self.scene_files.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Scene Slots:").small().weak());
+                    for i in 0..TRACK_COUNT {
+                        ui.label(
+                            egui::RichText::new(format!("T{} {}", i + 1, self.scene_preview_patch_names[i]))
+                                .small()
+                        );
+                    }
+                });
+            }
 
             if let Some(path) = request_scene_load_path.take() {
                 match load_scene_json(&path) {

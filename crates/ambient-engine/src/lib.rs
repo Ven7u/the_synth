@@ -17,4 +17,6 @@ pub use engine::{
     VOICE_COUNT,
     save_scene_json,
     load_scene_json,
+    scene_from_single_patch,
+    migrate_patch_json_to_scene_json,
 };

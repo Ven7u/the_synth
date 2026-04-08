@@ -485,3 +485,89 @@ pub fn load_scene_json(path: impl AsRef<Path>) -> anyhow::Result<Scene> {
     let scene = serde_json::from_str::<Scene>(&json).context("parse scene json")?;
     Ok(scene)
 }
+
+/// Wrap a single legacy patch into a 4-track Scene:
+/// - Track 1: original patch
+/// - Track 2..4: silent init layers
+pub fn scene_from_single_patch(
+    patch_path: impl Into<String>,
+    patch: &AmbientPatch,
+    scene_name: impl Into<String>,
+    bpm: u32,
+    key: u8,
+    scale: impl Into<String>,
+) -> Scene {
+    let patch_path = patch_path.into();
+    let scale = scale.into();
+    let tracks: [SceneTrack; TRACK_COUNT] = std::array::from_fn(|ti| {
+        if ti == 0 {
+            SceneTrack {
+                patch_path: patch_path.clone(),
+                patch: patch.clone(),
+                volume: 1.0,
+                cutoff: patch.filter_cutoff.clamp(80.0, 18_000.0),
+                resonance: patch.filter_q.clamp(0.1, 10.0),
+                shimmer_send: 0.0,
+                crystal_send: 0.0,
+            }
+        } else {
+            SceneTrack {
+                patch_path: String::new(),
+                patch: AmbientPatch::default(),
+                volume: 0.0,
+                cutoff: 3000.0,
+                resonance: 0.3,
+                shimmer_send: 0.0,
+                crystal_send: 0.0,
+            }
+        }
+    });
+
+    Scene {
+        name: scene_name.into(),
+        bpm,
+        key: key % 12,
+        scale,
+        macro_set: MacroSetKind::AmbientCore,
+        tracks,
+        macros: Vec::new(),
+        global: SceneGlobal {
+            master_vol: 0.7,
+            shimmer_mix: 0.0,
+            shimmer_amount: 0.0,
+            shimmer_size: 0.6,
+            shimmer_damp: 0.5,
+            shimmer_pitch: 1,
+            crystal_mix: 0.0,
+            crystal_grain_ms: 120.0,
+            crystal_scatter: 0.25,
+            crystal_feedback: 0.35,
+            crystal_delay_ms: 260.0,
+            crystal_pitch: 2,
+        },
+    }
+}
+
+/// Convenience migration utility:
+/// read a legacy single-patch JSON and save an equivalent Scene JSON.
+pub fn migrate_patch_json_to_scene_json(
+    patch_json_path: impl AsRef<Path>,
+    scene_json_path: impl AsRef<Path>,
+    scene_name: impl Into<String>,
+    bpm: u32,
+    key: u8,
+    scale: impl Into<String>,
+) -> anyhow::Result<()> {
+    let patch_path = patch_json_path.as_ref();
+    let patch = AmbientPatch::from_file(patch_path)
+        .with_context(|| format!("load patch {}", patch_path.display()))?;
+    let scene = scene_from_single_patch(
+        patch_path.to_string_lossy().to_string(),
+        &patch,
+        scene_name,
+        bpm,
+        key,
+        scale,
+    );
+    save_scene_json(scene_json_path, &scene)
+}
