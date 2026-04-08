@@ -1,21 +1,40 @@
-use ambient_engine::{
-    save_scene_json, AmbientPatch, MacroSetKind, Scene, SceneGlobal, SceneTrack,
-};
+use ambient_engine::{save_scene_json, AmbientPatch, MacroSetKind, Scene, SceneGlobal, SceneTrack};
 use bevy::{
     core_pipeline::bloom::Bloom,
     prelude::*,
     sprite::{ColorMaterial, MeshMaterial2d},
 };
 use synth_bevy::{SceneTransitionMode, SynthBackendKind, SynthBevyConfig, SynthEvent, SynthPlugin};
+use synth_control::midi_note;
 
 const BUBBLE_RADIUS: f32 = 18.0;
 const MAX_BUBBLES: usize = 4;
 const COLLISIONS_PER_STAGE: u32 = 8;
 
 // Am pentatonic scale, D4–A5.
-const AM_PENTA: [u8; 10] = [62, 64, 67, 69, 72, 74, 76, 79, 81, 84];
+const AM_PENTA: [u8; 10] = [
+    midi_note!(D, 4),
+    midi_note!(E, 4),
+    midi_note!(G, 4),
+    midi_note!(A, 4),
+    midi_note!(C, 5),
+    midi_note!(D, 5),
+    midi_note!(E, 5),
+    midi_note!(G, 5),
+    midi_note!(A, 5),
+    midi_note!(C, 6),
+];
 // Bass pulse pattern — slow Am walk.
-const BASS_PATTERN: [u8; 8] = [33, 36, 40, 33, 36, 43, 40, 36];
+const BASS_PATTERN: [u8; 8] = [
+    midi_note!(D, 2),
+    midi_note!(E, 2),
+    midi_note!(G, 2),
+    midi_note!(D, 3),
+    midi_note!(E, 3),
+    midi_note!(G, 3),
+    midi_note!(D, 4),
+    midi_note!(E, 4),
+];
 
 // ---------------------------------------------------------------------------
 // Palette
@@ -34,21 +53,23 @@ struct StagePalette {
 
 fn lerp_linear(a: LinearRgba, b: LinearRgba, t: f32) -> LinearRgba {
     LinearRgba::new(
-        a.red   + (b.red   - a.red)   * t,
+        a.red + (b.red - a.red) * t,
         a.green + (b.green - a.green) * t,
-        a.blue  + (b.blue  - a.blue)  * t,
+        a.blue + (b.blue - a.blue) * t,
         1.0,
     )
 }
 
-fn lrgb(r: f32, g: f32, b: f32) -> LinearRgba { LinearRgba::new(r, g, b, 1.0) }
+fn lrgb(r: f32, g: f32, b: f32) -> LinearRgba {
+    LinearRgba::new(r, g, b, 1.0)
+}
 
 /// Stage 0 — **Midnight**
 /// Near-black ink-blue. Cold cyan / cobalt bubbles. Silent and deep.
 fn palette_midnight() -> StagePalette {
     StagePalette {
         background: lrgb(0.005, 0.006, 0.020),
-        obstacle:   lrgb(0.030, 0.045, 0.110),
+        obstacle: lrgb(0.030, 0.045, 0.110),
         bubbles: [
             lrgb(0.10, 1.40, 3.00), // electric cyan
             lrgb(0.05, 0.70, 2.40), // ice blue
@@ -63,7 +84,7 @@ fn palette_midnight() -> StagePalette {
 fn palette_abyss() -> StagePalette {
     StagePalette {
         background: lrgb(0.004, 0.014, 0.016),
-        obstacle:   lrgb(0.025, 0.090, 0.095),
+        obstacle: lrgb(0.025, 0.090, 0.095),
         bubbles: [
             lrgb(0.05, 2.00, 1.80), // teal
             lrgb(0.00, 1.60, 1.20), // seafoam
@@ -78,7 +99,7 @@ fn palette_abyss() -> StagePalette {
 fn palette_ether() -> StagePalette {
     StagePalette {
         background: lrgb(0.010, 0.005, 0.030),
-        obstacle:   lrgb(0.065, 0.025, 0.140),
+        obstacle: lrgb(0.065, 0.025, 0.140),
         bubbles: [
             lrgb(1.80, 0.40, 2.80), // violet
             lrgb(2.20, 0.20, 1.80), // magenta
@@ -93,7 +114,7 @@ fn palette_ether() -> StagePalette {
 fn palette_ember() -> StagePalette {
     StagePalette {
         background: lrgb(0.018, 0.004, 0.004),
-        obstacle:   lrgb(0.130, 0.038, 0.025),
+        obstacle: lrgb(0.130, 0.038, 0.025),
         bubbles: [
             lrgb(2.40, 1.00, 0.20), // amber
             lrgb(2.80, 0.20, 0.10), // crimson
@@ -177,8 +198,10 @@ impl PaletteState {
         let t = self.progress;
         self.from = StagePalette {
             background: lerp_linear(self.from.background, self.to.background, t),
-            obstacle:   lerp_linear(self.from.obstacle,   self.to.obstacle,   t),
-            bubbles: std::array::from_fn(|i| lerp_linear(self.from.bubbles[i], self.to.bubbles[i], t)),
+            obstacle: lerp_linear(self.from.obstacle, self.to.obstacle, t),
+            bubbles: std::array::from_fn(|i| {
+                lerp_linear(self.from.bubbles[i], self.to.bubbles[i], t)
+            }),
         };
         self.to = next;
         self.progress = 0.0;
@@ -189,7 +212,11 @@ impl PaletteState {
         lerp_linear(self.from.obstacle, self.to.obstacle, self.progress)
     }
     fn current_bubble(&self, id: usize) -> LinearRgba {
-        lerp_linear(self.from.bubbles[id % 4], self.to.bubbles[id % 4], self.progress)
+        lerp_linear(
+            self.from.bubbles[id % 4],
+            self.to.bubbles[id % 4],
+            self.progress,
+        )
     }
 }
 
@@ -202,11 +229,11 @@ fn load_patch(path: &str) -> AmbientPatch {
 }
 
 fn build_bubble_scene(stage: usize, pad: &AmbientPatch, bell: &AmbientPatch) -> Scene {
-    let shimmer_mix  = (0.24 + stage as f32 * 0.09).min(0.75);
-    let shimmer_amt  = (0.42 + stage as f32 * 0.10).min(0.88);
+    let shimmer_mix = (0.24 + stage as f32 * 0.09).min(0.75);
+    let shimmer_amt = (0.42 + stage as f32 * 0.10).min(0.88);
     let shimmer_size = (0.68 + stage as f32 * 0.06).min(0.96);
-    let crystal_mix  = (0.08 + stage as f32 * 0.05).min(0.30);
-    let crystal_fb   = (0.22 + stage as f32 * 0.05).min(0.55);
+    let crystal_mix = (0.08 + stage as f32 * 0.05).min(0.30);
+    let crystal_fb = (0.22 + stage as f32 * 0.05).min(0.55);
 
     Scene {
         name: format!("bevy_bubbles_stage_{}", stage + 1),
@@ -262,7 +289,7 @@ fn build_bubble_scene(stage: usize, pad: &AmbientPatch, bell: &AmbientPatch) -> 
 }
 
 fn ensure_demo_scenes() {
-    let pad  = load_patch("assets/patches/Ambient/Night Drift.json");
+    let pad = load_patch("assets/patches/Ambient/Night Drift.json");
     let bell = load_patch("assets/patches/Keys/Crystal Bell.json");
     let _ = std::fs::create_dir_all("scenes");
     for stage in 0..4 {
@@ -326,7 +353,10 @@ fn setup(
 ) {
     commands.spawn((
         Camera2d,
-        Camera { hdr: true, ..default() },
+        Camera {
+            hdr: true,
+            ..default()
+        },
         Bloom {
             intensity: 0.28,
             low_frequency_boost: 0.50,
@@ -337,23 +367,76 @@ fn setup(
     ));
 
     ensure_demo_scenes();
-    let scene_names: Vec<String> = (0..4).map(|i| format!("bevy_bubbles_stage_{}", i + 1)).collect();
-    commands.insert_resource(StageState { stage: 0, collisions: 0, scene_names: scene_names.clone() });
+    let scene_names: Vec<String> = (0..4)
+        .map(|i| format!("bevy_bubbles_stage_{}", i + 1))
+        .collect();
+    commands.insert_resource(StageState {
+        stage: 0,
+        collisions: 0,
+        scene_names: scene_names.clone(),
+    });
     commands.insert_resource(PendingNoteOffs::default());
 
     spawn_bubble(&mut commands, &mut meshes, &mut materials, &palette, 0);
 
     let obs_color = Color::LinearRgba(palette.current_obstacle());
-    spawn_obstacle(&mut commands, &mut meshes, &mut materials, obs_color,
-        Vec2::new(240.0, 28.0), Vec3::new(0.0, 70.0, 0.0),      Vec2::new(120.0, 14.0));
-    spawn_obstacle(&mut commands, &mut meshes, &mut materials, obs_color,
-        Vec2::new(160.0, 28.0), Vec3::new(-220.0, -120.0, 0.0),  Vec2::new(80.0, 14.0));
-    spawn_obstacle(&mut commands, &mut meshes, &mut materials, obs_color,
-        Vec2::new(140.0, 28.0), Vec3::new(260.0, -200.0, 0.0),   Vec2::new(70.0, 14.0));
+    spawn_obstacle(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        obs_color,
+        Vec2::new(240.0, 28.0),
+        Vec3::new(0.0, 70.0, 0.0),
+        Vec2::new(120.0, 14.0),
+    );
+    spawn_obstacle(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        obs_color,
+        Vec2::new(160.0, 28.0),
+        Vec3::new(-220.0, -120.0, 0.0),
+        Vec2::new(80.0, 14.0),
+    );
+    spawn_obstacle(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        obs_color,
+        Vec2::new(140.0, 28.0),
+        Vec3::new(260.0, -200.0, 0.0),
+        Vec2::new(70.0, 14.0),
+    );
 
-    synth.send(SynthEvent::SceneLoad { name: scene_names[0].clone() });
-    for &pitch in &[45u8, 52, 57] {
-        synth.send(SynthEvent::NoteOn { track: 0, pitch, velocity: 78 });
+    spawn_obstacle(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        obs_color,
+        Vec2::new(28.0, 28.0),
+        Vec3::new(160.0, -100.0, 0.0),
+        Vec2::new(14.0, 14.0),
+    );
+
+    spawn_obstacle(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        obs_color,
+        Vec2::new(100.0, 64.0),
+        Vec3::new(20.0, 220.0, 0.0),
+        Vec2::new(50.0, 32.0),
+    );
+
+    synth.send(SynthEvent::SceneLoad {
+        name: scene_names[0].clone(),
+    });
+    for &pitch in &[midi_note!(A, 2), midi_note!(E, 3), midi_note!(A, 3)] {
+        synth.send(SynthEvent::NoteOn {
+            track: 0,
+            pitch,
+            velocity: 78,
+        });
     }
 }
 
@@ -391,7 +474,10 @@ fn spawn_bubble(
         Mesh2d(meshes.add(Circle::new(BUBBLE_RADIUS))),
         MeshMaterial2d(handle.clone()),
         Transform::from_translation(Vec3::new(-320.0 + id as f32 * 45.0, 120.0, 1.0)),
-        Bubble { id, material: handle },
+        Bubble {
+            id,
+            material: handle,
+        },
         Velocity(dir * speed),
     ));
 }
@@ -457,7 +543,9 @@ fn bubble_motion_system(
     mut pending_offs: ResMut<PendingNoteOffs>,
     mut synth: EventWriter<SynthEvent>,
 ) {
-    let Ok(window) = windows.get_single() else { return; };
+    let Ok(window) = windows.get_single() else {
+        return;
+    };
     let half_w = window.width() * 0.5;
     let half_h = window.height() * 0.5;
 
@@ -467,14 +555,22 @@ fn bubble_motion_system(
 
         let mut hit = false;
         if tf.translation.x < -half_w + BUBBLE_RADIUS {
-            tf.translation.x = -half_w + BUBBLE_RADIUS; vel.x = vel.x.abs(); hit = true;
+            tf.translation.x = -half_w + BUBBLE_RADIUS;
+            vel.x = vel.x.abs();
+            hit = true;
         } else if tf.translation.x > half_w - BUBBLE_RADIUS {
-            tf.translation.x = half_w - BUBBLE_RADIUS;  vel.x = -vel.x.abs(); hit = true;
+            tf.translation.x = half_w - BUBBLE_RADIUS;
+            vel.x = -vel.x.abs();
+            hit = true;
         }
         if tf.translation.y < -half_h + BUBBLE_RADIUS {
-            tf.translation.y = -half_h + BUBBLE_RADIUS; vel.y = vel.y.abs(); hit = true;
+            tf.translation.y = -half_h + BUBBLE_RADIUS;
+            vel.y = vel.y.abs();
+            hit = true;
         } else if tf.translation.y > half_h - BUBBLE_RADIUS {
-            tf.translation.y = half_h - BUBBLE_RADIUS;  vel.y = -vel.y.abs(); hit = true;
+            tf.translation.y = half_h - BUBBLE_RADIUS;
+            vel.y = -vel.y.abs();
+            hit = true;
         }
 
         let p = tf.translation.truncate();
@@ -484,7 +580,13 @@ fn bubble_motion_system(
             let overlap_x = obs.half_extents.x + BUBBLE_RADIUS - d.x.abs();
             let overlap_y = obs.half_extents.y + BUBBLE_RADIUS - d.y.abs();
             if overlap_x > 0.0 && overlap_y > 0.0 {
-                if overlap_x < overlap_y { vel.x = -vel.x; } else { vel.y = -vel.y; }
+                if overlap_x < overlap_y {
+                    vel.x *= -1.0;
+                    tf.translation.x += overlap_x * d.x.signum(); // Sposta fuori
+                } else {
+                    vel.y *= -1.0;
+                    tf.translation.y += overlap_y * d.y.signum(); // Sposta fuori
+                }
                 hit = true;
             }
         }
@@ -493,10 +595,23 @@ fn bubble_motion_system(
             stage.collisions += 1;
             let idx = (bubble.id * 3 + stage.collisions as usize) % AM_PENTA.len();
             let pitch = AM_PENTA[idx];
-            synth.send(SynthEvent::NoteOn { track: 1, pitch, velocity: 95 });
-            pending_offs.0.push(PendingNoteOff { track: 1, pitch, seconds_left: 0.5 });
-            let tension = (stage.collisions as f32 / COLLISIONS_PER_STAGE as f32).clamp(0.0, 1.0);
-            synth.send(SynthEvent::SetMacro { index: 0, value: tension });
+            synth.send(SynthEvent::NoteOn {
+                track: 1,
+                pitch,
+                velocity: 95,
+            });
+            pending_offs.0.push(PendingNoteOff {
+                track: 1,
+                pitch,
+                seconds_left: 0.5,
+            });
+            let tension = (stage.collisions as f32
+                / (COLLISIONS_PER_STAGE as f32 * (stage.stage + 1) as f32))
+                .clamp(0.0, 1.0);
+            synth.send(SynthEvent::SetMacro {
+                index: 0,
+                value: tension,
+            });
         }
     }
 }
@@ -510,7 +625,7 @@ fn stage_progression_system(
     bubbles: Query<&Bubble>,
     mut synth: EventWriter<SynthEvent>,
 ) {
-    if stage.collisions < COLLISIONS_PER_STAGE {
+    if stage.collisions < COLLISIONS_PER_STAGE * (stage.stage + 1) as u32 {
         return;
     }
     stage.collisions = 0;
@@ -519,19 +634,24 @@ fn stage_progression_system(
         stage.stage += 1;
     }
 
-    // Trigger audio scene transition.
-    synth.send(SynthEvent::SceneTransition {
-        name: stage.scene_names[stage.stage].clone(),
-        frames: 44_100 * 3,
-        mode: None,
-    });
-
-    // Trigger visual palette transition — same 3-second duration.
-    palette.transition_to(stage_palette(stage.stage), 3.0);
-
     let current_count = bubbles.iter().count();
     if current_count < MAX_BUBBLES {
-        spawn_bubble(&mut commands, &mut meshes, &mut materials, &palette, current_count);
+        spawn_bubble(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &palette,
+            current_count,
+        );
+        // Trigger visual palette transition — same 3-second duration.
+        palette.transition_to(stage_palette(stage.stage), 3.0);
+
+        // Trigger audio scene transition.
+        synth.send(SynthEvent::SceneTransition {
+            name: stage.scene_names[stage.stage].clone(),
+            frames: 44_100 * 100,
+            mode: None,
+        });
     }
 }
 
@@ -548,12 +668,22 @@ fn ambient_pulse_system(
     if local_timer.is_none() {
         *local_timer = Some(PulseTimer(Timer::from_seconds(3.5, TimerMode::Repeating)));
     }
-    let Some(t) = local_timer.as_mut() else { return; };
+    let Some(t) = local_timer.as_mut() else {
+        return;
+    };
     if t.0.tick(time.delta()).just_finished() {
         let pitch = BASS_PATTERN[*pulse_step % BASS_PATTERN.len()];
         *pulse_step += 1;
-        synth.send(SynthEvent::NoteOn { track: 0, pitch, velocity: 72 });
-        pending_offs.0.push(PendingNoteOff { track: 0, pitch, seconds_left: 1.8 });
+        synth.send(SynthEvent::NoteOn {
+            track: 0,
+            pitch,
+            velocity: 72,
+        });
+        pending_offs.0.push(PendingNoteOff {
+            track: 0,
+            pitch,
+            seconds_left: 1.8,
+        });
     }
 }
 
@@ -563,12 +693,17 @@ fn pending_note_off_system(
     mut synth: EventWriter<SynthEvent>,
 ) {
     let dt = time.delta_secs();
-    for n in &mut pending_offs.0 { n.seconds_left -= dt; }
+    for n in &mut pending_offs.0 {
+        n.seconds_left -= dt;
+    }
     let mut i = 0;
     while i < pending_offs.0.len() {
         if pending_offs.0[i].seconds_left <= 0.0 {
             let n = pending_offs.0.swap_remove(i);
-            synth.send(SynthEvent::NoteOff { track: n.track, pitch: n.pitch });
+            synth.send(SynthEvent::NoteOff {
+                track: n.track,
+                pitch: n.pitch,
+            });
         } else {
             i += 1;
         }
