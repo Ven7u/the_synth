@@ -29,6 +29,15 @@ struct PatchEntry {
     patch: AmbientPatch,
 }
 
+#[derive(Clone)]
+struct PendingSceneSave {
+    path: String,
+    name: String,
+    bpm: u32,
+    key: u8,
+    scale_minor: bool,
+}
+
 fn main() -> eframe::Result {
     let sr = get_default_sr().unwrap_or(44100.0);
     let engine = Arc::new(std::sync::Mutex::new(AmbientEngine::new(sr)));
@@ -361,6 +370,10 @@ struct AmbientBoxApp {
     patch_library: Vec<PatchEntry>,
     track_patch_choice: [usize; TRACK_COUNT],
     track_patch_last_synced_path: [String; TRACK_COUNT],
+    pending_patch_load: Option<(usize, usize)>,
+    pending_scene_save: Option<PendingSceneSave>,
+    pending_scene_load_path: Option<String>,
+    pending_scene_load: Option<(String, Scene)>,
 }
 
 impl AmbientBoxApp {
@@ -501,6 +514,10 @@ impl AmbientBoxApp {
             patch_library,
             track_patch_choice: [0; TRACK_COUNT],
             track_patch_last_synced_path: std::array::from_fn(|_| String::new()),
+            pending_patch_load: None,
+            pending_scene_save: None,
+            pending_scene_load_path: None,
+            pending_scene_load: None,
         }
     }
 
@@ -645,12 +662,8 @@ impl eframe::App for AmbientBoxApp {
                 }
             }
 
-            let mut request_patch_load: Option<(usize, usize)> = None;
-            let mut request_scene_save = false;
-            let mut request_scene_load_path: Option<String> = None;
             let mut trigger_arp_restart: Option<usize> = None;
             let mut trigger_walker_restart: Option<usize> = None;
-            let mut request_scene_load: Option<(String, Scene)> = None;
             let mut pending_scene_save: Option<(String, Scene, String)> = None;
 
             // --- Per-track patch slot (Phase 6.7) ---
@@ -676,7 +689,7 @@ impl eframe::App for AmbientBoxApp {
                             }
                         });
                     if ui.button("Load To Track").clicked() {
-                        request_patch_load = Some((ti, self.track_patch_choice[ti]));
+                        self.pending_patch_load = Some((ti, self.track_patch_choice[ti]));
                     }
                 }
             });
@@ -770,10 +783,16 @@ impl eframe::App for AmbientBoxApp {
             ui.horizontal(|ui| {
                 let scene_path = format!("scenes/{}.json", self.scene_name.trim());
                 if ui.button("Save Scene").clicked() {
-                    request_scene_save = true;
+                    self.pending_scene_save = Some(PendingSceneSave {
+                        path: scene_path.clone(),
+                        name: self.scene_name.trim().to_string(),
+                        bpm: self.scene_bpm,
+                        key: self.scene_key,
+                        scale_minor: self.scene_scale_minor,
+                    });
                 }
                 if ui.button("Load Scene").clicked() {
-                    request_scene_load_path = Some(scene_path.clone());
+                    self.pending_scene_load_path = Some(scene_path.clone());
                 }
                 if ui.button("Refresh").clicked() {
                     self.scene_files = Self::list_scene_files();
@@ -802,7 +821,7 @@ impl eframe::App for AmbientBoxApp {
                     if ui.button("Load Selected").clicked() {
                         let name = self.scene_files[self.scene_selected].clone();
                         let selected_path = format!("scenes/{name}.json");
-                        request_scene_load_path = Some(selected_path);
+                        self.pending_scene_load_path = Some(selected_path);
                     }
                 }
                 if !self.scene_status.is_empty() {
@@ -821,11 +840,13 @@ impl eframe::App for AmbientBoxApp {
                 });
             }
 
-            if let Some(path) = request_scene_load_path.take() {
+            if self.pending_scene_load.is_none() {
+                if let Some(path) = self.pending_scene_load_path.take() {
                 match load_scene_json(&path) {
-                    Ok(scene) => request_scene_load = Some((path, scene)),
+                    Ok(scene) => self.pending_scene_load = Some((path, scene)),
                     Err(e) => self.scene_status = format!("Load failed: {e}"),
                 }
+            }
             }
 
             ui.separator();
@@ -1085,7 +1106,7 @@ impl eframe::App for AmbientBoxApp {
                     self.crystal_mix.clamp(0.0, 1.0)
                 } else { 0.0 });
 
-                if let Some((track_idx, patch_idx)) = request_patch_load.take() {
+                if let Some((track_idx, patch_idx)) = self.pending_patch_load.take() {
                     if patch_idx < self.patch_library.len() {
                         let p = &self.patch_library[patch_idx];
                         eng.apply_patch_to_track(track_idx, p.path.clone(), &p.patch);
@@ -1093,32 +1114,24 @@ impl eframe::App for AmbientBoxApp {
                     }
                 }
 
-                if request_scene_save {
-                    let scene_path = format!("scenes/{}.json", self.scene_name.trim());
-                    let scale = if self.scene_scale_minor { "minor" } else { "major" };
+                if let Some(req) = self.pending_scene_save.take() {
+                    let scale = if req.scale_minor { "minor" } else { "major" };
                     let scene = eng.capture_scene(
-                        self.scene_name.clone(),
-                        self.scene_bpm,
-                        self.scene_key,
+                        req.name.clone(),
+                        req.bpm,
+                        req.key,
                         scale,
                     );
-                    pending_scene_save = Some((scene_path, scene, self.scene_name.trim().to_string()));
+                    pending_scene_save = Some((req.path, scene, req.name));
                 }
 
-                if let Some((path, scene)) = request_scene_load.take() {
+                if let Some((path, scene)) = self.pending_scene_load.take() {
                     self.scene_name = scene.name.clone();
                     self.scene_bpm = scene.bpm;
                     self.scene_key = scene.key % 12;
                     self.scene_scale_minor = scene.scale.eq_ignore_ascii_case("minor");
                     eng.apply_scene(&scene);
                     self.scene_status = format!("Loaded {path}");
-                }
-            } else {
-                if request_patch_load.is_some() {
-                    self.scene_status = "Patch load skipped: engine busy".to_string();
-                }
-                if request_scene_save || request_scene_load.is_some() {
-                    self.scene_status = "Scene action skipped: engine busy".to_string();
                 }
             }
 

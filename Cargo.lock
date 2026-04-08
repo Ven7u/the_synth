@@ -5827,10 +5827,13 @@ name = "synth-bevy"
 version = "0.1.0"
 dependencies = [
  "ambient-engine",
+ "anyhow",
  "bevy",
  "bevy_egui",
+ "cpal",
  "fundsp",
  "synth-control",
+ "synth-engine",
 ]
 
 [[package]]

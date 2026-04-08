@@ -10,7 +10,20 @@ inspector = ["bevy", "dep:bevy_egui"]
 
 [dependencies]
 ambient-engine = { path = "../ambient-engine" }
+synth-engine   = { path = "../synth-engine" }
 synth-control  = { path = "../synth-control" }
 fundsp = { version = "0.23", features = ["files", "fft"] }
+cpal = "0.15"
+anyhow = "1"
 bevy = { version = "0.15", optional = true, default-features = true }
 bevy_egui = { version = "0.31", optional = true }
+
+[[example]]
+name = "bevy_bubbles_ambient"
+path = "examples/bevy_bubbles_ambient.rs"
+required-features = ["bevy"]
+
+[[example]]
+name = "bevy_mono_playground"
+path = "examples/bevy_mono_playground.rs"
+required-features = ["bevy"]
