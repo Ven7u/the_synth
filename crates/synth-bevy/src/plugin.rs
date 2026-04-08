@@ -1,4 +1,4 @@
-use ambient_engine::{load_scene_json, AmbientEngine, Scene, MACRO_COUNT, TRACK_COUNT};
+use ambient_engine::{load_scene_json, AmbientEngine, Scene, SceneGlobal, MACRO_COUNT, TRACK_COUNT};
 use bevy::prelude::*;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample, Stream};
@@ -10,6 +10,29 @@ use std::sync::{Arc, Mutex};
 use synth_control::{make_control_channel, ControlEvent, ControlReceiver, ControlSender, ParamId};
 use synth_engine::arp::{ArpState, ScaleWalker};
 use synth_engine::audio::{build_synth_graph, AudioState, VOICE_COUNT as SYNTH_VOICE_COUNT};
+
+/// How a `SceneTransition` blends from the current scene to the target.
+///
+/// | Mode | Volume dip | Sound during transition |
+/// |------|-----------|------------------------|
+/// | `LinearFade` | V-shaped, reaches silence at midpoint | Audible dip |
+/// | `EqualPowerFade` | Cosine curve, no perceived loudness dip | Smooth crossfade |
+/// | `ParamMorph` | None — parameters lerp continuously | Seamless morph |
+/// | `MorphWithFade` | Short equal-power dip only at patch-swap point | Best of both |
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SceneTransitionMode {
+    /// Linear gain V-shape: fades to silence at midpoint, then back up.
+    LinearFade,
+    /// Equal-power cosine crossfade: no perceived loudness dip.
+    #[default]
+    EqualPowerFade,
+    /// No volume change: continuous parameters (shimmer, crystal, sends, vol, cutoff)
+    /// interpolate smoothly; patch parameters are swapped silently at the midpoint.
+    ParamMorph,
+    /// Parameter morph with a brief (~150 ms) equal-power dip at the midpoint
+    /// to mask any waveform discontinuity from the patch swap.
+    MorphWithFade,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SynthBackendKind {
@@ -24,6 +47,8 @@ pub struct SynthBevyConfig {
     pub control_capacity: usize,
     pub scene_dir: String,
     pub initial_bpm: f32,
+    /// Default transition mode used when `SynthEvent::SceneTransition` does not specify one.
+    pub default_transition_mode: SceneTransitionMode,
 }
 
 impl Default for SynthBevyConfig {
@@ -34,6 +59,7 @@ impl Default for SynthBevyConfig {
             control_capacity: 1024,
             scene_dir: "scenes".to_string(),
             initial_bpm: 120.0,
+            default_transition_mode: SceneTransitionMode::EqualPowerFade,
         }
     }
 }
@@ -41,6 +67,36 @@ impl Default for SynthBevyConfig {
 #[derive(Resource, Clone)]
 pub struct SynthParam {
     pub macro_values: [Shared; MACRO_COUNT],
+    // Per-track handles (populated for Ambient backend; fallback shared(x) for Mono)
+    pub track_vol: [Shared; TRACK_COUNT],
+    pub track_cutoff: [Shared; TRACK_COUNT],
+    pub track_shimmer_send: [Shared; TRACK_COUNT],
+    pub track_crystal_send: [Shared; TRACK_COUNT],
+    // Global bus handles
+    pub shimmer_mix: Shared,
+    pub shimmer_size: Shared,
+    pub shimmer_amount: Shared,
+    pub crystal_mix: Shared,
+    pub crystal_feedback: Shared,
+    pub master_vol: Shared,
+}
+
+impl Default for SynthParam {
+    fn default() -> Self {
+        Self {
+            macro_values: std::array::from_fn(|_| shared(0.0)),
+            track_vol: std::array::from_fn(|_| shared(0.7)),
+            track_cutoff: std::array::from_fn(|_| shared(3000.0)),
+            track_shimmer_send: std::array::from_fn(|_| shared(0.0)),
+            track_crystal_send: std::array::from_fn(|_| shared(0.0)),
+            shimmer_mix: shared(0.0),
+            shimmer_size: shared(0.6),
+            shimmer_amount: shared(0.0),
+            crystal_mix: shared(0.0),
+            crystal_feedback: shared(0.35),
+            master_vol: shared(0.7),
+        }
+    }
 }
 
 impl SynthParam {
@@ -64,12 +120,26 @@ pub enum SynthBackendRuntime {
     Mono(Arc<AudioState>),
 }
 
+/// Snapshot of the continuous engine parameters at the moment a transition starts.
+/// Used by ParamMorph / MorphWithFade to interpolate from old → new values.
+#[derive(Clone)]
+struct SceneSnapshot {
+    global: SceneGlobal,
+    track_vol: [f32; TRACK_COUNT],
+    track_cutoff: [f32; TRACK_COUNT],
+    track_shimmer_send: [f32; TRACK_COUNT],
+    track_crystal_send: [f32; TRACK_COUNT],
+}
+
 #[derive(Clone)]
 struct SceneTransitionPlan {
     scene: Scene,
+    mode: SceneTransitionMode,
     total_frames: u32,
     frames_left: u32,
     applied_target: bool,
+    /// Captured at transition start for morph modes.
+    from_snapshot: Option<SceneSnapshot>,
 }
 
 #[derive(Resource)]
@@ -85,7 +155,7 @@ pub struct SynthAudioStream(pub Stream);
 enum PendingEngineAction {
     SetMacro { index: usize, value: f32 },
     ApplyScene(Scene),
-    StartTransition { scene: Scene, frames: u32 },
+    StartTransition { scene: Scene, frames: u32, mode: SceneTransitionMode },
 }
 
 #[derive(Resource, Default)]
@@ -106,7 +176,9 @@ pub enum SynthEvent {
     SetMacro { index: u8, value: f32 },
     SetParam { track: u8, param: ParamId, value: f32 },
     SceneLoad { name: String },
-    SceneTransition { name: String, frames: u32 },
+    /// Transition to a named scene over `frames` samples using `mode`.
+    /// `mode: None` falls back to `SynthBevyConfig::default_transition_mode`.
+    SceneTransition { name: String, frames: u32, mode: Option<SceneTransitionMode> },
     Tempo { bpm: f32 },
 }
 
@@ -132,14 +204,26 @@ fn setup_synth_runtime(world: &mut World) {
     let actual_sr = detect_output_sample_rate().unwrap_or(cfg.sample_rate_hz);
     let (control_tx, control_rx) = make_control_channel(cfg.control_capacity);
 
-    let (backend, macro_values, stream_res, scene_transition) = match cfg.backend {
+    let (backend, synth_param, stream_res, scene_transition) = match cfg.backend {
         SynthBackendKind::Ambient => {
             let eng = Arc::new(Mutex::new(AmbientEngine::new(actual_sr)));
             let transition = Arc::new(Mutex::new(None));
-            let macro_values = if let Ok(guard) = eng.lock() {
-                std::array::from_fn(|i| guard.macro_values[i].clone())
+            let synth_param = if let Ok(guard) = eng.lock() {
+                SynthParam {
+                    macro_values: std::array::from_fn(|i| guard.macro_values[i].clone()),
+                    track_vol: std::array::from_fn(|i| guard.tracks[i].track_vol.clone()),
+                    track_cutoff: std::array::from_fn(|i| guard.tracks[i].cutoff.clone()),
+                    track_shimmer_send: std::array::from_fn(|i| guard.tracks[i].shimmer_send.clone()),
+                    track_crystal_send: std::array::from_fn(|i| guard.tracks[i].crystal_send.clone()),
+                    shimmer_mix: guard.shimmer.mix.clone(),
+                    shimmer_size: guard.shimmer.size.clone(),
+                    shimmer_amount: guard.shimmer.shimmer.clone(),
+                    crystal_mix: guard.crystal.mix.clone(),
+                    crystal_feedback: guard.crystal.feedback.clone(),
+                    master_vol: guard.master_vol.clone(),
+                }
             } else {
-                std::array::from_fn(|_| shared(0.0))
+                SynthParam::default()
             };
             let stream_res = build_ambient_stream(
                 Arc::clone(&eng),
@@ -149,16 +233,15 @@ fn setup_synth_runtime(world: &mut World) {
             );
             (
                 SynthBackendRuntime::Ambient(eng),
-                macro_values,
+                synth_param,
                 stream_res,
                 Some(transition),
             )
         }
         SynthBackendKind::Mono => {
             let state = Arc::new(AudioState::new());
-            let macro_values = std::array::from_fn(|_| shared(0.0));
             let stream_res = build_mono_stream(Arc::clone(&state), control_rx, actual_sr);
-            (SynthBackendRuntime::Mono(state), macro_values, stream_res, None)
+            (SynthBackendRuntime::Mono(state), SynthParam::default(), stream_res, None)
         }
     };
 
@@ -179,7 +262,7 @@ fn setup_synth_runtime(world: &mut World) {
 
     tempo.bpm = cfg.initial_bpm.max(1.0);
     drop(tempo);
-    world.insert_resource(SynthParam { macro_values });
+    world.insert_resource(synth_param);
     world.insert_resource(SynthBevyRuntime {
         backend,
         control_tx,
@@ -249,14 +332,16 @@ fn bevy_bridge_system(
                     }
                 }
             }
-            SynthEvent::SceneTransition { name, frames } => {
+            SynthEvent::SceneTransition { name, frames, mode } => {
                 if matches!(runtime.backend, SynthBackendRuntime::Ambient(_)) {
                     let path = scene_path(&cfg.scene_dir, name);
                     match load_scene_json(&path) {
                         Ok(scene) => {
+                            let resolved_mode = mode.unwrap_or(cfg.default_transition_mode);
                             pending.queue.push_back(PendingEngineAction::StartTransition {
                                 scene,
                                 frames: (*frames).max(1),
+                                mode: resolved_mode,
                             });
                         }
                         Err(e) => warn!("synth-bevy: scene transition load failed '{}': {e}", path),
@@ -297,17 +382,45 @@ fn process_pending_engine_actions(
                 }
                 guard.apply_scene(&scene);
             }
-            PendingEngineAction::StartTransition { scene, frames } => {
+            PendingEngineAction::StartTransition { scene, frames, mode } => {
                 if let Some(transition) = &runtime.scene_transition {
                     if let Ok(mut slot) = transition.try_lock() {
+                        // Capture current state for morph modes.
+                        let from_snapshot = match mode {
+                            SceneTransitionMode::ParamMorph | SceneTransitionMode::MorphWithFade => {
+                                Some(SceneSnapshot {
+                                    global: SceneGlobal {
+                                        master_vol: guard.master_vol.value(),
+                                        shimmer_mix: guard.shimmer.mix.value(),
+                                        shimmer_amount: guard.shimmer.shimmer.value(),
+                                        shimmer_size: guard.shimmer.size.value(),
+                                        shimmer_damp: guard.shimmer.damp.value(),
+                                        shimmer_pitch: guard.shimmer.pitch.load(std::sync::atomic::Ordering::Relaxed),
+                                        crystal_mix: guard.crystal.mix.value(),
+                                        crystal_grain_ms: guard.crystal.grain_ms.value(),
+                                        crystal_scatter: guard.crystal.scatter.value(),
+                                        crystal_feedback: guard.crystal.feedback.value(),
+                                        crystal_delay_ms: guard.crystal.delay_ms.value(),
+                                        crystal_pitch: guard.crystal.pitch.load(std::sync::atomic::Ordering::Relaxed),
+                                    },
+                                    track_vol: std::array::from_fn(|i| guard.tracks[i].track_vol.value()),
+                                    track_cutoff: std::array::from_fn(|i| guard.tracks[i].cutoff.value()),
+                                    track_shimmer_send: std::array::from_fn(|i| guard.tracks[i].shimmer_send.value()),
+                                    track_crystal_send: std::array::from_fn(|i| guard.tracks[i].crystal_send.value()),
+                                })
+                            }
+                            _ => None,
+                        };
                         *slot = Some(SceneTransitionPlan {
                             scene,
+                            mode,
                             total_frames: frames,
                             frames_left: frames,
                             applied_target: false,
+                            from_snapshot,
                         });
                     } else {
-                        pending.queue.push_front(PendingEngineAction::StartTransition { scene, frames });
+                        pending.queue.push_front(PendingEngineAction::StartTransition { scene, frames, mode });
                         break;
                     }
                 } else {
@@ -508,18 +621,113 @@ where
                     if let Some(plan) = slot.as_mut() {
                         let done = plan.total_frames.saturating_sub(plan.frames_left);
                         let progress = done as f32 / plan.total_frames as f32;
-                        if !plan.applied_target && progress >= 0.5 {
-                            eng.apply_scene(&plan.scene);
-                            plan.applied_target = true;
+
+                        match plan.mode {
+                            SceneTransitionMode::LinearFade => {
+                                // V-shape: linear fade to silence at midpoint, then back up.
+                                if !plan.applied_target && progress >= 0.5 {
+                                    eng.apply_scene(&plan.scene);
+                                    plan.applied_target = true;
+                                }
+                                let gain = if progress < 0.5 {
+                                    1.0 - progress * 2.0
+                                } else {
+                                    (progress - 0.5) * 2.0
+                                }.clamp(0.0, 1.0);
+                                l *= gain;
+                                r *= gain;
+                            }
+                            SceneTransitionMode::EqualPowerFade => {
+                                // Cosine crossfade: constant perceived loudness, no dip.
+                                if !plan.applied_target && progress >= 0.5 {
+                                    eng.apply_scene(&plan.scene);
+                                    plan.applied_target = true;
+                                }
+                                let angle = if progress < 0.5 {
+                                    progress * 2.0
+                                } else {
+                                    1.0 - (progress - 0.5) * 2.0
+                                } * std::f32::consts::FRAC_PI_2;
+                                let gain = angle.cos();
+                                l *= gain;
+                                r *= gain;
+                            }
+                            SceneTransitionMode::ParamMorph => {
+                                // No volume change. Lerp continuous params each sample.
+                                // Patches (waveform/ADSR) swap at midpoint; no audible click
+                                // because the parameter evolution masks it.
+                                if !plan.applied_target && progress >= 0.5 {
+                                    // Apply full scene to pick up patch/ADSR; then immediately
+                                    // re-apply the target continuous params to avoid a jump.
+                                    eng.apply_scene(&plan.scene);
+                                    plan.applied_target = true;
+                                }
+                                if let Some(from) = &plan.from_snapshot {
+                                    let t = progress.min(1.0);
+                                    let lerp = |a: f32, b: f32| a + (b - a) * t;
+                                    let to = &plan.scene.global;
+                                    eng.shimmer.mix.set(lerp(from.global.shimmer_mix, to.shimmer_mix));
+                                    eng.shimmer.shimmer.set(lerp(from.global.shimmer_amount, to.shimmer_amount));
+                                    eng.shimmer.size.set(lerp(from.global.shimmer_size, to.shimmer_size));
+                                    eng.shimmer.damp.set(lerp(from.global.shimmer_damp, to.shimmer_damp));
+                                    eng.crystal.mix.set(lerp(from.global.crystal_mix, to.crystal_mix));
+                                    eng.crystal.grain_ms.set(lerp(from.global.crystal_grain_ms, to.crystal_grain_ms));
+                                    eng.crystal.scatter.set(lerp(from.global.crystal_scatter, to.crystal_scatter));
+                                    eng.crystal.feedback.set(lerp(from.global.crystal_feedback, to.crystal_feedback));
+                                    eng.crystal.delay_ms.set(lerp(from.global.crystal_delay_ms, to.crystal_delay_ms));
+                                    eng.master_vol.set(lerp(from.global.master_vol, to.master_vol));
+                                    for ti in 0..TRACK_COUNT {
+                                        let tt = &plan.scene.tracks[ti];
+                                        eng.tracks[ti].track_vol.set(lerp(from.track_vol[ti], tt.volume));
+                                        eng.tracks[ti].cutoff.set(lerp(from.track_cutoff[ti], tt.cutoff));
+                                        eng.tracks[ti].shimmer_send.set(lerp(from.track_shimmer_send[ti], tt.shimmer_send));
+                                        eng.tracks[ti].crystal_send.set(lerp(from.track_crystal_send[ti], tt.crystal_send));
+                                    }
+                                }
+                            }
+                            SceneTransitionMode::MorphWithFade => {
+                                // Morph continuous params throughout.
+                                // Add a short equal-power dip around midpoint (±5% of total)
+                                // to mask the patch/waveform discontinuity.
+                                const DIP_HALF: f32 = 0.05;
+                                let in_dip = (progress - 0.5).abs() < DIP_HALF;
+                                let dip_gain = if in_dip {
+                                    let t = ((progress - 0.5).abs() / DIP_HALF) * std::f32::consts::FRAC_PI_2;
+                                    t.sin() // 0 at midpoint, 1 at edges of dip window
+                                } else {
+                                    1.0
+                                };
+                                l *= dip_gain;
+                                r *= dip_gain;
+
+                                if !plan.applied_target && progress >= 0.5 {
+                                    eng.apply_scene(&plan.scene);
+                                    plan.applied_target = true;
+                                }
+                                if let Some(from) = &plan.from_snapshot {
+                                    let t = progress.min(1.0);
+                                    let lerp = |a: f32, b: f32| a + (b - a) * t;
+                                    let to = &plan.scene.global;
+                                    eng.shimmer.mix.set(lerp(from.global.shimmer_mix, to.shimmer_mix));
+                                    eng.shimmer.shimmer.set(lerp(from.global.shimmer_amount, to.shimmer_amount));
+                                    eng.shimmer.size.set(lerp(from.global.shimmer_size, to.shimmer_size));
+                                    eng.shimmer.damp.set(lerp(from.global.shimmer_damp, to.shimmer_damp));
+                                    eng.crystal.mix.set(lerp(from.global.crystal_mix, to.crystal_mix));
+                                    eng.crystal.grain_ms.set(lerp(from.global.crystal_grain_ms, to.crystal_grain_ms));
+                                    eng.crystal.scatter.set(lerp(from.global.crystal_scatter, to.crystal_scatter));
+                                    eng.crystal.feedback.set(lerp(from.global.crystal_feedback, to.crystal_feedback));
+                                    eng.crystal.delay_ms.set(lerp(from.global.crystal_delay_ms, to.crystal_delay_ms));
+                                    eng.master_vol.set(lerp(from.global.master_vol, to.master_vol));
+                                    for ti in 0..TRACK_COUNT {
+                                        let tt = &plan.scene.tracks[ti];
+                                        eng.tracks[ti].track_vol.set(lerp(from.track_vol[ti], tt.volume));
+                                        eng.tracks[ti].cutoff.set(lerp(from.track_cutoff[ti], tt.cutoff));
+                                        eng.tracks[ti].shimmer_send.set(lerp(from.track_shimmer_send[ti], tt.shimmer_send));
+                                        eng.tracks[ti].crystal_send.set(lerp(from.track_crystal_send[ti], tt.crystal_send));
+                                    }
+                                }
+                            }
                         }
-                        let gain = if progress < 0.5 {
-                            1.0 - progress * 2.0
-                        } else {
-                            (progress - 0.5) * 2.0
-                        }
-                        .clamp(0.0, 1.0);
-                        l *= gain;
-                        r *= gain;
 
                         plan.frames_left = plan.frames_left.saturating_sub(1);
                         if plan.frames_left == 0 {
@@ -778,7 +986,7 @@ where
 
 #[cfg(feature = "inspector")]
 mod inspector {
-    use super::{SynthParam, SynthTempo, MACRO_COUNT};
+    use super::{SynthParam, SynthTempo, ACTIVE_MACRO_KNOBS, MACRO_COUNT, TRACK_COUNT};
     use bevy::prelude::*;
     use bevy_egui::{egui, EguiContexts, EguiPlugin};
 
@@ -798,17 +1006,98 @@ mod inspector {
     ) {
         let Some(params) = params else { return; };
         let Some(tempo) = tempo else { return; };
-        egui::Window::new("Synth Inspector").show(contexts.ctx_mut(), |ui| {
-            ui.label(format!("Tempo: {:.1} BPM", tempo.bpm));
-            for i in 0..MACRO_COUNT {
-                let mut v = params.macro_value(i);
-                if ui
-                    .add(egui::Slider::new(&mut v, 0.0..=1.0).text(format!("Macro {}", i + 1)))
-                    .changed()
-                {
-                    params.set_macro(i, v);
-                }
-            }
-        });
+
+        egui::Window::new("Synth Inspector")
+            .default_width(300.0)
+            .show(contexts.ctx_mut(), |ui| {
+                ui.label(format!("Tempo: {:.1} BPM", tempo.bpm));
+
+                ui.separator();
+                egui::CollapsingHeader::new("Macros").default_open(true).show(ui, |ui| {
+                    for i in 0..ACTIVE_MACRO_KNOBS {
+                        let mut v = params.macro_value(i);
+                        if ui
+                            .add(egui::Slider::new(&mut v, 0.0..=1.0).text(format!("Macro {}", i + 1)))
+                            .changed()
+                        {
+                            params.set_macro(i, v);
+                        }
+                    }
+                });
+
+                ui.separator();
+                egui::CollapsingHeader::new("Global Bus").default_open(false).show(ui, |ui| {
+                    {
+                        let mut v = params.master_vol.value();
+                        if ui.add(egui::Slider::new(&mut v, 0.0..=1.0).text("Master Vol")).changed() {
+                            params.master_vol.set(v);
+                        }
+                    }
+                    ui.label("Shimmer");
+                    {
+                        let mut v = params.shimmer_mix.value();
+                        if ui.add(egui::Slider::new(&mut v, 0.0..=0.80).text("Mix")).changed() {
+                            params.shimmer_mix.set(v);
+                        }
+                    }
+                    {
+                        let mut v = params.shimmer_size.value();
+                        if ui.add(egui::Slider::new(&mut v, 0.0..=1.0).text("Size")).changed() {
+                            params.shimmer_size.set(v);
+                        }
+                    }
+                    {
+                        let mut v = params.shimmer_amount.value();
+                        if ui.add(egui::Slider::new(&mut v, 0.0..=1.0).text("Amount")).changed() {
+                            params.shimmer_amount.set(v);
+                        }
+                    }
+                    ui.label("Crystal");
+                    {
+                        let mut v = params.crystal_mix.value();
+                        if ui.add(egui::Slider::new(&mut v, 0.0..=0.45).text("Mix")).changed() {
+                            params.crystal_mix.set(v);
+                        }
+                    }
+                    {
+                        let mut v = params.crystal_feedback.value();
+                        if ui.add(egui::Slider::new(&mut v, 0.0..=0.65).text("Feedback")).changed() {
+                            params.crystal_feedback.set(v);
+                        }
+                    }
+                });
+
+                ui.separator();
+                egui::CollapsingHeader::new("Tracks").default_open(false).show(ui, |ui| {
+                    for i in 0..TRACK_COUNT {
+                        egui::CollapsingHeader::new(format!("Track {}", i + 1)).show(ui, |ui| {
+                            {
+                                let mut v = params.track_vol[i].value();
+                                if ui.add(egui::Slider::new(&mut v, 0.0..=1.0).text("Volume")).changed() {
+                                    params.track_vol[i].set(v);
+                                }
+                            }
+                            {
+                                let mut v = params.track_cutoff[i].value();
+                                if ui.add(egui::Slider::new(&mut v, 80.0..=18_000.0).text("Cutoff").logarithmic(true)).changed() {
+                                    params.track_cutoff[i].set(v);
+                                }
+                            }
+                            {
+                                let mut v = params.track_shimmer_send[i].value();
+                                if ui.add(egui::Slider::new(&mut v, 0.0..=1.0).text("Shimmer Send")).changed() {
+                                    params.track_shimmer_send[i].set(v);
+                                }
+                            }
+                            {
+                                let mut v = params.track_crystal_send[i].value();
+                                if ui.add(egui::Slider::new(&mut v, 0.0..=1.0).text("Crystal Send")).changed() {
+                                    params.track_crystal_send[i].set(v);
+                                }
+                            }
+                        });
+                    }
+                });
+            });
     }
 }

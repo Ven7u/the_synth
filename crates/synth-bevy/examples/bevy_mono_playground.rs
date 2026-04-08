@@ -13,6 +13,7 @@ fn main() {
             control_capacity: 1024,
             scene_dir: "scenes".to_string(),
             initial_bpm: 120.0,
+            ..Default::default()
         })
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {

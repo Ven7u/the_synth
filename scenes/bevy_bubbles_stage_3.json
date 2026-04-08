@@ -1,34 +1,34 @@
 {
   "name": "bevy_bubbles_stage_3",
-  "bpm": 106,
-  "key": 0,
+  "bpm": 96,
+  "key": 9,
   "scale": "minor",
   "macro_set": "AmbientCore",
   "tracks": [
     {
-      "patch_path": "assets/patches/Ambient/Eno Space.json",
+      "patch_path": "assets/patches/Ambient/Night Drift.json",
       "patch": {
-        "name": "Init",
-        "category": "User",
-        "synth_model": "",
+        "name": "Night Drift",
+        "category": "Ambient",
+        "synth_model": "theSynth",
         "osc_wave": [
           1,
-          0,
+          1,
           0
         ],
         "osc_octave": [
-          0,
+          -1,
           0,
           0
         ],
         "osc_detune": [
           0.0,
-          0.0,
+          9.0,
           0.0
         ],
         "osc_vol": [
-          0.4,
-          0.3,
+          0.5,
+          0.45,
           0.0
         ],
         "osc_enabled": [
@@ -47,69 +47,69 @@
           false
         ],
         "osc_unison_enabled": [
-          false,
+          true,
           false,
           false
         ],
         "osc_unison_count": [
-          2,
+          3,
           2,
           2
         ],
         "osc_unison_spread": [
-          20.0,
+          18.0,
           20.0,
           20.0
         ],
         "hard_sync": false,
         "fm_enabled": false,
-        "fm_depth": 1.0,
+        "fm_depth": 0.0,
         "ring_enabled": false,
-        "ring_depth": 1.0,
-        "noise_vol": 0.0,
-        "lfo_enabled": false,
-        "lfo_rate": 2.0,
-        "lfo_depth": 0.0,
+        "ring_depth": 0.0,
+        "noise_vol": 0.02,
+        "lfo_enabled": true,
+        "lfo_rate": 0.06,
+        "lfo_depth": 0.12,
         "lfo_shape": 0,
         "lfo_dest": 1,
         "filter_enabled": true,
-        "filter_cutoff": 3000.0,
-        "filter_q": 0.3,
-        "filter_env_amount": 0.3,
+        "filter_cutoff": 600.0,
+        "filter_q": 0.12,
+        "filter_env_amount": 0.25,
         "fenv_adsr": [
-          0.01,
-          0.3,
-          0.0,
-          0.2
+          1.5,
+          2.0,
+          0.5,
+          4.0
         ],
         "amp_adsr": [
-          0.01,
-          0.15,
-          0.7,
-          0.4
+          2.0,
+          0.8,
+          0.75,
+          5.0
         ],
-        "glide_time": 0.0
+        "glide_time": 0.2
       },
-      "volume": 0.9,
-      "cutoff": 3000.0,
-      "resonance": 0.3,
-      "shimmer_send": 0.0,
-      "crystal_send": 0.0
+      "volume": 0.72,
+      "cutoff": 2600.0,
+      "resonance": 0.14,
+      "shimmer_send": 0.68,
+      "crystal_send": 0.06
     },
     {
-      "patch_path": "",
+      "patch_path": "assets/patches/Keys/Crystal Bell.json",
       "patch": {
-        "name": "Init",
-        "category": "User",
-        "synth_model": "",
+        "name": "Crystal Bell",
+        "category": "Keys",
+        "synth_model": "theSynth",
         "osc_wave": [
-          1,
+          0,
           0,
           0
         ],
         "osc_octave": [
-          0,
-          0,
+          1,
+          2,
           0
         ],
         "osc_detune": [
@@ -118,8 +118,8 @@
           0.0
         ],
         "osc_vol": [
+          0.5,
           0.4,
-          0.3,
           0.0
         ],
         "osc_enabled": [
@@ -153,10 +153,10 @@
           20.0
         ],
         "hard_sync": false,
-        "fm_enabled": false,
-        "fm_depth": 1.0,
-        "ring_enabled": false,
-        "ring_depth": 1.0,
+        "fm_enabled": true,
+        "fm_depth": 1.2,
+        "ring_enabled": true,
+        "ring_depth": 0.3,
         "noise_vol": 0.0,
         "lfo_enabled": false,
         "lfo_rate": 2.0,
@@ -164,28 +164,28 @@
         "lfo_shape": 0,
         "lfo_dest": 1,
         "filter_enabled": true,
-        "filter_cutoff": 3000.0,
-        "filter_q": 0.3,
+        "filter_cutoff": 8000.0,
+        "filter_q": 0.15,
         "filter_env_amount": 0.3,
         "fenv_adsr": [
-          0.01,
-          0.3,
-          0.0,
-          0.2
+          0.001,
+          0.8,
+          0.1,
+          0.8
         ],
         "amp_adsr": [
-          0.01,
-          0.15,
-          0.7,
-          0.4
+          0.001,
+          1.2,
+          0.05,
+          1.0
         ],
         "glide_time": 0.0
       },
-      "volume": 0.0,
-      "cutoff": 3000.0,
-      "resonance": 0.3,
-      "shimmer_send": 0.0,
-      "crystal_send": 0.0
+      "volume": 0.62,
+      "cutoff": 9000.0,
+      "resonance": 0.18,
+      "shimmer_send": 0.22,
+      "crystal_send": 0.5
     },
     {
       "patch_path": "",
@@ -372,17 +372,17 @@
   ],
   "macros": [],
   "global": {
-    "master_vol": 0.58,
-    "shimmer_mix": 0.38,
-    "shimmer_amount": 0.26,
-    "shimmer_size": 0.84,
-    "shimmer_damp": 0.5,
+    "master_vol": 0.62,
+    "shimmer_mix": 0.42000002,
+    "shimmer_amount": 0.62,
+    "shimmer_size": 0.8,
+    "shimmer_damp": 0.4,
     "shimmer_pitch": 1,
-    "crystal_mix": 0.12,
-    "crystal_grain_ms": 120.0,
-    "crystal_scatter": 0.25,
-    "crystal_feedback": 0.3,
-    "crystal_delay_ms": 260.0,
+    "crystal_mix": 0.18,
+    "crystal_grain_ms": 85.0,
+    "crystal_scatter": 0.32,
+    "crystal_feedback": 0.32,
+    "crystal_delay_ms": 210.0,
     "crystal_pitch": 2
   }
 }
