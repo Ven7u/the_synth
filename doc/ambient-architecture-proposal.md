@@ -29,6 +29,23 @@ separate applications or manual routing.
 These four roles map directly to a **four-layer architecture**, each layer carrying its own
 synthesis voice, arpeggiator, and local effects, feeding into shared spatial buses.
 
+### 1.1 Product contract
+
+This platform intentionally serves **two different products** with different UX goals:
+
+- **`the_synth` = instrument**  
+  Real-time virtual synth for direct playing (single timbral lane / mono-track workflow),
+  with deep voice editing and patch authoring.
+- **`ambient-box` = performance + generation tool**  
+  Multi-track ambient/electronic composition environment with high-level controls:
+  mood/macros, harmony/rhythm patterns, scene transitions, and generative behavior.
+- **`ambient-engine` = generative/composition core**  
+  Shared runtime for multi-track behavior: macro system, scene system, harmonic/rhythmic
+  generators, and effect orchestration.
+
+Future direction: `ambient-box` should support **MIDI timeline interoperability** (import,
+playback, and export), while generation quality remains a core `ambient-engine` R&D effort.
+
 ---
 
 ## 2. Design Principles
@@ -137,12 +154,13 @@ and crystal buses. Macro and scene system. Generative pattern engine. Automation
 
 ### Application binaries
 
-**`the_synth`** (exists) — The original mono-timbral synthesizer. Stays exactly as it is.
-No changes forced by platform evolution.
+**`the_synth`** (exists) — Real-time virtual instrument focused on direct playability and deep
+voice editing. Primary patch design environment.
 
 **`ambient-box`** (planned) — The multi-track ambient/electronic music maker. Layer mixer,
-macro performance surface, scene browser, BPM-sync. Built entirely on `ambient-engine` and
-`synth-ui`.
+macro performance surface, scene browser, BPM-sync, and per-track patch *selection*.
+Built entirely on `ambient-engine` and `synth-ui`. Deep patch editing is intentionally
+kept in `the_synth` to avoid duplicating the full sound-design UI.
 
 **Future apps** depend on the same platform crates. A Bevy game adds `synth-bevy` as a shell
 over `ambient-engine`. A VST plugin wraps any engine with a `nih-plug` shell.
@@ -521,15 +539,23 @@ The "few knobs" UX maps naturally to this architecture:
 | UI element | Maps to |
 |---|---|
 | **Scene selector** | Load a `Scene` (all 4 layers + macros) |
-| **Layer tabs** | Per-layer patch editor (existing synth UI, one tab per layer) |
+| **Layer strip** | Per-layer high-level controls: volume, pan, sends, arp/walker, patch slot |
+| **Patch slot / browser** | Select/load saved patches per layer (no deep voice editing here) |
 | **Macro panel** | 4–8 large knobs, one per macro, labelled by scene |
 | **Shimmer send** | Per-layer knob in the layer strip |
 | **Crystal send** | Per-layer knob in the layer strip |
 | **Arp controls** | Per-layer: mode, division, octave range, gate, hold |
 | **Global BPM** | Drives all arp clocks and delay BPM-sync |
 
-The macro panel is the primary performance surface. The layer/patch editor is for sound design
-and remains accessible but not required during performance.
+The macro panel is the primary performance surface. Deep sound design stays in `the_synth`;
+`ambient-box` focuses on performance and arrangement-level control.
+
+### Patch authoring flow
+
+1. Design and tune a patch in `the_synth` (full voice editor).
+2. Save patch to the shared patch library format.
+3. In `ambient-box`, assign that patch to one track slot.
+4. Shape the full piece with macros, sends, arp/walker, and scene transitions.
 
 ---
 
@@ -917,6 +943,7 @@ the **platform + two-app architecture** described in §3 and §13.
 | Macro + Scene system | 🔲 Phase 6 |
 | Generative patterns + Automation | 🔲 Phase 8 |
 | `synth-bevy` Bevy integration | 🔲 Phase 7 |
+| MIDI import/playback/export (ambient workflow) | 🔲 Future phase |
 
 ---
 
@@ -991,6 +1018,7 @@ multiple parameters. Scenes are serializable and load/save from disk.
 | 6.4 Scene serialization | `serde` + JSON; migration utility wraps a single `Patch` into a Scene |
 | 6.5 Macro panel UI in `ambient-box` | 4–8 large labelled knobs — the primary performance surface |
 | 6.6 Scene browser UI | Load / save / name scenes; preview patch names per slot |
+| 6.7 Per-track patch slot UI in `ambient-box` | Select/load patch assets per track; no deep patch editing in this app |
 
 ---
 
@@ -1047,6 +1075,38 @@ sound design primitives.
 4. 9.4 Spectral freeze / blur
 5. 9.5 Polyphonic harmonizer
 6. 9.6 Convolution reverb (partitioned)
+
+---
+
+### Future MIDI timeline interoperability (`ambient-box` + `ambient-engine`)
+
+**Goal:** Allow `ambient-box` to interoperate with DAW timelines without turning the app into a
+full DAW. MIDI should be a bridge for composition handoff and hybrid workflows.
+
+| Area | Scope |
+|---|---|
+| Import | Read `.mid` files as scene-arrangement material (per-track clip lanes or merged lane) |
+| Playback | Drive track notes/chords from imported clips while preserving macro + scene control |
+| Export | Write generated/performed content back to `.mid` for DAW refinement |
+
+**Import policy (proposed):**
+1. Quantize-on-import is optional: `Off`, `1/16`, `1/8`, `1/4`.
+2. Preserve note lengths by default; optional gate normalization per lane.
+3. Keep source tempo map metadata, but start with constant-tempo playback in v1.
+4. Support lane assignment modes: `single-lane`, `split-by-channel`, `split-by-track`.
+
+**Arrangement playback modes (proposed):**
+1. `Clip` mode: plays imported MIDI clips directly.
+2. `Hybrid` mode: imported MIDI provides harmonic/rhythmic anchor; generators add variation.
+3. `Generator` mode: ignores clip notes and uses only engine generators/macros/scenes.
+
+**Export options (proposed):**
+1. Export raw clip playback (verbatim imported timeline after edits).
+2. Export rendered generative output (what the engine actually produced over time).
+3. Export per-track lanes or merged lane.
+4. Embed scene markers as MIDI markers/text events where supported.
+
+**Non-goal:** full piano-roll editing inside `ambient-box`.
 
 ---
 
@@ -1319,7 +1379,7 @@ synth-bevy = { path = "../synth-bevy", features = ["inspector"] }
 ```
 
 The panel is a `bevy-egui` window. It exposes:
-- All four track tabs with the full patch editor (same UI as the standalone app)
+- Track-level controls plus per-track patch assignment (same high-level model as `ambient-box`)
 - Macro editor: drag-connect parameters to macro knobs; set min/max/curve per target
 - Scene save/load from disk
 - Live oscilloscope and peak meter
