@@ -1,0 +1,16 @@
+[package]
+name = "synth-bevy"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+bevy = ["dep:bevy"]
+inspector = ["bevy", "dep:bevy_egui"]
+
+[dependencies]
+ambient-engine = { path = "../ambient-engine" }
+synth-control  = { path = "../synth-control" }
+fundsp = { version = "0.23", features = ["files", "fft"] }
+bevy = { version = "0.15", optional = true, default-features = true }
+bevy_egui = { version = "0.31", optional = true }
