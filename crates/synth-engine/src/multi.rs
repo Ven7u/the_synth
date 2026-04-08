@@ -19,6 +19,7 @@ use synth_dsp::envelope::LiveAdsr;
 use synth_dsp::osc::{MultiWaveOsc, SyncRole};
 use synth_dsp::shimmer::{ShimmerShared, ShimmerReverb};
 use synth_dsp::crystallizer::{CrystallizerShared, Crystallizer};
+use synth_dsp::dynamics::PeakLimiter;
 use crate::arp::{ArpShared, ScaleWalkerShared};
 
 pub const TRACK_COUNT: usize = 4;
@@ -280,6 +281,10 @@ pub struct MultiTrackEngine {
     pub crystal: CrystallizerShared,
     /// Master output volume.
     pub master_vol: Shared,
+    /// Output limiter enable for multitrack sum.
+    pub limiter_enabled: Arc<AtomicBool>,
+    /// Limiter threshold (typically 0.5..1.0).
+    pub limiter_threshold: Shared,
 
     /// Per-track arpeggiator config (UI-accessible).
     pub arp_configs:    [ArpShared; TRACK_COUNT],
@@ -289,6 +294,7 @@ pub struct MultiTrackEngine {
     track_graphs:  Vec<BlockRateAdapter>,
     shimmer_state: ShimmerReverb,
     crystal_state: Crystallizer,
+    out_limiter: PeakLimiter,
     sr: f64,
     smoothed_freqs: Vec<Vec<f32>>,
 }
@@ -306,11 +312,14 @@ impl MultiTrackEngine {
             shimmer: ShimmerShared::new(),
             crystal: CrystallizerShared::new(),
             master_vol: shared(0.7),
+            limiter_enabled: Arc::new(AtomicBool::new(true)),
+            limiter_threshold: shared(0.92),
             arp_configs:    std::array::from_fn(|_| ArpShared::new()),
             walker_configs: std::array::from_fn(|_| ScaleWalkerShared::new()),
             track_graphs,
             shimmer_state: ShimmerReverb::new(sr as f32),
             crystal_state: Crystallizer::new(sr as f32),
+            out_limiter: PeakLimiter::new(sr as f32, 2.0, 80.0),
             sr,
             smoothed_freqs,
         }
@@ -409,7 +418,12 @@ impl MultiTrackEngine {
         let dry = dry_sum / TRACK_COUNT as f32;
         let wet_total = (shim_mix + crys_mix).clamp(0.0, 1.0);
         let mix = dry * (1.0 - wet_total) + shim_mix * shim_wet + crys_mix * crys_wet;
-        let out = (mix * self.master_vol.value()).tanh();
+        let mut out_pre = mix * self.master_vol.value();
+        if self.limiter_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+            let thr = self.limiter_threshold.value().clamp(0.5, 1.0);
+            out_pre = self.out_limiter.process(out_pre, thr);
+        }
+        let out = out_pre.tanh();
         (out, out)
     }
 }

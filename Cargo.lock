@@ -187,6 +187,7 @@ dependencies = [
  "egui",
  "fundsp",
  "midir",
+ "synth-common",
  "synth-control",
  "synth-engine",
  "synth-ui",
@@ -3823,6 +3824,10 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
+
+[[package]]
+name = "synth-common"
+version = "0.1.0"
 
 [[package]]
 name = "synth-control"

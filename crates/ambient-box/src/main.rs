@@ -12,12 +12,13 @@ use fundsp::prelude::midi_hz;
 use std::sync::Arc;
 
 use ambient_engine::{
-    ACTIVE_MACRO_KNOBS, AmbientEngine, AmbientPatch, MacroSetKind, MACRO_COUNT, TRACK_COUNT,
+    ACTIVE_MACRO_KNOBS, AmbientEngine, AmbientPatch, MacroSetKind, Scene, MACRO_COUNT, TRACK_COUNT,
     VOICE_COUNT, load_scene_json, save_scene_json,
 };
 use synth_engine::arp::{ArpMode, ArpState, ClockDiv, Scale, ScaleWalker};
 use synth_control::{ControlEvent, ControlSender, make_control_channel};
 use synth_control::midi::{MidiEngine, MidiEvent};
+use synth_common::{RestartBatch, SyncTransport};
 use std::sync::atomic::Ordering;
 
 #[derive(Clone)]
@@ -99,6 +100,9 @@ where
 
     // Per-track LFO phase
     let mut lfo_phases: [f32; TRACK_COUNT] = [0.0; TRACK_COUNT];
+    // Last valid stereo sample, used as a smooth fallback if UI briefly owns the lock.
+    let mut last_out_l: f32 = 0.0;
+    let mut last_out_r: f32 = 0.0;
 
     // Per-track arpeggiator and scale walker (audio-thread state only)
     let mut arp_states:    [ArpState;    TRACK_COUNT] = std::array::from_fn(|_| ArpState::new());
@@ -109,13 +113,35 @@ where
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             let frames = data.len() / channels;
 
-            let Ok(mut eng) = engine.try_lock() else {
-                // If UI briefly holds the engine lock, never leave the output buffer untouched.
-                // Output explicit silence for this callback to avoid random garbage/distortion.
-                let z = T::from_sample(0.0_f32);
-                for smp in data.iter_mut() {
-                    *smp = z;
+            let mut eng_guard = engine.try_lock().ok();
+            if eng_guard.is_none() {
+                // Short retry window: avoids full-buffer fallback when contention is only
+                // a few microseconds at the UI/audio boundary.
+                for _ in 0..64 {
+                    std::hint::spin_loop();
+                    if let Ok(g) = engine.try_lock() {
+                        eng_guard = Some(g);
+                        break;
+                    }
                 }
+            }
+
+            let Some(mut eng) = eng_guard else {
+                // If UI briefly holds the engine lock, avoid hard mute jumps (clicks).
+                // Hold and gently decay the last valid sample for this callback.
+                let mut l = last_out_l;
+                let mut r = last_out_r;
+                for frame in data.chunks_mut(channels) {
+                    let left = T::from_sample(l);
+                    let right = T::from_sample(r);
+                    for (i, smp) in frame.iter_mut().enumerate() {
+                        *smp = if i & 1 == 0 { left } else { right };
+                    }
+                    l *= 0.9995;
+                    r *= 0.9995;
+                }
+                last_out_l = l;
+                last_out_r = r;
                 return;
             };
 
@@ -246,6 +272,8 @@ where
                 }
 
                 let (l, r) = eng.get_stereo();
+                last_out_l = l;
+                last_out_r = r;
                 let left  = T::from_sample(l);
                 let right = T::from_sample(r);
                 for (i, smp) in frame.iter_mut().enumerate() {
@@ -291,14 +319,7 @@ struct AmbientBoxApp {
     arp_enabled_ui: [bool; TRACK_COUNT],
     arp_hold_ui:    [bool; TRACK_COUNT],
     walker_enabled_ui: [bool; TRACK_COUNT],
-    clock_sync_enabled: bool,
-    bar_quantize_start: bool,
-    transport_playing: bool,
-    transport_bpm: u32,
-    transport_current_step: usize,
-    transport_last_tick: std::time::Instant,
-    arp_restart_pending: [bool; TRACK_COUNT],
-    walker_restart_pending: [bool; TRACK_COUNT],
+    transport_sync: SyncTransport<TRACK_COUNT>,
 
     // Global shimmer UI state
     shimmer_on:    bool,
@@ -338,6 +359,7 @@ struct AmbientBoxApp {
     macro_ui_names: [String; MACRO_COUNT],
     patch_library: Vec<PatchEntry>,
     track_patch_choice: [usize; TRACK_COUNT],
+    track_patch_last_synced_path: [String; TRACK_COUNT],
 }
 
 impl AmbientBoxApp {
@@ -422,14 +444,7 @@ impl AmbientBoxApp {
             arp_enabled_ui: [false; TRACK_COUNT],
             arp_hold_ui: [false; TRACK_COUNT],
             walker_enabled_ui: [false; TRACK_COUNT],
-            clock_sync_enabled: true,
-            bar_quantize_start: false,
-            transport_playing: false,
-            transport_bpm: 120,
-            transport_current_step: 0,
-            transport_last_tick: std::time::Instant::now(),
-            arp_restart_pending: [false; TRACK_COUNT],
-            walker_restart_pending: [false; TRACK_COUNT],
+            transport_sync: SyncTransport::new(120),
             shimmer_on:    false,
             shimmer_mix:   0.4,
             shimmer_amt:   0.5,
@@ -461,6 +476,7 @@ impl AmbientBoxApp {
             macro_ui_names: std::array::from_fn(|i| format!("Macro {}", i + 1)),
             patch_library,
             track_patch_choice: [0; TRACK_COUNT],
+            track_patch_last_synced_path: std::array::from_fn(|_| String::new()),
         }
     }
 
@@ -490,56 +506,37 @@ impl AmbientBoxApp {
         }
     }
 
-    fn sync_transport_now(&mut self) {
-        self.transport_current_step = 0;
-        self.transport_last_tick = std::time::Instant::now();
-        self.arp_restart_pending.fill(false);
-        self.walker_restart_pending.fill(false);
+    fn dispatch_restarts(&self, batch: RestartBatch<TRACK_COUNT>) {
         for ti in 0..TRACK_COUNT {
-            let _ = self.control.try_send(ControlEvent::ArpRestart { track: ti as u8 });
-            let _ = self.control.try_send(ControlEvent::WalkerRestart { track: ti as u8 });
+            if batch.arp[ti] {
+                let _ = self.control.try_send(ControlEvent::ArpRestart { track: ti as u8 });
+            }
+            if batch.walker[ti] {
+                let _ = self.control.try_send(ControlEvent::WalkerRestart { track: ti as u8 });
+            }
         }
     }
 
+    fn sync_transport_now(&mut self) {
+        let batch = self.transport_sync.sync_now();
+        self.dispatch_restarts(batch);
+    }
+
     fn schedule_or_restart_arp(&mut self, track: usize) {
-        if self.clock_sync_enabled && self.bar_quantize_start && self.transport_playing {
-            self.arp_restart_pending[track] = true;
-        } else {
+        if self.transport_sync.schedule_or_restart_arp(track) {
             let _ = self.control.try_send(ControlEvent::ArpRestart { track: track as u8 });
         }
     }
 
     fn schedule_or_restart_walker(&mut self, track: usize) {
-        if self.clock_sync_enabled && self.bar_quantize_start && self.transport_playing {
-            self.walker_restart_pending[track] = true;
-        } else {
+        if self.transport_sync.schedule_or_restart_walker(track) {
             let _ = self.control.try_send(ControlEvent::WalkerRestart { track: track as u8 });
         }
     }
 
     fn tick_transport_sync(&mut self) {
-        if !self.transport_playing {
-            return;
-        }
-        let step_dur = std::time::Duration::from_millis(60_000 / self.transport_bpm as u64 / 2);
-        if self.transport_last_tick.elapsed() < step_dur {
-            return;
-        }
-        self.transport_last_tick = std::time::Instant::now();
-        self.transport_current_step = (self.transport_current_step + 1) % 8;
-        let bar_boundary = self.transport_current_step == 0;
-        if bar_boundary {
-            for ti in 0..TRACK_COUNT {
-                if self.arp_restart_pending[ti] {
-                    let _ = self.control.try_send(ControlEvent::ArpRestart { track: ti as u8 });
-                    self.arp_restart_pending[ti] = false;
-                }
-                if self.walker_restart_pending[ti] {
-                    let _ = self.control.try_send(ControlEvent::WalkerRestart { track: ti as u8 });
-                    self.walker_restart_pending[ti] = false;
-                }
-            }
-        }
+        let batch = self.transport_sync.tick();
+        self.dispatch_restarts(batch);
     }
 }
 
@@ -615,10 +612,12 @@ impl eframe::App for AmbientBoxApp {
                 self.walker_oct[ti] = walker_cfg.octave_range.load(Ordering::Relaxed);
                 self.walker_gate[ti] = walker_cfg.gate.value();
 
-                if !eng.track_patch_paths[ti].is_empty() {
-                    if let Some(idx) = self.patch_library.iter().position(|p| p.path == eng.track_patch_paths[ti]) {
+                let engine_patch_path = &eng.track_patch_paths[ti];
+                if self.track_patch_last_synced_path[ti] != *engine_patch_path {
+                    if let Some(idx) = self.patch_library.iter().position(|p| p.path == *engine_patch_path) {
                         self.track_patch_choice[ti] = idx;
                     }
+                    self.track_patch_last_synced_path[ti] = engine_patch_path.clone();
                 }
             }
 
@@ -627,6 +626,8 @@ impl eframe::App for AmbientBoxApp {
             let mut request_scene_load_path: Option<String> = None;
             let mut trigger_arp_restart: Option<usize> = None;
             let mut trigger_walker_restart: Option<usize> = None;
+            let mut request_scene_load: Option<(String, Scene)> = None;
+            let mut pending_scene_save: Option<(String, Scene, String)> = None;
 
             // --- Per-track patch slot (Phase 6.7) ---
             let ti = self.active_track;
@@ -673,42 +674,24 @@ impl eframe::App for AmbientBoxApp {
             });
 
             ui.horizontal(|ui| {
-                let btn = if self.transport_playing { "Stop" } else { "Play" };
+                let btn = if self.transport_sync.playing { "Stop" } else { "Play" };
                 if ui.button(btn).on_hover_text("Start or stop the global sync transport.").clicked() {
-                    self.transport_playing = !self.transport_playing;
-                    if self.transport_playing {
-                        self.transport_last_tick = std::time::Instant::now();
-                        if self.clock_sync_enabled && self.bar_quantize_start && self.transport_current_step == 0 {
-                            for ti in 0..TRACK_COUNT {
-                                if self.arp_restart_pending[ti] {
-                                    let _ = self.control.try_send(ControlEvent::ArpRestart { track: ti as u8 });
-                                    self.arp_restart_pending[ti] = false;
-                                }
-                                if self.walker_restart_pending[ti] {
-                                    let _ = self.control.try_send(ControlEvent::WalkerRestart { track: ti as u8 });
-                                    self.walker_restart_pending[ti] = false;
-                                }
-                            }
-                        }
-                    } else {
-                        self.arp_restart_pending.fill(false);
-                        self.walker_restart_pending.fill(false);
-                    }
+                    let due = self.transport_sync.set_playing(!self.transport_sync.playing);
+                    self.dispatch_restarts(due);
                 }
                 ui.label("BPM:");
-                ui.add(egui::Slider::new(&mut self.transport_bpm, 40..=300));
-                if ui.checkbox(&mut self.clock_sync_enabled, "Clock Sync")
+                ui.add(egui::Slider::new(&mut self.transport_sync.bpm, 40..=300));
+                if ui.checkbox(&mut self.transport_sync.clock_sync_enabled, "Clock Sync")
                     .on_hover_text("Lock all track ARP/WALKER BPM to global transport BPM and align phase.")
-                    .changed() && self.clock_sync_enabled
+                    .changed()
                 {
-                    self.sync_transport_now();
+                    self.transport_sync.set_clock_sync(self.transport_sync.clock_sync_enabled);
+                    if self.transport_sync.clock_sync_enabled {
+                        self.sync_transport_now();
+                    }
                 }
-                if !self.clock_sync_enabled {
-                    self.arp_restart_pending.fill(false);
-                    self.walker_restart_pending.fill(false);
-                }
-                ui.add_enabled_ui(self.clock_sync_enabled, |ui| {
-                    ui.checkbox(&mut self.bar_quantize_start, "Bar Quantize")
+                ui.add_enabled_ui(self.transport_sync.clock_sync_enabled, |ui| {
+                    ui.checkbox(&mut self.transport_sync.bar_quantize_start, "Bar Quantize")
                         .on_hover_text("When enabled, ARP/WALKER restart on next bar instead of immediately.");
                 });
                 if ui.button("SYNC NOW")
@@ -792,6 +775,13 @@ impl eframe::App for AmbientBoxApp {
                     ui.label(egui::RichText::new(&self.scene_status).small());
                 }
             });
+
+            if let Some(path) = request_scene_load_path.take() {
+                match load_scene_json(&path) {
+                    Ok(scene) => request_scene_load = Some((path, scene)),
+                    Err(e) => self.scene_status = format!("Load failed: {e}"),
+                }
+            }
 
             ui.separator();
 
@@ -885,13 +875,13 @@ impl eframe::App for AmbientBoxApp {
                 cols[0].add_enabled_ui(arp_on, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("BPM:");
-                        if self.clock_sync_enabled {
-                            self.arp_bpm[ti] = self.transport_bpm as f32;
+                        if self.transport_sync.clock_sync_enabled {
+                            self.arp_bpm[ti] = self.transport_sync.bpm_f32();
                         }
-                        ui.add_enabled_ui(!self.clock_sync_enabled, |ui| {
+                        ui.add_enabled_ui(!self.transport_sync.clock_sync_enabled, |ui| {
                             ui.add(egui::Slider::new(&mut self.arp_bpm[ti], 20.0..=300.0));
                         });
-                        if self.clock_sync_enabled {
+                        if self.transport_sync.clock_sync_enabled {
                             ui.label(egui::RichText::new("SYNC").small().weak());
                         }
                     });
@@ -938,13 +928,13 @@ impl eframe::App for AmbientBoxApp {
                 cols[1].add_enabled_ui(walk_on, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("BPM:");
-                        if self.clock_sync_enabled {
-                            self.walker_bpm[ti] = self.transport_bpm as f32;
+                        if self.transport_sync.clock_sync_enabled {
+                            self.walker_bpm[ti] = self.transport_sync.bpm_f32();
                         }
-                        ui.add_enabled_ui(!self.clock_sync_enabled, |ui| {
+                        ui.add_enabled_ui(!self.transport_sync.clock_sync_enabled, |ui| {
                             ui.add(egui::Slider::new(&mut self.walker_bpm[ti], 20.0..=300.0));
                         });
-                        if self.clock_sync_enabled {
+                        if self.transport_sync.clock_sync_enabled {
                             ui.label(egui::RichText::new("SYNC").small().weak());
                         }
                     });
@@ -1006,7 +996,7 @@ impl eframe::App for AmbientBoxApp {
                 arp_cfg.mode.store(self.arp_mode[ti], Ordering::Relaxed);
                 arp_cfg.octave_range.store(self.arp_oct[ti], Ordering::Relaxed);
                 arp_cfg.gate.set(self.arp_gate[ti]);
-                if !prev_arp_enabled && self.arp_enabled_ui[ti] && self.clock_sync_enabled {
+                if !prev_arp_enabled && self.arp_enabled_ui[ti] && self.transport_sync.clock_sync_enabled {
                     trigger_arp_restart = Some(ti);
                 }
 
@@ -1019,12 +1009,12 @@ impl eframe::App for AmbientBoxApp {
                 walker_cfg.root.store(self.walker_root[ti], Ordering::Relaxed);
                 walker_cfg.octave_range.store(self.walker_oct[ti], Ordering::Relaxed);
                 walker_cfg.gate.set(self.walker_gate[ti]);
-                if !prev_walker_enabled && self.walker_enabled_ui[ti] && self.clock_sync_enabled {
+                if !prev_walker_enabled && self.walker_enabled_ui[ti] && self.transport_sync.clock_sync_enabled {
                     trigger_walker_restart = Some(ti);
                 }
 
-                if self.clock_sync_enabled {
-                    let bpm = self.transport_bpm as f32;
+                if self.transport_sync.clock_sync_enabled {
+                    let bpm = self.transport_sync.bpm_f32();
                     for track_idx in 0..TRACK_COUNT {
                         self.arp_bpm[track_idx] = bpm;
                         self.walker_bpm[track_idx] = bpm;
@@ -1067,37 +1057,36 @@ impl eframe::App for AmbientBoxApp {
                         self.scene_key,
                         scale,
                     );
-                    match save_scene_json(&scene_path, &scene) {
-                        Ok(()) => {
-                            self.scene_status = format!("Saved {scene_path}");
-                            self.scene_files = Self::list_scene_files();
-                            if let Some(pos) = self.scene_files.iter().position(|s| s == self.scene_name.trim()) {
-                                self.scene_selected = pos;
-                            }
-                        }
-                        Err(e) => self.scene_status = format!("Save failed: {e}"),
-                    }
+                    pending_scene_save = Some((scene_path, scene, self.scene_name.trim().to_string()));
                 }
 
-                if let Some(path) = request_scene_load_path.take() {
-                    match load_scene_json(&path) {
-                        Ok(scene) => {
-                            self.scene_name = scene.name.clone();
-                            self.scene_bpm = scene.bpm;
-                            self.scene_key = scene.key % 12;
-                            self.scene_scale_minor = scene.scale.eq_ignore_ascii_case("minor");
-                            eng.apply_scene(&scene);
-                            self.scene_status = format!("Loaded {path}");
-                        }
-                        Err(e) => self.scene_status = format!("Load failed: {e}"),
-                    }
+                if let Some((path, scene)) = request_scene_load.take() {
+                    self.scene_name = scene.name.clone();
+                    self.scene_bpm = scene.bpm;
+                    self.scene_key = scene.key % 12;
+                    self.scene_scale_minor = scene.scale.eq_ignore_ascii_case("minor");
+                    eng.apply_scene(&scene);
+                    self.scene_status = format!("Loaded {path}");
                 }
             } else {
                 if request_patch_load.is_some() {
                     self.scene_status = "Patch load skipped: engine busy".to_string();
                 }
-                if request_scene_save || request_scene_load_path.is_some() {
+                if request_scene_save || request_scene_load.is_some() {
                     self.scene_status = "Scene action skipped: engine busy".to_string();
+                }
+            }
+
+            if let Some((scene_path, scene, selected_name)) = pending_scene_save.take() {
+                match save_scene_json(&scene_path, &scene) {
+                    Ok(()) => {
+                        self.scene_status = format!("Saved {scene_path}");
+                        self.scene_files = Self::list_scene_files();
+                        if let Some(pos) = self.scene_files.iter().position(|s| s == &selected_name) {
+                            self.scene_selected = pos;
+                        }
+                    }
+                    Err(e) => self.scene_status = format!("Save failed: {e}"),
                 }
             }
 
