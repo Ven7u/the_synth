@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+synth-common  = { path = "../synth-common" }
 synth-engine  = { path = "../synth-engine" }
 synth-control = { path = "../synth-control" }
 fundsp        = { version = "0.23", features = ["files", "fft"] }

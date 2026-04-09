@@ -261,6 +261,7 @@ dependencies = [
  "fundsp",
  "serde",
  "serde_json",
+ "synth-common",
  "synth-control",
  "synth-engine",
 ]
@@ -5839,6 +5840,9 @@ dependencies = [
 [[package]]
 name = "synth-common"
 version = "0.1.0"
+dependencies = [
+ "fundsp",
+]
 
 [[package]]
 name = "synth-control"

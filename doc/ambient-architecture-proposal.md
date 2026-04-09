@@ -1081,17 +1081,65 @@ for the full integration design.
 
 ---
 
-### Phase 8 — Generative patterns and Automation (in `ambient-engine`)
+### Phase 8 — Generative patterns and Automation
 
-**Goal:** `ambient-box` and Bevy games can generate music autonomously from rules.
+**Goal:** Three distinct use cases, all sharing engine-side generators:
+
+1. **Generative soundtrack** — seed-based autonomous music in `ambient-engine`; game drives tension/mode/scene, engine handles note scheduling internally.
+2. **Game-controlled SFX/notes** — Bevy game sends individual `NoteOn`/`NoteOff` `SynthEvent`s with full control over pitch, timing, and patch (e.g. footstep pitch variation, enemy spawn chord).
+3. **MIDI playback** — pre-composed MIDI clips played through the synth engine for authored musical moments (cutscenes, boss themes, etc.).
+
+**Architecture:** Hybrid. Core generators live in `ambient-engine` (shared, host-agnostic). Bevy drives them via high-level intent events (`SetTension`, `SetGenerativeMode`, `TriggerFill`). For custom per-event game logic, raw `NoteOn`s bypass the generators entirely. MIDI playback is a third path: a clip player that reads `.mid` data and emits note events on a beat clock.
+
+#### 8.1 — Beat clock (`ambient-engine`)
 
 | Task | Description |
 |---|---|
-| 8.1 Euclidean rhythm generator | Bjorklund algorithm; N hits / M steps per track |
-| 8.2 Probability table generator | (note, probability) table; tension parameter |
-| 8.3 `AutomationClip` | Breakpoint curve; evaluated in callback from beat position |
-| 8.4 Automation engine | Manages active clips; interpolates and writes `Shared` params |
-| 8.5 Generative + automation UI | Controls in `ambient-box`; no full DAW timeline |
+| 8.1.1 `BeatClock` | Internal tick source; BPM-driven, outputs bar/beat/subdivision position |
+| 8.1.2 Clock sync event | `SynthEvent::Tempo` already exists; clock must consume it atomically |
+
+#### 8.2 — Generative soundtrack generators (`ambient-engine`)
+
+| Task | Description |
+|---|---|
+| 8.2.1 Euclidean rhythm generator | Bjorklund algorithm; N hits / M steps per track |
+| 8.2.2 Probability table generator | (note, probability) table; global tension parameter biases density |
+| 8.2.3 Scale walker | Cursor moves up/down a scale by weighted intervals; produces melodic contour |
+| 8.2.4 `GenerativeMode` enum | `Off / Euclidean / ProbTable / ScaleWalk`; switchable per track at runtime |
+| 8.2.5 Seed / determinism | Generators accept a u64 seed for reproducible sequences (useful for dev + replays) |
+
+#### 8.3 — Game-controlled note events (`synth-bevy`)
+
+| Task | Description |
+|---|---|
+| 8.3.1 `SynthEvent::NoteOn/Off` already exist | Verify velocity, pitch, track routing are sufficient |
+| 8.3.2 `SynthEvent::SetTension` | 0.0–1.0; engine adjusts generator density, register, dissonance |
+| 8.3.3 `SynthEvent::TriggerFill` | One-shot rhythmic fill on next bar boundary |
+| 8.3.4 Example: SFX via raw notes | Bevy example showing enemy spawn → chord stab on a dedicated SFX track |
+
+#### 8.4 — MIDI clip playback (`ambient-engine`)
+
+| Task | Description |
+|---|---|
+| 8.4.1 MIDI file parser | Read standard `.mid` (format 0/1); extract note events with tick timing |
+| 8.4.2 `MidiClipPlayer` | Plays a loaded clip against `BeatClock`; loops or one-shot |
+| 8.4.3 Track routing | Map MIDI channels → engine tracks |
+| 8.4.4 `SynthEvent::MidiClip` | Load / play / stop a clip by asset path or handle |
+
+#### 8.5 — Automation (`ambient-engine`)
+
+| Task | Description |
+|---|---|
+| 8.5.1 `AutomationClip` | Breakpoint curve; evaluated from beat position |
+| 8.5.2 Automation engine | Manages active clips; interpolates and writes `Shared` params |
+
+#### 8.6 — UI (`ambient-box`)
+
+| Task | Description |
+|---|---|
+| 8.6.1 Generative controls | Per-track mode selector, density, scale, tension knob |
+| 8.6.2 MIDI clip loader | File picker + play/stop; no piano-roll editing |
+| 8.6.3 Automation lane view | Minimal breakpoint editor; no full DAW timeline |
 
 ---
 

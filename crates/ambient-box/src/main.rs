@@ -14,6 +14,11 @@ use std::sync::Arc;
 use ambient_engine::{
     ACTIVE_MACRO_KNOBS, AmbientEngine, AmbientPatch, MacroSetKind, Scene, MACRO_COUNT, TRACK_COUNT,
     VOICE_COUNT, load_scene_json, save_scene_json,
+    BeatClock, BeatClockShared,
+    EuclideanGen, GenerativeMode, ProbTableGen,
+    MarkovEngine,
+    VoiceRole, Scale as MarkovScale, RhythmicState,
+    N_MOODS, LAUNCHPAD_COLS,
 };
 use synth_engine::arp::{ArpMode, ArpState, ClockDiv, Scale, ScaleWalker};
 use synth_control::{ControlEvent, ControlSender, make_control_channel};
@@ -43,7 +48,7 @@ fn main() -> eframe::Result {
     let engine = Arc::new(std::sync::Mutex::new(AmbientEngine::new(sr)));
     let (tx, rx) = make_control_channel(1024);
 
-    let _stream = build_stream(Arc::clone(&engine), rx, sr).expect("Failed to build audio stream");
+    let (beat_clock_shared, _stream) = build_stream(Arc::clone(&engine), rx, sr).expect("Failed to build audio stream");
     _stream.play().expect("Failed to start audio stream");
 
     let options = eframe::NativeOptions {
@@ -56,7 +61,7 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Ambient Box",
         options,
-        Box::new(move |_cc| Ok(Box::new(AmbientBoxApp::new(engine, tx, _stream)))),
+        Box::new(move |_cc| Ok(Box::new(AmbientBoxApp::new(engine, tx, _stream, beat_clock_shared)))),
     )
 }
 
@@ -75,19 +80,19 @@ fn build_stream(
     engine: Arc<std::sync::Mutex<AmbientEngine>>,
     rx: synth_control::ControlReceiver,
     sr: f64,
-) -> anyhow::Result<Stream> {
+) -> anyhow::Result<(BeatClockShared, Stream)> {
     let host = cpal::default_host();
     let device = host.default_output_device()
         .ok_or_else(|| anyhow::anyhow!("No output device"))?;
     let config = device.default_output_config()?;
 
-    let stream = match config.sample_format() {
+    let (shared, stream) = match config.sample_format() {
         cpal::SampleFormat::F32 => make_stream::<f32>(&device, &config.into(), engine, rx, sr)?,
         cpal::SampleFormat::I16 => make_stream::<i16>(&device, &config.into(), engine, rx, sr)?,
         cpal::SampleFormat::U16 => make_stream::<u16>(&device, &config.into(), engine, rx, sr)?,
         _ => anyhow::bail!("Unsupported sample format"),
     };
-    Ok(stream)
+    Ok((shared, stream))
 }
 
 fn make_stream<T>(
@@ -96,7 +101,7 @@ fn make_stream<T>(
     engine: Arc<std::sync::Mutex<AmbientEngine>>,
     rx: synth_control::ControlReceiver,
     sr: f64,
-) -> anyhow::Result<Stream>
+) -> anyhow::Result<(BeatClockShared, Stream)>
 where
     T: SizedSample + FromSample<f32>,
 {
@@ -116,6 +121,15 @@ where
     // Per-track arpeggiator and scale walker (audio-thread state only)
     let mut arp_states:    [ArpState;    TRACK_COUNT] = std::array::from_fn(|_| ArpState::new());
     let mut walker_states: [ScaleWalker; TRACK_COUNT] = std::array::from_fn(|_| ScaleWalker::new());
+
+    // Per-track generative pattern generators (Phase 8.2)
+    let mut euclidean_states: [EuclideanGen; TRACK_COUNT] = std::array::from_fn(|_| EuclideanGen::new());
+    let mut prob_table_states: [ProbTableGen; TRACK_COUNT] = std::array::from_fn(|i| ProbTableGen::new(0xDEAD_BEEF ^ i as u64));
+    // Global Markov engine (Phase 8.3) — audio-thread state only.
+    let mut markov_engine = MarkovEngine::new(TRACK_COUNT, 0xC0DE_CAFE_BEEF_1234);
+    let beat_clock_shared = BeatClockShared::new(120.0);
+    let beat_clock_shared_clone = beat_clock_shared.clone();
+    let mut beat_clock = BeatClock::default();
 
     let stream = device.build_output_stream(
         config,
@@ -268,6 +282,96 @@ where
                 }
             }
 
+            // --- Generative pattern generators (BeatClock-driven) ---
+            {
+                let beat_ev = beat_clock.tick(frames, sr, &beat_clock_shared);
+
+                // Markov mode is active when track 0 is set to GenerativeMode::Markov.
+                let markov_active = GenerativeMode::from_u8(
+                    eng.generative_modes[0].load(std::sync::atomic::Ordering::Relaxed)
+                ) == GenerativeMode::Markov;
+
+                if beat_ev.bar {
+                    for ti in 0..TRACK_COUNT {
+                        euclidean_states[ti].reset();
+                        prob_table_states[ti].reset();
+                    }
+                    if markov_active {
+                        markov_engine.on_bar(&eng.markov_shared);
+                    }
+                }
+                if beat_ev.subdivision {
+                    if markov_active {
+                        // Markov drives all tracks; route voice[i] → track[i].
+                        let voice_events = markov_engine.on_subdivision(&eng.markov_shared);
+                        for (ti, voice_ev) in voice_events.iter().enumerate().take(TRACK_COUNT) {
+                            if let Some(pitch) = voice_ev.note_off {
+                                for (slot, note) in voice_notes[ti].iter_mut().enumerate() {
+                                    if *note == Some(pitch) {
+                                        eng.tracks[ti].voice_gates[slot].set(0.0);
+                                        break;
+                                    }
+                                }
+                            }
+                            if let Some(pitch) = voice_ev.note_on {
+                                if !voice_notes[ti].iter().enumerate().any(|(s, &n)| {
+                                    n == Some(pitch) && eng.tracks[ti].voice_gates[s].value() > 0.5
+                                }) {
+                                    let slot = voice_notes[ti].iter().position(|&n| n == Some(pitch))
+                                        .or_else(|| voice_notes[ti].iter().position(|n| n.is_none()))
+                                        .unwrap_or_else(|| {
+                                            let s = steal_idx[ti] % VOICE_COUNT;
+                                            steal_idx[ti] += 1;
+                                            s
+                                        });
+                                    voice_notes[ti][slot] = Some(pitch);
+                                    eng.tracks[ti].voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
+                                    let velocity = if voice_ev.accent { 1.0f32 } else { 0.75f32 };
+                                    eng.tracks[ti].voice_gates[slot].set(velocity);
+                                }
+                            }
+                        }
+                    } else {
+                        for ti in 0..TRACK_COUNT {
+                            let mode = GenerativeMode::from_u8(
+                                eng.generative_modes[ti].load(std::sync::atomic::Ordering::Relaxed)
+                            );
+                            let gen_ev = match mode {
+                                GenerativeMode::Euclidean =>
+                                    euclidean_states[ti].on_subdivision(&eng.euclidean_configs[ti]),
+                                GenerativeMode::ProbTable =>
+                                    prob_table_states[ti].on_subdivision(&eng.prob_table_configs[ti]),
+                                _ => continue,
+                            };
+                            if let Some(pitch) = gen_ev.note_off {
+                                for (slot, note) in voice_notes[ti].iter_mut().enumerate() {
+                                    if *note == Some(pitch) {
+                                        eng.tracks[ti].voice_gates[slot].set(0.0);
+                                        break;
+                                    }
+                                }
+                            }
+                            if let Some(pitch) = gen_ev.note_on {
+                                if !voice_notes[ti].iter().enumerate().any(|(s, &n)| {
+                                    n == Some(pitch) && eng.tracks[ti].voice_gates[s].value() > 0.5
+                                }) {
+                                    let slot = voice_notes[ti].iter().position(|&n| n == Some(pitch))
+                                        .or_else(|| voice_notes[ti].iter().position(|n| n.is_none()))
+                                        .unwrap_or_else(|| {
+                                            let s = steal_idx[ti] % VOICE_COUNT;
+                                            steal_idx[ti] += 1;
+                                            s
+                                        });
+                                    voice_notes[ti][slot] = Some(pitch);
+                                    eng.tracks[ti].voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
+                                    eng.tracks[ti].voice_gates[slot].set(1.0);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // --- Glide ---
             eng.tick_glide(frames);
 
@@ -293,7 +397,7 @@ where
         |err| eprintln!("audio error: {err}"),
         None,
     )?;
-    Ok(stream)
+    Ok((beat_clock_shared_clone, stream))
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +410,7 @@ struct AmbientBoxApp {
     _stream:      Stream,
     midi:         MidiEngine,
     active_track: usize,
+    beat_clock_shared: BeatClockShared,
 
     // Per-track keyboard state
     held_midi: [std::collections::HashSet<u8>; TRACK_COUNT],
@@ -329,6 +434,26 @@ struct AmbientBoxApp {
     arp_hold_ui:    [bool; TRACK_COUNT],
     walker_enabled_ui: [bool; TRACK_COUNT],
     transport_sync: SyncTransport<TRACK_COUNT>,
+
+    // Per-track generative mode UI state (Phase 8.2)
+    gen_mode_ui: [u8; TRACK_COUNT],
+    euclidean_hits_ui: [u8; TRACK_COUNT],
+    euclidean_steps_ui: [u8; TRACK_COUNT],
+    euclidean_root_ui: [u8; TRACK_COUNT],
+    euclidean_rotation_ui: [u8; TRACK_COUNT],
+    prob_table_tension_ui: [f32; TRACK_COUNT],
+
+    // Markov engine UI state (Phase 8.6)
+    markov_launchpad_cache: [[u8; LAUNCHPAD_COLS]; TRACK_COUNT],
+    markov_launchpad_col_cache: usize,
+    markov_root_ui: u8,
+    markov_scale_ui: u8,
+    markov_density_ui: f32,
+    markov_mood_ui: [f32; N_MOODS],
+    markov_bars_per_phrase_ui: u32,
+    markov_voice_density_ui: [f32; TRACK_COUNT],
+    markov_voice_role_ui: [u8; TRACK_COUNT],
+    markov_voice_enabled_ui: [bool; TRACK_COUNT],
 
     // Global shimmer UI state
     shimmer_on:    bool,
@@ -448,6 +573,7 @@ impl AmbientBoxApp {
         engine: Arc<std::sync::Mutex<AmbientEngine>>,
         control: ControlSender,
         stream: Stream,
+        beat_clock_shared: BeatClockShared,
     ) -> Self {
         let mut midi = MidiEngine::new();
         midi.list_ports();
@@ -464,6 +590,7 @@ impl AmbientBoxApp {
             _stream: stream,
             midi,
             active_track: 0,
+            beat_clock_shared,
             held_midi: std::array::from_fn(|_| std::collections::HashSet::new()),
             piano_octave: 4,
             arp_bpm:      [120.0; TRACK_COUNT],
@@ -481,6 +608,31 @@ impl AmbientBoxApp {
             arp_hold_ui: [false; TRACK_COUNT],
             walker_enabled_ui: [false; TRACK_COUNT],
             transport_sync: SyncTransport::new(120),
+            gen_mode_ui: [0; TRACK_COUNT],
+            euclidean_hits_ui: [4; TRACK_COUNT],
+            euclidean_steps_ui: [8; TRACK_COUNT],
+            euclidean_root_ui: [60; TRACK_COUNT],
+            euclidean_rotation_ui: [0; TRACK_COUNT],
+            prob_table_tension_ui: [1.0; TRACK_COUNT],
+            markov_launchpad_cache: [[0u8; LAUNCHPAD_COLS]; TRACK_COUNT],
+            markov_launchpad_col_cache: 0,
+            markov_root_ui: 60,
+            markov_scale_ui: 1, // Minor
+            markov_density_ui: 0.5,
+            markov_mood_ui: {
+                let mut w = [0.0f32; N_MOODS];
+                w[0] = 1.0; // 100% Calm
+                w
+            },
+            markov_bars_per_phrase_ui: 4,
+            markov_voice_density_ui: [0.0; TRACK_COUNT],
+            markov_voice_role_ui: [
+                VoiceRole::Bass as u8,
+                VoiceRole::Pad as u8,
+                VoiceRole::Melody as u8,
+                VoiceRole::Texture as u8,
+            ],
+            markov_voice_enabled_ui: [true; TRACK_COUNT],
             shimmer_on:    false,
             shimmer_mix:   0.4,
             shimmer_amt:   0.5,
@@ -581,6 +733,46 @@ impl AmbientBoxApp {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Launchpad helpers
+// ---------------------------------------------------------------------------
+
+fn voice_role_color(role: VoiceRole) -> egui::Color32 {
+    match role {
+        VoiceRole::Bass    => egui::Color32::from_rgb(255, 160, 60),
+        VoiceRole::Pad     => egui::Color32::from_rgb(80, 160, 255),
+        VoiceRole::Melody  => egui::Color32::from_rgb(60, 220, 120),
+        VoiceRole::Texture => egui::Color32::from_rgb(200, 100, 255),
+    }
+}
+
+fn launchpad_cell_color(state: RhythmicState, base: egui::Color32, is_current: bool) -> egui::Color32 {
+    let dim = |c: egui::Color32, factor: f32| -> egui::Color32 {
+        egui::Color32::from_rgb(
+            (c.r() as f32 * factor) as u8,
+            (c.g() as f32 * factor) as u8,
+            (c.b() as f32 * factor) as u8,
+        )
+    };
+    let col = match state {
+        RhythmicState::Rest   => egui::Color32::from_gray(20),
+        RhythmicState::Hold   => egui::Color32::from_gray(60),
+        RhythmicState::Single => base,
+        RhythmicState::Double => egui::Color32::WHITE,
+        RhythmicState::Accent => dim(base, 1.4f32.min(2.0)),
+    };
+    // Brighten the current column slightly to show playhead
+    if is_current {
+        egui::Color32::from_rgb(
+            col.r().saturating_add(30),
+            col.g().saturating_add(30),
+            col.b().saturating_add(30),
+        )
+    } else {
+        col
+    }
+}
+
 // Keyboard note mapping (same as the_synth)
 const KEY_MAP: &[(egui::Key, i32)] = &[
     (egui::Key::A, 0), (egui::Key::W, 1), (egui::Key::S, 2),
@@ -596,31 +788,8 @@ impl eframe::App for AmbientBoxApp {
         self.tick_transport_sync();
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Ambient Box");
-            ui.separator();
 
-            // --- Track selector ---
-            ui.horizontal(|ui| {
-                ui.label("Track:");
-                for i in 0..TRACK_COUNT {
-                    let label = format!("Track {}", i + 1);
-                    let selected = self.active_track == i;
-                    let color = if selected {
-                        egui::Color32::from_rgb(0, 200, 140)
-                    } else {
-                        egui::Color32::GRAY
-                    };
-                    if ui.button(egui::RichText::new(&label).color(color).strong()).clicked() {
-                        // Release all held notes on current track before switching
-                        let prev: Vec<u8> = self.held_midi[self.active_track].drain().collect();
-                        for m in prev { self.push_note_off(m); }
-                        self.active_track = i;
-                    }
-                }
-            });
-
-            ui.separator();
-
+            // ── Engine read-sync ──────────────────────────────────────────────
             if let Ok(eng) = self.engine.try_lock() {
                 let ti = self.active_track;
                 let track = &eng.tracks[ti];
@@ -653,6 +822,40 @@ impl eframe::App for AmbientBoxApp {
                 self.walker_oct[ti] = walker_cfg.octave_range.load(Ordering::Relaxed);
                 self.walker_gate[ti] = walker_cfg.gate.value();
 
+                // Sync Markov UI state from engine (only needed when mode is active)
+                {
+                    let ms = &eng.markov_shared;
+                    self.markov_root_ui = ms.root();
+                    self.markov_scale_ui = ms.scale.load(Ordering::Relaxed);
+                    self.markov_density_ui = ms.density();
+                    self.markov_bars_per_phrase_ui = ms.bars_per_phrase();
+                    for i in 0..TRACK_COUNT {
+                        self.markov_voice_density_ui[i] = ms.voice_density[i].value();
+                        self.markov_voice_role_ui[i] = ms.roles[i].load(Ordering::Relaxed);
+                        self.markov_voice_enabled_ui[i] = ms.voice_enabled(i);
+                    }
+                    for i in 0..N_MOODS {
+                        self.markov_mood_ui[i] = ms.mood.weight(i);
+                    }
+                    // Snapshot launchpad into UI-owned cache so the grid renders every frame
+                    self.markov_launchpad_col_cache = ms.launchpad_col.load(Ordering::Relaxed) % LAUNCHPAD_COLS;
+                    for row in 0..TRACK_COUNT {
+                        if let Some(pad_row) = ms.launchpad.get(row) {
+                            for col in 0..LAUNCHPAD_COLS {
+                                self.markov_launchpad_cache[row][col] = pad_row[col].load(Ordering::Relaxed);
+                            }
+                        }
+                    }
+                }
+
+                // Sync generative UI state from engine (euclidean/prob params only — gen_mode_ui is UI-owned)
+                let ecfg = &eng.euclidean_configs[ti];
+                self.euclidean_hits_ui[ti] = ecfg.hits.load(Ordering::Relaxed);
+                self.euclidean_steps_ui[ti] = ecfg.steps.load(Ordering::Relaxed);
+                self.euclidean_root_ui[ti] = ecfg.root.load(Ordering::Relaxed);
+                self.euclidean_rotation_ui[ti] = ecfg.rotation.load(Ordering::Relaxed);
+                self.prob_table_tension_ui[ti] = eng.prob_table_configs[ti].tension.value();
+
                 let engine_patch_path = &eng.track_patch_paths[ti];
                 if self.track_patch_last_synced_path[ti] != *engine_patch_path {
                     if let Some(idx) = self.patch_library.iter().position(|p| p.path == *engine_patch_path) {
@@ -662,86 +865,386 @@ impl eframe::App for AmbientBoxApp {
                 }
             }
 
+            let ti = self.active_track;
+            let markov_active = GenerativeMode::from_u8(self.gen_mode_ui[0]) == GenerativeMode::Markov;
             let mut trigger_arp_restart: Option<usize> = None;
             let mut trigger_walker_restart: Option<usize> = None;
             let mut pending_scene_save: Option<(String, Scene, String)> = None;
 
-            // --- Per-track patch slot (Phase 6.7) ---
-            let ti = self.active_track;
+            // ── Transport bar ─────────────────────────────────────────────────
             ui.horizontal(|ui| {
-                ui.label("Patch Slot:");
-                if self.patch_library.is_empty() {
-                    ui.label(egui::RichText::new("No patches found in assets/patches").small().weak());
-                } else {
-                    if self.track_patch_choice[ti] >= self.patch_library.len() {
-                        self.track_patch_choice[ti] = 0;
-                    }
-                    let selected = &self.patch_library[self.track_patch_choice[ti]];
-                    egui::ComboBox::from_id_salt(format!("patch_slot_track_{ti}"))
-                        .selected_text(format!("{} / {}", selected.category, selected.name))
-                        .show_ui(ui, |ui| {
-                            for (i, p) in self.patch_library.iter().enumerate() {
-                                ui.selectable_value(
-                                    &mut self.track_patch_choice[ti],
-                                    i,
-                                    format!("{} / {}", p.category, p.name),
-                                );
-                            }
-                        });
-                    if ui.button("Load To Track").clicked() {
-                        self.pending_patch_load = Some((ti, self.track_patch_choice[ti]));
-                    }
-                }
+                ui.heading("Ambient Box");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let _ = synth_ui::knob(ui, "Master", &mut self.master_vol_ui, 0.0, 1.0);
+                });
             });
-
-            // --- Active track basic controls ---
             ui.horizontal(|ui| {
-                let _ = synth_ui::knob(ui, "Volume", &mut self.track_vol_ui[ti], 0.0, 1.0);
-                let _ = synth_ui::knob(ui, "Cutoff", &mut self.track_cutoff_ui[ti], 80.0, 18000.0);
-                let _ = synth_ui::knob(ui, "Resonance", &mut self.track_resonance_ui[ti], 0.1, 10.0);
-                let _ = synth_ui::knob(ui, "Shimmer", &mut self.track_shimmer_send_ui[ti], 0.0, 1.0);
-                let _ = synth_ui::knob(ui, "Crystal", &mut self.track_crystal_send_ui[ti], 0.0, 1.0);
-            });
-
-            ui.separator();
-
-            // Global controls
-            ui.horizontal(|ui| {
-                let _ = synth_ui::knob(ui, "Master Vol", &mut self.master_vol_ui, 0.0, 1.0);
-            });
-
-            ui.horizontal(|ui| {
-                let btn = if self.transport_sync.playing { "Stop" } else { "Play" };
-                if ui.button(btn).on_hover_text("Start or stop the global sync transport.").clicked() {
+                let btn = if self.transport_sync.playing { "⏹ Stop" } else { "▶ Play" };
+                if ui.button(btn).clicked() {
                     let due = self.transport_sync.set_playing(!self.transport_sync.playing);
                     self.dispatch_restarts(due);
                 }
                 ui.label("BPM:");
                 ui.add(egui::Slider::new(&mut self.transport_sync.bpm, 40..=300));
-                if ui.checkbox(&mut self.transport_sync.clock_sync_enabled, "Clock Sync")
-                    .on_hover_text("Lock all track ARP/WALKER BPM to global transport BPM and align phase.")
-                    .changed()
-                {
+                if ui.checkbox(&mut self.transport_sync.clock_sync_enabled, "Clock Sync").changed() {
                     self.transport_sync.set_clock_sync(self.transport_sync.clock_sync_enabled);
-                    if self.transport_sync.clock_sync_enabled {
-                        self.sync_transport_now();
-                    }
+                    if self.transport_sync.clock_sync_enabled { self.sync_transport_now(); }
                 }
                 ui.add_enabled_ui(self.transport_sync.clock_sync_enabled, |ui| {
-                    ui.checkbox(&mut self.transport_sync.bar_quantize_start, "Bar Quantize")
-                        .on_hover_text("When enabled, ARP/WALKER restart on next bar instead of immediately.");
+                    ui.checkbox(&mut self.transport_sync.bar_quantize_start, "Bar Quantize");
                 });
-                if ui.button("SYNC NOW")
-                    .on_hover_text("Restart all ARP/WALKER engines together.")
-                    .clicked()
-                {
-                    self.sync_transport_now();
-                }
+                if ui.button("SYNC NOW").clicked() { self.sync_transport_now(); }
             });
 
+            // ── Mode toggle ───────────────────────────────────────────────────
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label("Mode:");
+                if ui.selectable_label(!markov_active,
+                    egui::RichText::new("MANUAL").color(if !markov_active { egui::Color32::WHITE } else { egui::Color32::DARK_GRAY }).strong()
+                ).clicked() && markov_active {
+                    for t in 0..TRACK_COUNT { self.gen_mode_ui[t] = GenerativeMode::Off as u8; }
+                }
+                if ui.selectable_label(markov_active,
+                    egui::RichText::new("MARKOV").color(if markov_active { egui::Color32::from_rgb(200, 140, 255) } else { egui::Color32::DARK_GRAY }).strong()
+                ).clicked() && !markov_active {
+                    for t in 0..TRACK_COUNT { self.gen_mode_ui[t] = GenerativeMode::Markov as u8; }
+                }
+            });
             ui.separator();
 
-            // --- Macro panel (Phase 6) ---
+            // ── MARKOV content ────────────────────────────────────────────────
+            if markov_active {
+                ui.label(egui::RichText::new("MARKOV ENGINE").strong().color(egui::Color32::from_rgb(200, 140, 255)));
+                ui.horizontal(|ui| {
+                    ui.label("Key:");
+                    let note_names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+                    egui::ComboBox::from_id_salt("markov_root")
+                        .selected_text(note_names[(self.markov_root_ui % 12) as usize])
+                        .show_ui(ui, |ui| {
+                            for (i, &name) in note_names.iter().enumerate() {
+                                let midi = 48 + i as u8;
+                                ui.selectable_value(&mut self.markov_root_ui, midi, name);
+                            }
+                        });
+                    ui.label("Scale:");
+                    egui::ComboBox::from_id_salt("markov_scale")
+                        .selected_text(MarkovScale::LABELS[self.markov_scale_ui as usize % MarkovScale::LABELS.len()])
+                        .show_ui(ui, |ui| {
+                            for (i, &lbl) in MarkovScale::LABELS.iter().enumerate() {
+                                ui.selectable_value(&mut self.markov_scale_ui, i as u8, lbl);
+                            }
+                        });
+                    ui.label("Density:");
+                    ui.add(egui::Slider::new(&mut self.markov_density_ui, 0.0f32..=1.0).step_by(0.01));
+                    ui.label("Phrase:");
+                    ui.add(egui::Slider::new(&mut self.markov_bars_per_phrase_ui, 2u32..=16));
+                    ui.label("bars");
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Mood:");
+                    let mood_labels = ["Calm", "Tense", "Dark", "Euphoric"];
+                    let mood_colors = [
+                        egui::Color32::from_rgb(100, 200, 255),
+                        egui::Color32::from_rgb(255, 100, 100),
+                        egui::Color32::from_rgb(120, 80, 200),
+                        egui::Color32::from_rgb(255, 220, 60),
+                    ];
+                    for i in 0..N_MOODS {
+                        let lbl = mood_labels.get(i).copied().unwrap_or("?");
+                        ui.colored_label(mood_colors[i % mood_colors.len()], lbl);
+                        ui.add(egui::Slider::new(&mut self.markov_mood_ui[i], 0.0f32..=1.0)
+                            .step_by(0.01).clamping(egui::SliderClamping::Always));
+                    }
+                    let sum: f32 = self.markov_mood_ui.iter().sum();
+                    if sum > 0.001 {
+                        ui.label(egui::RichText::new(format!("Σ={:.2}", sum)).small().weak());
+                    }
+                });
+                ui.separator();
+                // Per-voice rows with inline patch
+                for i in 0..TRACK_COUNT {
+                    let role_color = voice_role_color(VoiceRole::from_u8(self.markov_voice_role_ui[i]));
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("V{}", i + 1)).color(role_color).strong());
+                        ui.checkbox(&mut self.markov_voice_enabled_ui[i], "");
+                        ui.label("Role:");
+                        egui::ComboBox::from_id_salt(format!("markov_role_{i}"))
+                            .selected_text(VoiceRole::LABELS[self.markov_voice_role_ui[i] as usize % VoiceRole::LABELS.len()])
+                            .show_ui(ui, |ui| {
+                                for (j, &lbl) in VoiceRole::LABELS.iter().enumerate() {
+                                    ui.selectable_value(&mut self.markov_voice_role_ui[i], j as u8, lbl);
+                                }
+                            });
+                        ui.label("Patch:");
+                        if self.patch_library.is_empty() {
+                            ui.label(egui::RichText::new("—").weak());
+                        } else {
+                            if self.track_patch_choice[i] >= self.patch_library.len() {
+                                self.track_patch_choice[i] = 0;
+                            }
+                            let sel = &self.patch_library[self.track_patch_choice[i]];
+                            egui::ComboBox::from_id_salt(format!("markov_patch_{i}"))
+                                .selected_text(format!("{} / {}", sel.category, sel.name))
+                                .show_ui(ui, |ui| {
+                                    for (j, p) in self.patch_library.iter().enumerate() {
+                                        ui.selectable_value(&mut self.track_patch_choice[i], j, format!("{} / {}", p.category, p.name));
+                                    }
+                                });
+                            if ui.small_button("Load").clicked() {
+                                self.pending_patch_load = Some((i, self.track_patch_choice[i]));
+                            }
+                        }
+                        ui.label("Dens:");
+                        ui.add(egui::Slider::new(&mut self.markov_voice_density_ui[i], 0.0f32..=1.0)
+                            .step_by(0.01).clamping(egui::SliderClamping::Always));
+                    });
+                }
+                // Launchpad grid — rendered from UI-owned cache, no lock needed
+                ui.separator();
+                ui.label(egui::RichText::new("LAUNCHPAD").small().weak());
+                {
+                    let cell_w = 18.0f32;
+                    let cell_h = 14.0f32;
+                    let gap = 2.0f32;
+                    let grid_w = (cell_w + gap) * LAUNCHPAD_COLS as f32;
+                    let grid_h = (cell_h + gap) * TRACK_COUNT as f32;
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(grid_w, grid_h), egui::Sense::hover());
+                    let painter = ui.painter_at(rect);
+                    for row in 0..TRACK_COUNT {
+                        let base_color = voice_role_color(VoiceRole::from_u8(self.markov_voice_role_ui[row]));
+                        for col in 0..LAUNCHPAD_COLS {
+                            let state = RhythmicState::from_usize(self.markov_launchpad_cache[row][col] as usize);
+                            let is_current = col == self.markov_launchpad_col_cache;
+                            let color = launchpad_cell_color(state, base_color, is_current);
+                            let x = rect.left() + col as f32 * (cell_w + gap);
+                            let y = rect.top()  + row as f32 * (cell_h + gap);
+                            painter.rect_filled(
+                                egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(cell_w, cell_h)),
+                                2.0, color,
+                            );
+                        }
+                    }
+                }
+            }
+
+            // ── MANUAL content ────────────────────────────────────────────────
+            if !markov_active {
+                // Track selector
+                ui.horizontal(|ui| {
+                    ui.label("Track:");
+                    for i in 0..TRACK_COUNT {
+                        let selected = self.active_track == i;
+                        let color = if selected { egui::Color32::from_rgb(0, 200, 140) } else { egui::Color32::GRAY };
+                        if ui.button(egui::RichText::new(format!("Track {}", i + 1)).color(color).strong()).clicked() {
+                            let prev: Vec<u8> = self.held_midi[self.active_track].drain().collect();
+                            for m in prev { self.push_note_off(m); }
+                            self.active_track = i;
+                        }
+                    }
+                });
+                // Patch slot
+                ui.horizontal(|ui| {
+                    ui.label("Patch:");
+                    if self.patch_library.is_empty() {
+                        ui.label(egui::RichText::new("No patches found in assets/patches").small().weak());
+                    } else {
+                        if self.track_patch_choice[ti] >= self.patch_library.len() {
+                            self.track_patch_choice[ti] = 0;
+                        }
+                        let selected = &self.patch_library[self.track_patch_choice[ti]];
+                        egui::ComboBox::from_id_salt(format!("patch_slot_track_{ti}"))
+                            .selected_text(format!("{} / {}", selected.category, selected.name))
+                            .show_ui(ui, |ui| {
+                                for (i, p) in self.patch_library.iter().enumerate() {
+                                    ui.selectable_value(&mut self.track_patch_choice[ti], i, format!("{} / {}", p.category, p.name));
+                                }
+                            });
+                        if ui.button("Load").clicked() {
+                            self.pending_patch_load = Some((ti, self.track_patch_choice[ti]));
+                        }
+                    }
+                });
+                // Track basic controls
+                ui.horizontal(|ui| {
+                    let _ = synth_ui::knob(ui, "Volume", &mut self.track_vol_ui[ti], 0.0, 1.0);
+                    let _ = synth_ui::knob(ui, "Cutoff", &mut self.track_cutoff_ui[ti], 80.0, 18000.0);
+                    let _ = synth_ui::knob(ui, "Resonance", &mut self.track_resonance_ui[ti], 0.1, 10.0);
+                    let _ = synth_ui::knob(ui, "Shimmer", &mut self.track_shimmer_send_ui[ti], 0.0, 1.0);
+                    let _ = synth_ui::knob(ui, "Crystal", &mut self.track_crystal_send_ui[ti], 0.0, 1.0);
+                });
+                ui.separator();
+                // ARP + Walker
+                ui.columns(2, |cols| {
+                    let arp_on = self.arp_enabled_ui[ti];
+                    cols[0].horizontal(|ui| {
+                        let lbl = egui::RichText::new("ARP").strong()
+                            .color(if arp_on { egui::Color32::from_rgb(0,220,160) } else { egui::Color32::GRAY });
+                        if ui.button(lbl).clicked() {
+                            self.arp_enabled_ui[ti] = !arp_on;
+                            if !self.arp_enabled_ui[ti] {
+                                let _ = self.control.try_send(ControlEvent::ChordHold { track: ti as u8, notes: Vec::new() });
+                            }
+                        }
+                        if ui.button("RST").clicked() {
+                            let _ = self.control.try_send(ControlEvent::ArpRestart { track: ti as u8 });
+                        }
+                        let hold = self.arp_hold_ui[ti];
+                        let hl = egui::RichText::new("HOLD").color(if hold { egui::Color32::from_rgb(255,200,0) } else { egui::Color32::GRAY });
+                        if ui.button(hl).clicked() {
+                            self.arp_hold_ui[ti] = !hold;
+                            if !self.arp_hold_ui[ti] {
+                                let _ = self.control.try_send(ControlEvent::ChordHold { track: ti as u8, notes: Vec::new() });
+                            }
+                        }
+                    });
+                    cols[0].add_enabled_ui(arp_on, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("BPM:");
+                            if self.transport_sync.clock_sync_enabled { self.arp_bpm[ti] = self.transport_sync.bpm_f32(); }
+                            ui.add_enabled_ui(!self.transport_sync.clock_sync_enabled, |ui| {
+                                ui.add(egui::Slider::new(&mut self.arp_bpm[ti], 20.0..=300.0));
+                            });
+                            if self.transport_sync.clock_sync_enabled { ui.label(egui::RichText::new("SYNC").small().weak()); }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Div:");
+                            for (i, &lbl) in ClockDiv::LABELS.iter().enumerate() {
+                                if ui.selectable_label(self.arp_division[ti] == i as u8, lbl).clicked() { self.arp_division[ti] = i as u8; }
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Mode:");
+                            for (i, &lbl) in ArpMode::LABELS.iter().enumerate() {
+                                if ui.selectable_label(self.arp_mode[ti] == i as u8, lbl).clicked() { self.arp_mode[ti] = i as u8; }
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Oct:");
+                            for oct in 1u8..=4 {
+                                if ui.selectable_label(self.arp_oct[ti] == oct, oct.to_string()).clicked() { self.arp_oct[ti] = oct; }
+                            }
+                            ui.label(" Gate:");
+                            ui.add(egui::Slider::new(&mut self.arp_gate[ti], 0.05..=1.0));
+                        });
+                    });
+                    let walk_on = self.walker_enabled_ui[ti];
+                    cols[1].horizontal(|ui| {
+                        let lbl = egui::RichText::new("WALKER").strong()
+                            .color(if walk_on { egui::Color32::from_rgb(100,180,255) } else { egui::Color32::GRAY });
+                        if ui.button(lbl).clicked() { self.walker_enabled_ui[ti] = !walk_on; }
+                        if ui.button("RST").clicked() {
+                            let _ = self.control.try_send(ControlEvent::WalkerRestart { track: ti as u8 });
+                        }
+                    });
+                    cols[1].add_enabled_ui(walk_on, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("BPM:");
+                            if self.transport_sync.clock_sync_enabled { self.walker_bpm[ti] = self.transport_sync.bpm_f32(); }
+                            ui.add_enabled_ui(!self.transport_sync.clock_sync_enabled, |ui| {
+                                ui.add(egui::Slider::new(&mut self.walker_bpm[ti], 20.0..=300.0));
+                            });
+                            if self.transport_sync.clock_sync_enabled { ui.label(egui::RichText::new("SYNC").small().weak()); }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Div:");
+                            for (i, &lbl) in ClockDiv::LABELS.iter().enumerate() {
+                                if ui.selectable_label(self.walker_div[ti] == i as u8, lbl).clicked() { self.walker_div[ti] = i as u8; }
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Scale:");
+                            for (i, &lbl) in Scale::LABELS.iter().enumerate() {
+                                if ui.selectable_label(self.walker_scale[ti] == i as u8, lbl).clicked() { self.walker_scale[ti] = i as u8; }
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Root:");
+                            ui.add(egui::Slider::new(&mut self.walker_root[ti], 36u8..=84));
+                            ui.label(" Oct:");
+                            for oct in 1u8..=3 {
+                                if ui.selectable_label(self.walker_oct[ti] == oct, oct.to_string()).clicked() { self.walker_oct[ti] = oct; }
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Gate:");
+                            ui.add(egui::Slider::new(&mut self.walker_gate[ti], 0.05..=1.0));
+                        });
+                    });
+                });
+                // Generative sub-modes
+                ui.separator();
+                ui.label(egui::RichText::new("GENERATIVE").strong());
+                ui.horizontal(|ui| {
+                    ui.label("Mode:");
+                    let sub_modes: &[(u8, &str, egui::Color32)] = &[
+                        (GenerativeMode::Off as u8,       "Off",        egui::Color32::GRAY),
+                        (GenerativeMode::Euclidean as u8, "Euclidean",  egui::Color32::from_rgb(255, 160, 60)),
+                        (GenerativeMode::ProbTable as u8, "Prob.Table", egui::Color32::from_rgb(160, 220, 255)),
+                        (GenerativeMode::ScaleWalk as u8, "ScaleWalk",  egui::Color32::from_rgb(180, 255, 180)),
+                    ];
+                    for &(val, lbl, color) in sub_modes {
+                        let active = self.gen_mode_ui[ti] == val;
+                        let text = egui::RichText::new(lbl).color(if active { color } else { egui::Color32::GRAY });
+                        if ui.button(text).clicked() { self.gen_mode_ui[ti] = val; }
+                    }
+                });
+                let mode = GenerativeMode::from_u8(self.gen_mode_ui[ti]);
+                if mode == GenerativeMode::Euclidean {
+                    ui.horizontal(|ui| {
+                        ui.label("Hits:");
+                        ui.add(egui::Slider::new(&mut self.euclidean_hits_ui[ti], 1u8..=self.euclidean_steps_ui[ti]));
+                        ui.label("Steps:");
+                        ui.add(egui::Slider::new(&mut self.euclidean_steps_ui[ti], 1u8..=32));
+                        ui.label("Root:");
+                        ui.add(egui::Slider::new(&mut self.euclidean_root_ui[ti], 24u8..=96));
+                        ui.label("Rot:");
+                        ui.add(egui::Slider::new(&mut self.euclidean_rotation_ui[ti], 0u8..=31));
+                    });
+                }
+                if mode == GenerativeMode::ProbTable {
+                    ui.horizontal(|ui| {
+                        ui.label("Tension:");
+                        ui.add(egui::Slider::new(&mut self.prob_table_tension_ui[ti], 0.0f32..=2.0).step_by(0.01));
+                        ui.label(egui::RichText::new("(0=silent  1=as-set  2=always)").small().weak());
+                    });
+                }
+                ui.separator();
+            } // end manual
+
+            // ── Effects (always visible) ──────────────────────────────────────
+            ui.horizontal(|ui| {
+                let col = egui::Color32::from_rgb(120, 200, 255);
+                let lbl = egui::RichText::new("SHIMMER").strong()
+                    .color(if self.shimmer_on { col } else { egui::Color32::GRAY });
+                if ui.button(lbl).clicked() { self.shimmer_on = !self.shimmer_on; }
+                if synth_ui::knob(ui, "Mix", &mut self.shimmer_mix, 0.0, 1.0) {}
+                if synth_ui::knob(ui, "Shim", &mut self.shimmer_amt, 0.0, 1.0) {}
+                if synth_ui::knob(ui, "Size", &mut self.shimmer_size, 0.0, 1.0) {}
+                if synth_ui::knob(ui, "Damp", &mut self.shimmer_damp, 0.0, 1.0) {}
+                ui.label("Pitch:");
+                for (i, lbl) in ["0", "+12", "+24"].iter().enumerate() {
+                    if ui.selectable_label(self.shimmer_pitch == i as u8, *lbl).clicked() { self.shimmer_pitch = i as u8; }
+                }
+            });
+            ui.horizontal(|ui| {
+                let col = egui::Color32::from_rgb(255, 170, 90);
+                let lbl = egui::RichText::new("CRYSTAL").strong()
+                    .color(if self.crystal_on { col } else { egui::Color32::GRAY });
+                if ui.button(lbl).clicked() { self.crystal_on = !self.crystal_on; }
+                if synth_ui::knob(ui, "Mix", &mut self.crystal_mix, 0.0, 1.0) {}
+                if synth_ui::knob(ui, "Grain", &mut self.crystal_grain_ms, 10.0, 400.0) {}
+                if synth_ui::knob(ui, "Scatter", &mut self.crystal_scatter, 0.0, 1.0) {}
+                if synth_ui::knob(ui, "Delay", &mut self.crystal_delay_ms, 20.0, 1200.0) {}
+                if synth_ui::knob(ui, "Feedback", &mut self.crystal_feedback, 0.0, 0.95) {}
+                ui.label("Pitch:");
+                for (i, lbl) in ["0.5x", "1x", "2x", "4x"].iter().enumerate() {
+                    if ui.selectable_label(self.crystal_pitch == i as u8, *lbl).clicked() { self.crystal_pitch = i as u8; }
+                }
+            });
+            ui.separator();
+
+            // ── Macros ────────────────────────────────────────────────────────
             ui.label(egui::RichText::new("MACROS").strong());
             ui.horizontal(|ui| {
                 ui.label("Set:");
@@ -759,10 +1262,9 @@ impl eframe::App for AmbientBoxApp {
                     let _ = synth_ui::knob(ui, &label, &mut self.macro_ui_values[i], 0.0, 1.0);
                 }
             });
-
             ui.separator();
 
-            // --- Scene panel (Phase 6) ---
+            // ── Scene ─────────────────────────────────────────────────────────
             ui.label(egui::RichText::new("SCENE").strong());
             ui.horizontal(|ui| {
                 ui.label("Name:");
@@ -796,9 +1298,7 @@ impl eframe::App for AmbientBoxApp {
                 }
                 if ui.button("Refresh").clicked() {
                     self.scene_files = Self::list_scene_files();
-                    if self.scene_selected >= self.scene_files.len() {
-                        self.scene_selected = 0;
-                    }
+                    if self.scene_selected >= self.scene_files.len() { self.scene_selected = 0; }
                     self.scene_preview_patch_names = if self.scene_files.is_empty() {
                         std::array::from_fn(|_| "—".to_string())
                     } else {
@@ -806,7 +1306,7 @@ impl eframe::App for AmbientBoxApp {
                     };
                 }
                 if !self.scene_files.is_empty() {
-                    let prev_scene_selected = self.scene_selected;
+                    let prev = self.scene_selected;
                     egui::ComboBox::from_id_salt("scene_file_list")
                         .selected_text(self.scene_files[self.scene_selected].clone())
                         .show_ui(ui, |ui| {
@@ -814,14 +1314,12 @@ impl eframe::App for AmbientBoxApp {
                                 ui.selectable_value(&mut self.scene_selected, i, name.clone());
                             }
                         });
-                    if self.scene_selected != prev_scene_selected {
-                        self.scene_preview_patch_names =
-                            Self::scene_preview_for_name(&self.scene_files[self.scene_selected]);
+                    if self.scene_selected != prev {
+                        self.scene_preview_patch_names = Self::scene_preview_for_name(&self.scene_files[self.scene_selected]);
                     }
                     if ui.button("Load Selected").clicked() {
                         let name = self.scene_files[self.scene_selected].clone();
-                        let selected_path = format!("scenes/{name}.json");
-                        self.pending_scene_load_path = Some(selected_path);
+                        self.pending_scene_load_path = Some(format!("scenes/{name}.json"));
                     }
                 }
                 if !self.scene_status.is_empty() {
@@ -832,210 +1330,20 @@ impl eframe::App for AmbientBoxApp {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Scene Slots:").small().weak());
                     for i in 0..TRACK_COUNT {
-                        ui.label(
-                            egui::RichText::new(format!("T{} {}", i + 1, self.scene_preview_patch_names[i]))
-                                .small()
-                        );
+                        ui.label(egui::RichText::new(format!("T{} {}", i + 1, self.scene_preview_patch_names[i])).small());
                     }
                 });
             }
-
             if self.pending_scene_load.is_none() {
                 if let Some(path) = self.pending_scene_load_path.take() {
-                match load_scene_json(&path) {
-                    Ok(scene) => self.pending_scene_load = Some((path, scene)),
-                    Err(e) => self.scene_status = format!("Load failed: {e}"),
+                    match load_scene_json(&path) {
+                        Ok(scene) => self.pending_scene_load = Some((path, scene)),
+                        Err(e) => self.scene_status = format!("Load failed: {e}"),
+                    }
                 }
             }
-            }
 
-            ui.separator();
-
-            // --- Shimmer reverb global bus ---
-            ui.horizontal(|ui| {
-                let col = egui::Color32::from_rgb(120, 200, 255);
-                let lbl = egui::RichText::new("SHIMMER").strong()
-                    .color(if self.shimmer_on { col } else { egui::Color32::GRAY });
-                if ui.button(lbl).on_hover_text("Global shimmer reverb bus.").clicked() {
-                    self.shimmer_on = !self.shimmer_on;
-                }
-                if synth_ui::knob(ui, "Mix", &mut self.shimmer_mix, 0.0, 1.0) {
-                }
-                if synth_ui::knob(ui, "Shim", &mut self.shimmer_amt, 0.0, 1.0) {
-                }
-                if synth_ui::knob(ui, "Size", &mut self.shimmer_size, 0.0, 1.0) {
-                }
-                if synth_ui::knob(ui, "Damp", &mut self.shimmer_damp, 0.0, 1.0) {
-                }
-                ui.label("Pitch:");
-                for (i, lbl) in ["0", "+12", "+24"].iter().enumerate() {
-                    if ui.selectable_label(self.shimmer_pitch == i as u8, *lbl).clicked() {
-                        self.shimmer_pitch = i as u8;
-                    }
-                }
-            });
-
-            ui.separator();
-
-            // --- Crystal global bus ---
-            ui.horizontal(|ui| {
-                let col = egui::Color32::from_rgb(255, 170, 90);
-                let lbl = egui::RichText::new("CRYSTAL").strong()
-                    .color(if self.crystal_on { col } else { egui::Color32::GRAY });
-                if ui.button(lbl).on_hover_text("Global crystallizer bus (granular pitch-shift delay).").clicked() {
-                    self.crystal_on = !self.crystal_on;
-                }
-                if synth_ui::knob(ui, "Mix", &mut self.crystal_mix, 0.0, 1.0) {
-                }
-                if synth_ui::knob(ui, "Grain", &mut self.crystal_grain_ms, 10.0, 400.0) {
-                }
-                if synth_ui::knob(ui, "Scatter", &mut self.crystal_scatter, 0.0, 1.0) {
-                }
-                if synth_ui::knob(ui, "Delay", &mut self.crystal_delay_ms, 20.0, 1200.0) {
-                }
-                if synth_ui::knob(ui, "Feedback", &mut self.crystal_feedback, 0.0, 0.95) {
-                }
-                ui.label("Pitch:");
-                for (i, lbl) in ["0.5x", "1x", "2x", "4x"].iter().enumerate() {
-                    if ui.selectable_label(self.crystal_pitch == i as u8, *lbl).clicked() {
-                        self.crystal_pitch = i as u8;
-                    }
-                }
-            });
-
-            ui.separator();
-
-            // --- Per-track arp + walker ---
-            let ti = self.active_track;
-            ui.columns(2, |cols| {
-                // Arp column
-                let arp_on = self.arp_enabled_ui[ti];
-                cols[0].horizontal(|ui| {
-                    let lbl = egui::RichText::new("ARP").strong()
-                        .color(if arp_on { egui::Color32::from_rgb(0,220,160) } else { egui::Color32::GRAY });
-                    if ui.button(lbl).clicked() {
-                        self.arp_enabled_ui[ti] = !arp_on;
-                        if !self.arp_enabled_ui[ti] {
-                            let _ = self.control.try_send(ControlEvent::ChordHold {
-                                track: ti as u8,
-                                notes: Vec::new(),
-                            });
-                        }
-                    }
-                    if ui.button("RST").on_hover_text("Restart arp phase/step.").clicked() {
-                        let _ = self.control.try_send(ControlEvent::ArpRestart { track: ti as u8 });
-                    }
-                    let hold = self.arp_hold_ui[ti];
-                    let hl = egui::RichText::new("HOLD")
-                        .color(if hold { egui::Color32::from_rgb(255,200,0) } else { egui::Color32::GRAY });
-                    if ui.button(hl).clicked() {
-                        self.arp_hold_ui[ti] = !hold;
-                        if !self.arp_hold_ui[ti] {
-                            let _ = self.control.try_send(ControlEvent::ChordHold {
-                                track: ti as u8,
-                                notes: Vec::new(),
-                            });
-                        }
-                    }
-                });
-                cols[0].add_enabled_ui(arp_on, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("BPM:");
-                        if self.transport_sync.clock_sync_enabled {
-                            self.arp_bpm[ti] = self.transport_sync.bpm_f32();
-                        }
-                        ui.add_enabled_ui(!self.transport_sync.clock_sync_enabled, |ui| {
-                            ui.add(egui::Slider::new(&mut self.arp_bpm[ti], 20.0..=300.0));
-                        });
-                        if self.transport_sync.clock_sync_enabled {
-                            ui.label(egui::RichText::new("SYNC").small().weak());
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Div:");
-                        for (i, &lbl) in ClockDiv::LABELS.iter().enumerate() {
-                            if ui.selectable_label(self.arp_division[ti] == i as u8, lbl).clicked() {
-                                self.arp_division[ti] = i as u8;
-                            }
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Mode:");
-                        for (i, &lbl) in ArpMode::LABELS.iter().enumerate() {
-                            if ui.selectable_label(self.arp_mode[ti] == i as u8, lbl).clicked() {
-                                self.arp_mode[ti] = i as u8;
-                            }
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Oct:");
-                        for oct in 1u8..=4 {
-                            if ui.selectable_label(self.arp_oct[ti] == oct, oct.to_string()).clicked() {
-                                self.arp_oct[ti] = oct;
-                            }
-                        }
-                        ui.label(" Gate:");
-                        ui.add(egui::Slider::new(&mut self.arp_gate[ti], 0.05..=1.0));
-                    });
-                });
-
-                // Walker column
-                let walk_on = self.walker_enabled_ui[ti];
-                cols[1].horizontal(|ui| {
-                    let lbl = egui::RichText::new("WALKER").strong()
-                        .color(if walk_on { egui::Color32::from_rgb(100,180,255) } else { egui::Color32::GRAY });
-                    if ui.button(lbl).clicked() {
-                        self.walker_enabled_ui[ti] = !walk_on;
-                    }
-                    if ui.button("RST").on_hover_text("Restart walker phase/index.").clicked() {
-                        let _ = self.control.try_send(ControlEvent::WalkerRestart { track: ti as u8 });
-                    }
-                });
-                cols[1].add_enabled_ui(walk_on, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("BPM:");
-                        if self.transport_sync.clock_sync_enabled {
-                            self.walker_bpm[ti] = self.transport_sync.bpm_f32();
-                        }
-                        ui.add_enabled_ui(!self.transport_sync.clock_sync_enabled, |ui| {
-                            ui.add(egui::Slider::new(&mut self.walker_bpm[ti], 20.0..=300.0));
-                        });
-                        if self.transport_sync.clock_sync_enabled {
-                            ui.label(egui::RichText::new("SYNC").small().weak());
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Div:");
-                        for (i, &lbl) in ClockDiv::LABELS.iter().enumerate() {
-                            if ui.selectable_label(self.walker_div[ti] == i as u8, lbl).clicked() {
-                                self.walker_div[ti] = i as u8;
-                            }
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Scale:");
-                        for (i, &lbl) in Scale::LABELS.iter().enumerate() {
-                            if ui.selectable_label(self.walker_scale[ti] == i as u8, lbl).clicked() {
-                                self.walker_scale[ti] = i as u8;
-                            }
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Root:");
-                        ui.add(egui::Slider::new(&mut self.walker_root[ti], 36u8..=84));
-                        ui.label(" Oct:");
-                        for oct in 1u8..=3 {
-                            if ui.selectable_label(self.walker_oct[ti] == oct, oct.to_string()).clicked() {
-                                self.walker_oct[ti] = oct;
-                            }
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Gate:");
-                        ui.add(egui::Slider::new(&mut self.walker_gate[ti], 0.05..=1.0));
-                    });
-                });
-            });
+            // ── Engine write-back ─────────────────────────────────────────────
             if let Ok(mut eng) = self.engine.try_lock() {
                 let track = &eng.tracks[ti];
                 track.track_vol.set(self.track_vol_ui[ti].clamp(0.0, 1.0));
@@ -1087,7 +1395,38 @@ impl eframe::App for AmbientBoxApp {
                         eng.arp_configs[track_idx].bpm.set(bpm);
                         eng.walker_configs[track_idx].bpm.set(bpm);
                     }
+                    self.beat_clock_shared.set_bpm(bpm);
                 }
+
+                // Write generative config back to engine (Markov is global — propagate to all tracks)
+                for t in 0..TRACK_COUNT {
+                    eng.generative_modes[t].store(self.gen_mode_ui[t], Ordering::Relaxed);
+                }
+
+                // Write Markov shared config
+                {
+                    let ms = &eng.markov_shared;
+                    ms.root.store(self.markov_root_ui, Ordering::Relaxed);
+                    ms.scale.store(self.markov_scale_ui, Ordering::Relaxed);
+                    ms.density.set(self.markov_density_ui);
+                    ms.bars_per_phrase.store(self.markov_bars_per_phrase_ui, Ordering::Relaxed);
+                    for i in 0..TRACK_COUNT {
+                        ms.voice_density[i].set(self.markov_voice_density_ui[i]);
+                        ms.roles[i].store(self.markov_voice_role_ui[i], Ordering::Relaxed);
+                        ms.voice_enabled[i].store(self.markov_voice_enabled_ui[i], Ordering::Relaxed);
+                    }
+                    // Normalize and write mood blend
+                    let total: f32 = self.markov_mood_ui.iter().sum();
+                    let norm = if total > 0.001 { total } else { 1.0 };
+                    let normalized: [f32; N_MOODS] = std::array::from_fn(|i| self.markov_mood_ui[i] / norm);
+                    ms.mood.set(&normalized);
+                }
+                let ecfg = &eng.euclidean_configs[ti];
+                ecfg.hits.store(self.euclidean_hits_ui[ti], Ordering::Relaxed);
+                ecfg.steps.store(self.euclidean_steps_ui[ti], Ordering::Relaxed);
+                ecfg.root.store(self.euclidean_root_ui[ti], Ordering::Relaxed);
+                ecfg.rotation.store(self.euclidean_rotation_ui[ti], Ordering::Relaxed);
+                eng.prob_table_configs[ti].tension.set(self.prob_table_tension_ui[ti]);
 
                 eng.shimmer.shimmer.set(self.shimmer_amt);
                 eng.shimmer.size.set(self.shimmer_size);

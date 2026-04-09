@@ -12,6 +12,8 @@ use std::ops::{Deref, DerefMut};
 use std::path::Path;
 
 use crate::patch::AmbientPatch;
+use crate::generators::{EuclideanShared, GenerativeMode, ProbTableShared};
+use crate::markov::MarkovEngineShared;
 
 pub use synth_engine::{TrackState, MultiTrackEngine, TRACK_COUNT, VOICE_COUNT};
 
@@ -131,6 +133,13 @@ pub struct AmbientEngine {
     pub track_patch_names: [String; TRACK_COUNT],
     pub track_patches: [AmbientPatch; TRACK_COUNT],
     pub macro_set_kind: MacroSetKind,
+    // Generative pattern configs (Phase 8.2)
+    pub euclidean_configs: [EuclideanShared; TRACK_COUNT],
+    pub prob_table_configs: [ProbTableShared; TRACK_COUNT],
+    pub generative_modes: [std::sync::Arc<std::sync::atomic::AtomicU8>; TRACK_COUNT],
+    // Markov music engine shared config (Phase 8.3). Thread-safe half; audio-thread
+    // `MarkovEngine` lives in the cpal callback as local state.
+    pub markov_shared: MarkovEngineShared,
 }
 
 impl AmbientEngine {
@@ -144,6 +153,12 @@ impl AmbientEngine {
             track_patch_names: std::array::from_fn(|_| "Init".to_string()),
             track_patches: std::array::from_fn(|_| AmbientPatch::default()),
             macro_set_kind: MacroSetKind::AmbientCore,
+            euclidean_configs: std::array::from_fn(|_| EuclideanShared::default()),
+            prob_table_configs: std::array::from_fn(|_| ProbTableShared::default()),
+            generative_modes: std::array::from_fn(|_| std::sync::Arc::new(
+                std::sync::atomic::AtomicU8::new(GenerativeMode::Off as u8)
+            )),
+            markov_shared: MarkovEngineShared::new(TRACK_COUNT),
         };
         this.apply_macro_set(MacroSetKind::AmbientCore);
         this

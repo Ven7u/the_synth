@@ -1,3 +1,6 @@
+pub mod beat_clock;
+pub use beat_clock::{BeatClock, BeatClockShared, BeatEvents, BeatPosition};
+
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug)]
