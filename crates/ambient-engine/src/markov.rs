@@ -20,7 +20,7 @@
 //! `MarkovEngineShared` is `Clone + Send` and can be held by the UI / Bevy thread.
 
 use std::sync::{
-    atomic::{AtomicU8, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
     Arc,
 };
 use fundsp::prelude32::{shared, Shared};
@@ -258,13 +258,15 @@ impl RhythmicState {
 // MoodSet — named triple of matrices
 // ---------------------------------------------------------------------------
 
-/// A named mood: three matrices and a display label.
+/// A named mood: three matrices, a display label, and a gate length hint.
 #[derive(Clone)]
 pub struct MoodSet {
-    pub name:     &'static str,
-    pub harmonic: HarmonicMatrix,
-    pub rhythmic: RhythmicMatrix,
-    pub melodic:  MelodicMatrix,
+    pub name:       &'static str,
+    pub harmonic:   HarmonicMatrix,
+    pub rhythmic:   RhythmicMatrix,
+    pub melodic:    MelodicMatrix,
+    /// How long notes sustain relative to the step interval (0.0=1 subdiv, 1.0=16 subdivs).
+    pub gate_length: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +276,7 @@ pub struct MoodSet {
 /// Calm: tonic-heavy, sparse rhythm, stepwise melody, strong tonic pull.
 pub const MOOD_CALM: MoodSet = MoodSet {
     name: "Calm",
+    gate_length: 0.75, // long sustained notes
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
         [0.25,  0.10,  0.05,  0.25,  0.20,  0.10,  0.05], // I
@@ -307,6 +310,7 @@ pub const MOOD_CALM: MoodSet = MoodSet {
 /// Tense: dominant-heavy, dense/accented rhythm, leaping dissonant melody.
 pub const MOOD_TENSE: MoodSet = MoodSet {
     name: "Tense",
+    gate_length: 0.25, // short, punchy, agitated
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
         [0.10,  0.15,  0.05,  0.15,  0.35,  0.10,  0.10], // I
@@ -340,6 +344,7 @@ pub const MOOD_TENSE: MoodSet = MoodSet {
 /// Dark: minor-leaning, modal, sparse with sudden accents, low-register wandering.
 pub const MOOD_DARK: MoodSet = MoodSet {
     name: "Dark",
+    gate_length: 0.85, // very long, heavy sustains
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
         [0.30,  0.05,  0.05,  0.10,  0.15,  0.25,  0.10], // I   → vi (modal)
@@ -373,6 +378,7 @@ pub const MOOD_DARK: MoodSet = MoodSet {
 /// Euphoric: fast major resolutions, IV→I lifts, high-energy ascending.
 pub const MOOD_EUPHORIC: MoodSet = MoodSet {
     name: "Euphoric",
+    gate_length: 0.30, // short, bright, energetic
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
         [0.20,  0.05,  0.05,  0.35,  0.25,  0.05,  0.05], // I   → IV strong lift
@@ -408,6 +414,7 @@ pub const MOOD_EUPHORIC: MoodSet = MoodSet {
 /// Inspired by Hans Zimmer's organ-driven space feel.
 pub const MOOD_COSMIC: MoodSet = MoodSet {
     name: "Cosmic",
+    gate_length: 0.95, // near-infinite sustain, drone-like
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
         [0.20,  0.05,  0.05,  0.30,  0.10,  0.25,  0.05], // I   → IV or vi (plagal)
@@ -442,6 +449,7 @@ pub const MOOD_COSMIC: MoodSet = MoodSet {
 /// vi–IV–I–V cycle, mechanical rhythm with sudden silences, narrow melodic range.
 pub const MOOD_GRAVITY: MoodSet = MoodSet {
     name: "Gravity",
+    gate_length: 0.60, // medium — intentional, deliberate
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
         [0.12,  0.08,  0.05,  0.20,  0.28,  0.22,  0.05], // I
@@ -799,6 +807,11 @@ impl MoodBlend {
         out
     }
 
+    /// Blend gate_length from mood weights. Returns value in [0.0, 1.0].
+    pub fn blend_gate_length(&self, moods: &[&MoodSet; N_MOODS]) -> f32 {
+        moods.iter().enumerate().map(|(i, m)| self.weight(i) * m.gate_length).sum::<f32>().clamp(0.0, 1.0)
+    }
+
     pub fn blend_melodic(&self, moods: &[&MoodSet; N_MOODS]) -> MelodicMatrix {
         let w0 = self.weight(0);
         let mut out = scale_melodic(&moods[0].melodic, w0);
@@ -871,21 +884,36 @@ pub struct MarkovEngineShared {
 
     // ── Harmonic behaviour controls ──────────────────────────────────────────
     /// Chord-tone attraction strength (0.0–1.0).
-    /// 0 = voices wander by mood matrix only; 1 = strongly locked to chord tones.
     pub chord_attraction: Shared,
     /// When true, Bass voices snap to the chord root on each bar downbeat.
-    pub bass_lock: Arc<std::sync::atomic::AtomicBool>,
+    pub bass_lock: Arc<AtomicBool>,
     /// When true, dissonant intervals between simultaneous note-ons are nudged apart.
-    pub dissonance_resolve: Arc<std::sync::atomic::AtomicBool>,
+    pub dissonance_resolve: Arc<AtomicBool>,
     /// How aggressively dissonance is resolved.
     /// 0 = semitones only, 1 = semitones + tritones, 2 = semitones + tritones + minor 7ths.
     pub dissonance_threshold: Arc<AtomicU8>,
     /// Per-phrase register drift probability override (0.0–1.0).
-    /// 0 = no drift; 1 = always drift each phrase. Overrides mood-derived probability.
     pub register_drift: Shared,
+
+    // ── Clock division ───────────────────────────────────────────────────────
+    /// How many BeatClock subdivisions pass between Markov steps.
+    /// 1 = every 16th note, 2 = every 8th note, 4 = every beat, 8 = every 2 beats.
+    pub clock_div: Arc<AtomicU8>,
+
+    // ── Harmonic sequence ────────────────────────────────────────────────────
+    /// Number of active chord slots in the sequence (1–8). 1 = static key (legacy).
+    pub seq_len: Arc<AtomicU8>,
+    /// Root MIDI note for each sequence slot (8 slots max).
+    pub seq_roots:   Vec<Arc<AtomicU8>>,
+    /// Scale (Scale enum as u8) for each sequence slot.
+    pub seq_scales:  Vec<Arc<AtomicU8>>,
+    /// Number of phrases each slot lasts before advancing (1–16).
+    pub seq_phrases: Vec<Arc<AtomicU8>>,
 }
 
 impl MarkovEngineShared {
+    pub const SEQ_MAX: usize = 8;
+
     pub fn new(n_voices: usize) -> Self {
         Self {
             root:    Arc::new(AtomicU8::new(60)), // C4
@@ -900,17 +928,22 @@ impl MarkovEngineShared {
                 _ => VoiceRole::Texture as u8,
             }))).collect(),
             voice_density:  (0..n_voices).map(|_| shared(0.0)).collect(),
-            voice_enabled:  (0..n_voices).map(|_| Arc::new(std::sync::atomic::AtomicBool::new(true))).collect(),
-            voice_octave:   (0..n_voices).map(|_| Arc::new(AtomicU8::new(64))).collect(), // 64 = offset 0
+            voice_enabled:  (0..n_voices).map(|_| Arc::new(AtomicBool::new(true))).collect(),
+            voice_octave:   (0..n_voices).map(|_| Arc::new(AtomicU8::new(64))).collect(),
             launchpad: Arc::new(
                 (0..n_voices).map(|_| std::array::from_fn(|_| AtomicU8::new(0))).collect()
             ),
             launchpad_col: Arc::new(AtomicUsize::new(0)),
             chord_attraction:     shared(0.5),
-            bass_lock:            Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            dissonance_resolve:   Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            dissonance_threshold: Arc::new(AtomicU8::new(1)), // semitones + tritones
+            bass_lock:            Arc::new(AtomicBool::new(true)),
+            dissonance_resolve:   Arc::new(AtomicBool::new(true)),
+            dissonance_threshold: Arc::new(AtomicU8::new(1)),
             register_drift:       shared(0.2),
+            clock_div:            Arc::new(AtomicU8::new(4)), // one step per beat by default
+            seq_len:              Arc::new(AtomicU8::new(1)),
+            seq_roots:   (0..Self::SEQ_MAX).map(|_| Arc::new(AtomicU8::new(60))).collect(),
+            seq_scales:  (0..Self::SEQ_MAX).map(|_| Arc::new(AtomicU8::new(0))).collect(),
+            seq_phrases: (0..Self::SEQ_MAX).map(|_| Arc::new(AtomicU8::new(4))).collect(),
         }
     }
 
@@ -943,6 +976,26 @@ impl MarkovEngineShared {
     pub fn bars_per_phrase(&self) -> u32 {
         self.bars_per_phrase.load(Ordering::Relaxed).max(1)
     }
+
+    pub fn clock_div(&self) -> u8 {
+        self.clock_div.load(Ordering::Relaxed).max(1)
+    }
+
+    pub fn seq_len(&self) -> usize {
+        (self.seq_len.load(Ordering::Relaxed) as usize).clamp(1, Self::SEQ_MAX)
+    }
+
+    pub fn seq_root(&self, slot: usize) -> u8 {
+        self.seq_roots[slot.min(Self::SEQ_MAX - 1)].load(Ordering::Relaxed)
+    }
+
+    pub fn seq_scale(&self, slot: usize) -> Scale {
+        Scale::from_u8(self.seq_scales[slot.min(Self::SEQ_MAX - 1)].load(Ordering::Relaxed))
+    }
+
+    pub fn seq_phrases(&self, slot: usize) -> u8 {
+        self.seq_phrases[slot.min(Self::SEQ_MAX - 1)].load(Ordering::Relaxed).max(1)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -958,6 +1011,8 @@ pub struct MarkovVoice {
     pending_root_snap: bool,
     /// Per-phrase register drift: added to octave_offset from shared (-1, 0, or +1).
     pub octave_drift: i8,
+    /// Subdivisions since last note-on. Used for mood-driven gate length.
+    note_age_subdivs: u32,
 }
 
 /// Events emitted by a single voice per subdivision.
@@ -981,10 +1036,13 @@ impl MarkovVoice {
             current_note: None,
             pending_root_snap: false,
             octave_drift: 0,
+            note_age_subdivs: 0,
         }
     }
 
-    /// Call once per subdivision. Returns a `VoiceEvent` with any note changes.
+    /// Call once per Markov step (after clock division is applied by the engine).
+    /// `gate_subdivs`: maximum number of steps a note sustains before auto-off.
+    ///   1 = staccato (note cut after one step), 16 = let patch ADSR decay naturally.
     pub fn on_subdivision(
         &mut self,
         rhythmic_matrix: &RhythmicMatrix,
@@ -992,6 +1050,7 @@ impl MarkovVoice {
         harmonic:        &HarmonicChain,
         shared:          &MarkovEngineShared,
         voice_idx:       usize,
+        gate_subdivs:    u32,
     ) -> VoiceEvent {
         if !shared.voice_enabled(voice_idx) {
             let note_off = self.current_note.take();
@@ -1000,6 +1059,18 @@ impl MarkovVoice {
 
         let role    = shared.role(voice_idx);
         let density = shared.voice_density(voice_idx);
+
+        // Increment age of any sustained note and auto-off if gate expired.
+        if self.current_note.is_some() {
+            self.note_age_subdivs += 1;
+            if self.note_age_subdivs >= gate_subdivs {
+                return VoiceEvent {
+                    note_off: self.current_note.take(),
+                    rhythmic: RhythmicState::Rest,
+                    ..Default::default()
+                };
+            }
+        }
 
         let Some(rhythmic_state) = self.rhythmic.on_subdivision(rhythmic_matrix, density, role)
         else {
@@ -1010,21 +1081,17 @@ impl MarkovVoice {
 
         match rhythmic_state {
             RhythmicState::Rest => {
-                // Fire note_off if something was sounding.
                 ev.note_off = self.current_note.take();
             }
             RhythmicState::Hold => {
-                // Continue sounding — no change.
+                // Continue sounding — age already incremented above.
             }
             RhythmicState::Single | RhythmicState::Double | RhythmicState::Accent => {
-                // Release previous note.
                 ev.note_off = self.current_note.take();
 
-                // Bass voices snap to chord root on downbeats.
                 let force_root = self.pending_root_snap && role == VoiceRole::Bass;
                 self.pending_root_snap = false;
 
-                // Advance melodic chain (combine shared octave offset with phrase drift).
                 let octave = shared.octave_offset(voice_idx) + self.octave_drift;
                 let pitch = self.melodic.advance_and_resolve(
                     melodic_matrix,
@@ -1037,6 +1104,7 @@ impl MarkovVoice {
                     shared.chord_attraction(),
                 );
                 self.current_note = Some(pitch);
+                self.note_age_subdivs = 0;
                 ev.note_on = Some(pitch);
                 ev.accent  = rhythmic_state == RhythmicState::Accent;
                 ev.double  = rhythmic_state == RhythmicState::Double;
@@ -1059,6 +1127,10 @@ pub struct MarkovEngine {
     moods:        [&'static MoodSet; N_MOODS],
     /// RNG used for phrase-level decisions (register drift).
     phrase_rng:   Lcg,
+    /// Current slot index in the harmonic sequence.
+    pub seq_slot: usize,
+    /// Number of phrases elapsed in the current sequence slot.
+    phrases_in_slot: u32,
 }
 
 impl MarkovEngine {
@@ -1069,19 +1141,25 @@ impl MarkovEngine {
             phrase:      PhraseCounter::new(4),
             moods:       [&MOOD_CALM, &MOOD_TENSE, &MOOD_DARK, &MOOD_EUPHORIC, &MOOD_COSMIC, &MOOD_GRAVITY],
             phrase_rng:  Lcg::new(seed ^ 0xA5A5_B6B6),
+            seq_slot: 0,
+            phrases_in_slot: 0,
         }
     }
 
-    /// Call once per subdivision (when `BeatEvents::subdivision` fires).
+    /// Call once per Markov step (after clock division gating in the audio callback).
     /// Returns one `VoiceEvent` per voice.
     pub fn on_subdivision(&mut self, shared: &MarkovEngineShared) -> Vec<VoiceEvent> {
         let rhythmic = shared.mood.blend_rhythmic(&self.moods);
         let melodic  = shared.mood.blend_melodic(&self.moods);
 
+        // Blend gate length from moods: 0.0 → 1 step, 1.0 → 16 steps.
+        let gate_blend = shared.mood.blend_gate_length(&self.moods).clamp(0.0, 1.0);
+        let gate_subdivs = ((gate_blend * 15.0) as u32 + 1).max(1);
+
         let mut events: Vec<VoiceEvent> = self.voices
             .iter_mut()
             .enumerate()
-            .map(|(i, v)| v.on_subdivision(&rhythmic, &melodic, &self.harmonic, shared, i))
+            .map(|(i, v)| v.on_subdivision(&rhythmic, &melodic, &self.harmonic, shared, i, gate_subdivs))
             .collect();
 
         // ── Dissonance resolution post-pass ──────────────────────────────────
@@ -1127,6 +1205,18 @@ impl MarkovEngine {
         self.phrase.bars_per_phrase = shared.bars_per_phrase();
 
         if phrase_ev.phrase_boundary {
+            // Advance harmonic sequence slot if sequence length > 1.
+            let seq_len = shared.seq_len();
+            if seq_len > 1 {
+                self.phrases_in_slot += 1;
+                if self.phrases_in_slot >= shared.seq_phrases(self.seq_slot) as u32 {
+                    self.phrases_in_slot = 0;
+                    self.seq_slot = (self.seq_slot + 1) % seq_len;
+                    // Update the active root + scale atomics so voices pick them up.
+                    shared.root.store(shared.seq_root(self.seq_slot), Ordering::Relaxed);
+                    shared.scale.store(shared.seq_scales[self.seq_slot].load(Ordering::Relaxed), Ordering::Relaxed);
+                }
+            }
             self.harmonic.advance(&PHRASE_BOUNDARY_HARMONIC);
         } else {
             self.harmonic.advance(&harmonic_matrix);

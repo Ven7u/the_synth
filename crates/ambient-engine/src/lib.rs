@@ -31,7 +31,7 @@ pub use markov::{
 pub use patch::AmbientPatch;
 pub use engine::{
     AmbientEngine,
-    MarkovScene,
+    MarkovScene, HarmonicSlot,
     MacroSetKind,
     MacroParam,
     MacroTarget,

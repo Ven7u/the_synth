@@ -12,7 +12,7 @@ use fundsp::prelude::midi_hz;
 use std::sync::Arc;
 
 use ambient_engine::{
-    ACTIVE_MACRO_KNOBS, AmbientEngine, AmbientPatch, MacroSetKind, MarkovScene, Scene, MACRO_COUNT, TRACK_COUNT,
+    ACTIVE_MACRO_KNOBS, AmbientEngine, AmbientPatch, MacroSetKind, Scene, MACRO_COUNT, TRACK_COUNT,
     VOICE_COUNT, load_scene_json, save_scene_json,
     BeatClock, BeatClockShared,
     EuclideanGen, GenerativeMode, ProbTableGen,
@@ -127,10 +127,18 @@ where
     let mut prob_table_states: [ProbTableGen; TRACK_COUNT] = std::array::from_fn(|i| ProbTableGen::new(0xDEAD_BEEF ^ i as u64));
     // Global Markov engine (Phase 8.3) — audio-thread state only.
     let mut markov_engine = MarkovEngine::new(TRACK_COUNT, 0xC0DE_CAFE_BEEF_1234);
+    // Clock division counter: Markov steps only fire every N subdivisions.
+    let mut markov_subdiv_counter: u8 = 0;
     let beat_clock_shared = BeatClockShared::new(120.0);
     let beat_clock_shared_clone = beat_clock_shared.clone();
     let mut beat_clock = BeatClock::default();
     let mut was_playing = false;
+
+    // Debug counters (audio-thread local, printed to stderr periodically).
+    let mut dbg_callback_count: u64 = 0;
+    let mut dbg_steal_count:    [u32; TRACK_COUNT] = [0; TRACK_COUNT];
+    let mut dbg_miss_noteoff:   [u32; TRACK_COUNT] = [0; TRACK_COUNT];
+    let mut dbg_nan_count:      u32 = 0;
 
     let stream = device.build_output_stream(
         config,
@@ -292,6 +300,7 @@ where
                     }
                     voice_notes[ti] = [None; VOICE_COUNT];
                 }
+                markov_subdiv_counter = 0;
             }
             was_playing = now_playing;
 
@@ -315,15 +324,29 @@ where
                 }
                 if beat_ev.subdivision {
                     if markov_active {
-                        // Markov drives all tracks; route voice[i] → track[i].
-                        let voice_events = markov_engine.on_subdivision(&eng.markov_shared);
+                        // Apply clock division: only step the engine every N subdivisions.
+                        markov_subdiv_counter += 1;
+                        let clock_div = eng.markov_shared.clock_div();
+                        let step_now = markov_subdiv_counter >= clock_div;
+                        if step_now { markov_subdiv_counter = 0; }
+
+                        let voice_events = if step_now {
+                            markov_engine.on_subdivision(&eng.markov_shared)
+                        } else {
+                            // No new step — still need to check for note_off from gate expiry.
+                            // Return empty events (voices handle gate age internally on next real step).
+                            vec![Default::default(); TRACK_COUNT]
+                        };
                         for (ti, voice_ev) in voice_events.iter().enumerate().take(TRACK_COUNT) {
                             if let Some(pitch) = voice_ev.note_off {
-                                for (slot, note) in voice_notes[ti].iter_mut().enumerate() {
+                                let found = voice_notes[ti].iter_mut().enumerate().any(|(slot, note)| {
                                     if *note == Some(pitch) {
                                         eng.tracks[ti].voice_gates[slot].set(0.0);
-                                        break;
-                                    }
+                                        true
+                                    } else { false }
+                                });
+                                if !found {
+                                    dbg_miss_noteoff[ti] += 1;
                                 }
                             }
                             if let Some(pitch) = voice_ev.note_on {
@@ -335,6 +358,7 @@ where
                                         .unwrap_or_else(|| {
                                             let s = steal_idx[ti] % VOICE_COUNT;
                                             steal_idx[ti] += 1;
+                                            dbg_steal_count[ti] += 1;
                                             s
                                         });
                                     voice_notes[ti][slot] = Some(pitch);
@@ -398,6 +422,15 @@ where
                 }
 
                 let (l, r) = eng.get_stereo();
+
+                // NaN/Inf guard: if DSP produces a bad value, zero it and count.
+                let (l, r) = if l.is_finite() && r.is_finite() {
+                    (l, r)
+                } else {
+                    dbg_nan_count += 1;
+                    (0.0f32, 0.0f32)
+                };
+
                 last_out_l = l;
                 last_out_r = r;
                 let left  = T::from_sample(l);
@@ -405,6 +438,22 @@ where
                 for (i, smp) in frame.iter_mut().enumerate() {
                     *smp = if i & 1 == 0 { left } else { right };
                 }
+            }
+
+            // --- Periodic debug dump every ~5 s (at 512-frame buffers / 44100 Hz ≈ 430 callbacks/s) ---
+            dbg_callback_count += 1;
+            let dump_interval = (sr as u64 * 5) / frames.max(1) as u64;
+            if dbg_callback_count % dump_interval.max(1) == 0 {
+                let occupied: [usize; TRACK_COUNT] = std::array::from_fn(|ti| {
+                    voice_notes[ti].iter().filter(|n| n.is_some()).count()
+                });
+                let gates: [f32; TRACK_COUNT] = std::array::from_fn(|ti| {
+                    eng.tracks[ti].voice_gates.iter().map(|g| g.value()).sum::<f32>()
+                });
+                eprintln!(
+                    "[markov-dbg] cb={} | slots_occupied={:?} | gate_sum={:.2?} | steals={:?} | miss_noteoff={:?} | nan={}",
+                    dbg_callback_count, occupied, gates, dbg_steal_count, dbg_miss_noteoff, dbg_nan_count
+                );
             }
         },
         |err| eprintln!("audio error: {err}"),
@@ -472,6 +521,12 @@ struct AmbientBoxApp {
     markov_dissonance_resolve_ui: bool,
     markov_dissonance_threshold_ui: u8,
     markov_register_drift_ui: f32,
+    markov_clock_div_ui: u8,
+    // Harmonic sequence — up to SEQ_MAX slots
+    markov_seq_len_ui: usize,
+    markov_seq_roots_ui: [u8; 8],
+    markov_seq_scales_ui: [u8; 8],
+    markov_seq_phrases_ui: [u8; 8],
 
     // Global shimmer UI state
     shimmer_on:    bool,
@@ -513,7 +568,7 @@ struct AmbientBoxApp {
     patch_library: Vec<PatchEntry>,
     track_patch_choice: [usize; TRACK_COUNT],
     track_patch_last_synced_path: [String; TRACK_COUNT],
-    pending_patch_load: Option<(usize, usize)>,
+    pending_patch_load: std::collections::VecDeque<(usize, usize)>,
     pending_scene_save: Option<PendingSceneSave>,
     pending_scene_load_path: Option<String>,
     pending_scene_load: Option<(String, Scene)>,
@@ -656,6 +711,11 @@ impl AmbientBoxApp {
             markov_dissonance_resolve_ui: true,
             markov_dissonance_threshold_ui: 1,
             markov_register_drift_ui: 0.2,
+            markov_clock_div_ui: 4,
+            markov_seq_len_ui: 1,
+            markov_seq_roots_ui: [60u8; 8],
+            markov_seq_scales_ui: [0u8; 8],
+            markov_seq_phrases_ui: [4u8; 8],
             shimmer_on:    false,
             shimmer_mix:   0.4,
             shimmer_amt:   0.5,
@@ -689,7 +749,7 @@ impl AmbientBoxApp {
             patch_library,
             track_patch_choice: [0; TRACK_COUNT],
             track_patch_last_synced_path: std::array::from_fn(|_| String::new()),
-            pending_patch_load: None,
+            pending_patch_load: std::collections::VecDeque::new(),
             pending_scene_save: None,
             pending_scene_load_path: None,
             pending_scene_load: None,
@@ -738,9 +798,9 @@ impl AmbientBoxApp {
     fn auto_load_ambient_patches(&mut self) {
         // (track_index, preferred_name, fallback_category)
         let assignments: [(usize, &str, &str); TRACK_COUNT] = [
-            (0, "Ambient Bass",     "Bass"),
-            (1, "Ambient Pad",      "Pad"),
-            (2, "Ambient Sprinkle", "Pluck"),
+            (0, "Ambient Bass",     "Ambient"),
+            (1, "Ambient Pad",      "Ambient"),
+            (2, "Eno Space",        "Ambient"),
             (3, "Ambient Texture",  "Ambient"),
         ];
         for (track, preferred, fallback_cat) in assignments {
@@ -749,7 +809,7 @@ impl AmbientBoxApp {
                 .or_else(|| self.patch_library.iter().position(|p| p.category == fallback_cat));
             if let Some(idx) = idx {
                 self.track_patch_choice[track] = idx;
-                self.pending_patch_load = Some((track, idx));
+                self.pending_patch_load.push_back((track, idx));
             }
         }
     }
@@ -967,10 +1027,10 @@ impl eframe::App for AmbientBoxApp {
 
             // ── MARKOV content ────────────────────────────────────────────────
             if markov_active {
+                let note_names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
                 ui.label(egui::RichText::new("MARKOV ENGINE").strong().color(egui::Color32::from_rgb(200, 140, 255)));
                 ui.horizontal(|ui| {
-                    ui.label("Key:");
-                    let note_names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+                    ui.label("Key:").on_hover_text("Root note of the generative scale. All voices stay within this key.");
                     egui::ComboBox::from_id_salt("markov_root")
                         .selected_text(note_names[(self.markov_root_ui % 12) as usize])
                         .show_ui(ui, |ui| {
@@ -979,7 +1039,7 @@ impl eframe::App for AmbientBoxApp {
                                 ui.selectable_value(&mut self.markov_root_ui, midi, name);
                             }
                         });
-                    ui.label("Scale:");
+                    ui.label("Scale:").on_hover_text("Scale mode used to constrain note choices. Major = brighter, Minor = darker/moodier.");
                     egui::ComboBox::from_id_salt("markov_scale")
                         .selected_text(MarkovScale::LABELS[self.markov_scale_ui as usize % MarkovScale::LABELS.len()])
                         .show_ui(ui, |ui| {
@@ -987,14 +1047,14 @@ impl eframe::App for AmbientBoxApp {
                                 ui.selectable_value(&mut self.markov_scale_ui, i as u8, lbl);
                             }
                         });
-                    ui.label("Density:");
+                    ui.label("Density:").on_hover_text("Global note density: 0 = almost silent, 1 = voices fire on nearly every subdivision. Each voice role has its own divisor on top of this.");
                     ui.add(egui::Slider::new(&mut self.markov_density_ui, 0.0f32..=1.0).step_by(0.01));
-                    ui.label("Phrase:");
+                    ui.label("Phrase:").on_hover_text("How many bars before the harmonic chain advances to the next chord. Longer phrases = slower harmonic movement.");
                     ui.add(egui::Slider::new(&mut self.markov_bars_per_phrase_ui, 2u32..=16));
                     ui.label("bars");
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Mood:");
+                    ui.label("Mood:").on_hover_text("Blend of 6 probability matrices. Each matrix encodes different chord progressions and rhythmic tendencies. Values are normalised — raising one lowers the relative weight of others.");
                     let mood_labels = ["Calm", "Tense", "Dark", "Euphoric", "Cosmic", "Gravity"];
                     let mood_colors = [
                         egui::Color32::from_rgb(100, 200, 255),
@@ -1004,9 +1064,18 @@ impl eframe::App for AmbientBoxApp {
                         egui::Color32::from_rgb(180, 230, 255),
                         egui::Color32::from_rgb(160, 140, 220),
                     ];
+                    let mood_tips = [
+                        "Calm: Tonic-centred movement (I–IV–I), stepwise melody, sparse rhythm. Peaceful and resolved.",
+                        "Tense: Unresolved progressions (ii°–V–i), chromatic tension, denser rhythm. Anxious, suspenseful.",
+                        "Dark: Minor modal movement (i–VI–VII), low melody register, sustained notes. Brooding, heavy.",
+                        "Euphoric: Bright major movement (I–V–vi–IV), high register, flowing density. Uplifting, open.",
+                        "Cosmic: Plagal IV↔I drift, very sparse events, stepwise motion. Vast, weightless, Eno-inspired.",
+                        "Gravity: vi–IV–I–V with deceptive V→vi, narrow range, abrupt rests. Slow pull, inevitable.",
+                    ];
                     for i in 0..N_MOODS {
                         let lbl = mood_labels.get(i).copied().unwrap_or("?");
-                        ui.colored_label(mood_colors[i % mood_colors.len()], lbl);
+                        ui.colored_label(mood_colors[i % mood_colors.len()], lbl)
+                            .on_hover_text(mood_tips[i % mood_tips.len()]);
                         ui.add(egui::Slider::new(&mut self.markov_mood_ui[i], 0.0f32..=1.0)
                             .step_by(0.01).clamping(egui::SliderClamping::Always));
                     }
@@ -1017,10 +1086,11 @@ impl eframe::App for AmbientBoxApp {
                 });
                 // ── Voice behaviour controls ──────────────────────────────────
                 ui.horizontal(|ui| {
-                    ui.label("Harmony:");
+                    ui.label("Harmony:").on_hover_text("Chord-tone attraction: how strongly each voice is biased toward notes that belong to the current chord. 0 = free chromatic movement, 1 = always snaps to chord tones.");
                     ui.add(egui::Slider::new(&mut self.markov_chord_attraction_ui, 0.0f32..=1.0)
                         .step_by(0.01).clamping(egui::SliderClamping::Always));
-                    ui.checkbox(&mut self.markov_bass_lock_ui, "Bass lock");
+                    ui.checkbox(&mut self.markov_bass_lock_ui, "Bass lock")
+                        .on_hover_text("When enabled, the bass voice is forced to the root note on every bar downbeat, keeping the harmonic foundation grounded.");
                     ui.separator();
                     let resolve_color = if self.markov_dissonance_resolve_ui {
                         egui::Color32::from_rgb(100, 220, 140)
@@ -1032,26 +1102,85 @@ impl eframe::App for AmbientBoxApp {
                     ).clicked() {
                         self.markov_dissonance_resolve_ui = !self.markov_dissonance_resolve_ui;
                     }
+                    ui.label("").on_hover_text("Post-pass dissonance resolution: when two voices play simultaneously, intervals matching the selected threshold are detected and one voice is nudged to a consonant neighbour.");
                     ui.add_enabled_ui(self.markov_dissonance_resolve_ui, |ui| {
-                        for (val, lbl) in [(0u8, "2nds"), (1u8, "+tritone"), (2u8, "+7ths")] {
-                            if ui.selectable_label(self.markov_dissonance_threshold_ui == val, lbl).clicked() {
+                        for (val, lbl, tip) in [
+                            (0u8, "2nds",     "Resolve semitone clashes (minor/major 2nds). Mildest correction."),
+                            (1u8, "+tritone", "Also resolve tritones (augmented 4th). Adds to 2nd resolution."),
+                            (2u8, "+7ths",    "Also resolve major 7th intervals. Most aggressive correction."),
+                        ] {
+                            if ui.selectable_label(self.markov_dissonance_threshold_ui == val, lbl)
+                                .on_hover_text(tip)
+                                .clicked()
+                            {
                                 self.markov_dissonance_threshold_ui = val;
                             }
                         }
                     });
                     ui.separator();
-                    ui.label("Drift:");
+                    ui.label("Drift:").on_hover_text("Register drift: probability per phrase that a voice shifts its octave up or down. 0 = voices stay in their initial octave, 1 = voices wander freely across registers.");
                     ui.add(egui::Slider::new(&mut self.markov_register_drift_ui, 0.0f32..=1.0)
                         .step_by(0.01).clamping(egui::SliderClamping::Always));
+                    ui.separator();
+                    ui.label("Step:").on_hover_text("Clock division: how many 16th-note ticks between Markov steps. 1=16th note, 2=8th, 4=quarter beat (default), 8=half note. Lower = faster, more notes; higher = slower, more spacious.");
+                    for (val, lbl) in [(1u8,"1/16"),(2u8,"1/8"),(4u8,"1/4"),(8u8,"1/2")] {
+                        if ui.selectable_label(self.markov_clock_div_ui == val, lbl).clicked() {
+                            self.markov_clock_div_ui = val;
+                        }
+                    }
                 });
+                // ── Harmonic sequence ─────────────────────────────────────────
+                ui.horizontal(|ui| {
+                    ui.label("Chord seq:").on_hover_text("Harmonic sequence: up to 8 chord slots that cycle in a loop. Each slot has its own key, scale, and phrase duration. Use 1 slot for a static key (legacy behaviour).");
+                    // Slot count selector
+                    for n in 1usize..=8 {
+                        if ui.selectable_label(self.markov_seq_len_ui == n, format!("{n}")).clicked() {
+                            self.markov_seq_len_ui = n;
+                            // When shrinking to 1, sync back to the global key/scale pickers
+                            if n == 1 {
+                                self.markov_seq_roots_ui[0] = self.markov_root_ui;
+                                self.markov_seq_scales_ui[0] = self.markov_scale_ui;
+                            }
+                        }
+                    }
+                    ui.label("slots");
+                });
+                if self.markov_seq_len_ui > 1 {
+                    for i in 0..self.markov_seq_len_ui {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("  #{}", i + 1));
+                            egui::ComboBox::from_id_salt(format!("seq_root_{i}"))
+                                .selected_text(note_names[(self.markov_seq_roots_ui[i] % 12) as usize])
+                                .width(48.0)
+                                .show_ui(ui, |ui| {
+                                    for (j, &name) in note_names.iter().enumerate() {
+                                        ui.selectable_value(&mut self.markov_seq_roots_ui[i], 48 + j as u8, name);
+                                    }
+                                });
+                            egui::ComboBox::from_id_salt(format!("seq_scale_{i}"))
+                                .selected_text(MarkovScale::LABELS[self.markov_seq_scales_ui[i] as usize % MarkovScale::LABELS.len()])
+                                .width(72.0)
+                                .show_ui(ui, |ui| {
+                                    for (j, &lbl) in MarkovScale::LABELS.iter().enumerate() {
+                                        ui.selectable_value(&mut self.markov_seq_scales_ui[i], j as u8, lbl);
+                                    }
+                                });
+                            ui.label("×").on_hover_text("Number of phrases this chord lasts before advancing to the next slot.");
+                            ui.add(egui::DragValue::new(&mut self.markov_seq_phrases_ui[i]).range(1u8..=16));
+                            ui.label("phrases");
+                        });
+                    }
+                }
                 ui.separator();
                 // Per-voice rows with inline patch
                 for i in 0..TRACK_COUNT {
                     let role_color = voice_role_color(VoiceRole::from_u8(self.markov_voice_role_ui[i]));
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(format!("V{}", i + 1)).color(role_color).strong());
-                        ui.checkbox(&mut self.markov_voice_enabled_ui[i], "");
-                        ui.label("Role:");
+                        ui.label(egui::RichText::new(format!("V{}", i + 1)).color(role_color).strong())
+                            .on_hover_text("Voice channel. Each voice runs its own Markov chain independently.");
+                        ui.checkbox(&mut self.markov_voice_enabled_ui[i], "")
+                            .on_hover_text("Enable or mute this voice. Disabled voices produce no notes but keep their state.");
+                        ui.label("Role:").on_hover_text("Voice role determines note range, rhythm divisor, and chord-attraction strength. Bass = low + locked, Pad = mid + slow, Melody = high + free, Texture = sparse noise layer.");
                         egui::ComboBox::from_id_salt(format!("markov_role_{i}"))
                             .selected_text(VoiceRole::LABELS[self.markov_voice_role_ui[i] as usize % VoiceRole::LABELS.len()])
                             .show_ui(ui, |ui| {
@@ -1059,7 +1188,7 @@ impl eframe::App for AmbientBoxApp {
                                     ui.selectable_value(&mut self.markov_voice_role_ui[i], j as u8, lbl);
                                 }
                             });
-                        ui.label("Patch:");
+                        ui.label("Patch:").on_hover_text("Synthesizer patch loaded on this voice. Choose from library then click Load to apply.");
                         if self.patch_library.is_empty() {
                             ui.label(egui::RichText::new("—").weak());
                         } else {
@@ -1075,42 +1204,134 @@ impl eframe::App for AmbientBoxApp {
                                     }
                                 });
                             if ui.small_button("Load").clicked() {
-                                self.pending_patch_load = Some((i, self.track_patch_choice[i]));
+                                self.pending_patch_load.push_back((i, self.track_patch_choice[i]));
                             }
                         }
-                        ui.label("Dens:");
+                        ui.label("Dens:").on_hover_text("Per-voice density override. Multiplies the global density for this voice only. 0 = use global, 1 = always fire at max rate.");
                         ui.add(egui::Slider::new(&mut self.markov_voice_density_ui[i], 0.0f32..=1.0)
                             .step_by(0.01).clamping(egui::SliderClamping::Always));
                         let _ = synth_ui::knob(ui, "Vol", &mut self.track_vol_ui[i], 0.0, 1.0);
                         let _ = synth_ui::knob(ui, "Shim", &mut self.track_shimmer_send_ui[i], 0.0, 1.0);
                         let _ = synth_ui::knob(ui, "Crys", &mut self.track_crystal_send_ui[i], 0.0, 1.0);
+                        ui.label("ℹ").on_hover_text("Vol: output volume  |  Shim: send to Shimmer reverb (diffuse tail)  |  Crys: send to Crystal granular delay (pitched echoes)");
                     });
                 }
                 // Launchpad grid — rendered from UI-owned cache, no lock needed
                 ui.separator();
-                ui.label(egui::RichText::new("LAUNCHPAD").small().weak());
                 {
-                    let cell_w = 18.0f32;
-                    let cell_h = 14.0f32;
-                    let gap = 2.0f32;
-                    let grid_w = (cell_w + gap) * LAUNCHPAD_COLS as f32;
-                    let grid_h = (cell_h + gap) * TRACK_COUNT as f32;
+                    let label_w = 52.0f32; // left margin for voice labels
+                    let cell_w  = 18.0f32;
+                    let cell_h  = 18.0f32;
+                    let gap     =  2.0f32;
+                    let grid_w  = label_w + (cell_w + gap) * LAUNCHPAD_COLS as f32;
+                    let grid_h  = (cell_h + gap) * TRACK_COUNT as f32;
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(grid_w, grid_h), egui::Sense::hover());
                     let painter = ui.painter_at(rect);
+
+                    let role_labels = ["Bass", "Pad", "Melody", "Tex"];
+                    let current_col = self.markov_launchpad_col_cache;
+
                     for row in 0..TRACK_COUNT {
-                        let base_color = voice_role_color(VoiceRole::from_u8(self.markov_voice_role_ui[row]));
+                        let role = VoiceRole::from_u8(self.markov_voice_role_ui[row]);
+                        let base_color = voice_role_color(role);
+                        let enabled = self.markov_voice_enabled_ui[row];
+                        let row_y = rect.top() + row as f32 * (cell_h + gap);
+
+                        // ── Voice label on the left ────────────────────────────
+                        let label = format!("V{}  {}", row + 1,
+                            role_labels[self.markov_voice_role_ui[row] as usize % role_labels.len()]);
+                        let label_color = if enabled { base_color } else { egui::Color32::from_gray(50) };
+                        painter.text(
+                            egui::pos2(rect.left() + 2.0, row_y + cell_h * 0.5),
+                            egui::Align2::LEFT_CENTER,
+                            label,
+                            egui::FontId::proportional(10.0),
+                            label_color,
+                        );
+
+                        // ── Pre-pass: find note runs (attack + trailing holds) ─
+                        // A run starts at any Single/Double/Accent and extends through
+                        // consecutive Hold cells. We draw the whole run as one long pill.
+                        let row_data = &self.markov_launchpad_cache[row];
+                        let mut drawn = [false; LAUNCHPAD_COLS];
+                        let mut col = 0;
+                        while col < LAUNCHPAD_COLS {
+                            let state = RhythmicState::from_usize(row_data[col] as usize);
+                            match state {
+                                RhythmicState::Single | RhythmicState::Double | RhythmicState::Accent => {
+                                    // Find how many consecutive Holds follow
+                                    let mut run_len = 1usize;
+                                    while col + run_len < LAUNCHPAD_COLS
+                                        && RhythmicState::from_usize(row_data[col + run_len] as usize)
+                                            == RhythmicState::Hold
+                                    {
+                                        run_len += 1;
+                                    }
+                                    // Draw one wide pill covering the entire note
+                                    let x = rect.left() + label_w + col as f32 * (cell_w + gap);
+                                    let w = run_len as f32 * (cell_w + gap) - gap;
+                                    let attack_color = match state {
+                                        RhythmicState::Accent => egui::Color32::WHITE,
+                                        RhythmicState::Double => egui::Color32::from_rgb(
+                                            base_color.r().saturating_add(80),
+                                            base_color.g().saturating_add(80),
+                                            base_color.b().saturating_add(80),
+                                        ),
+                                        _ => base_color,
+                                    };
+                                    let note_color = if enabled { attack_color } else {
+                                        egui::Color32::from_gray(35)
+                                    };
+                                    // Attack head: bright, slightly taller
+                                    let head_rect = egui::Rect::from_min_size(
+                                        egui::pos2(x, row_y + 1.0),
+                                        egui::vec2(cell_w, cell_h - 2.0),
+                                    );
+                                    painter.rect_filled(head_rect, 3.0, note_color);
+                                    // Tail (hold portion): same color but shorter height
+                                    if run_len > 1 {
+                                        let tail_x = x + cell_w + gap;
+                                        let tail_w = (run_len - 1) as f32 * (cell_w + gap) - gap;
+                                        let tail_color = egui::Color32::from_rgba_premultiplied(
+                                            note_color.r(), note_color.g(), note_color.b(), 140,
+                                        );
+                                        let tail_rect = egui::Rect::from_min_size(
+                                            egui::pos2(tail_x, row_y + cell_h * 0.3),
+                                            egui::vec2(tail_w, cell_h * 0.4),
+                                        );
+                                        painter.rect_filled(tail_rect, 2.0, tail_color);
+                                    }
+                                    for k in 0..run_len { drawn[col + k] = true; }
+                                    col += run_len;
+                                }
+                                _ => { col += 1; }
+                            }
+                        }
+                        // ── Draw remaining cells (Rest + orphan Hold) ────────────
                         for col in 0..LAUNCHPAD_COLS {
-                            let state = RhythmicState::from_usize(self.markov_launchpad_cache[row][col] as usize);
-                            let is_current = col == self.markov_launchpad_col_cache;
-                            let color = launchpad_cell_color(state, base_color, is_current);
-                            let x = rect.left() + col as f32 * (cell_w + gap);
-                            let y = rect.top()  + row as f32 * (cell_h + gap);
+                            if drawn[col] { continue; }
+                            let state = RhythmicState::from_usize(row_data[col] as usize);
+                            let cell_color = match state {
+                                RhythmicState::Rest => egui::Color32::from_gray(18),
+                                RhythmicState::Hold => egui::Color32::from_gray(40), // orphan hold
+                                _ => egui::Color32::from_gray(18),
+                            };
+                            let x = rect.left() + label_w + col as f32 * (cell_w + gap);
                             painter.rect_filled(
-                                egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(cell_w, cell_h)),
-                                2.0, color,
+                                egui::Rect::from_min_size(egui::pos2(x, row_y), egui::vec2(cell_w, cell_h)),
+                                2.0, cell_color,
                             );
                         }
                     }
+
+                    // ── Playhead: vertical line over current column ───────────
+                    let ph_x = rect.left() + label_w
+                        + current_col as f32 * (cell_w + gap)
+                        + cell_w * 0.5;
+                    painter.line_segment(
+                        [egui::pos2(ph_x, rect.top()), egui::pos2(ph_x, rect.bottom())],
+                        egui::Stroke::new(1.5, egui::Color32::from_rgba_premultiplied(255, 255, 255, 80)),
+                    );
                 }
             }
 
@@ -1147,7 +1368,7 @@ impl eframe::App for AmbientBoxApp {
                                 }
                             });
                         if ui.button("Load").clicked() {
-                            self.pending_patch_load = Some((ti, self.track_patch_choice[ti]));
+                            self.pending_patch_load.push_back((ti, self.track_patch_choice[ti]));
                         }
                     }
                 });
@@ -1511,6 +1732,20 @@ impl eframe::App for AmbientBoxApp {
                     ms.dissonance_resolve.store(self.markov_dissonance_resolve_ui, Ordering::Relaxed);
                     ms.dissonance_threshold.store(self.markov_dissonance_threshold_ui, Ordering::Relaxed);
                     ms.register_drift.set(self.markov_register_drift_ui);
+                    ms.clock_div.store(self.markov_clock_div_ui.max(1), Ordering::Relaxed);
+                    // Write harmonic sequence
+                    let seq_len = self.markov_seq_len_ui.clamp(1, 8);
+                    ms.seq_len.store(seq_len as u8, Ordering::Relaxed);
+                    for i in 0..seq_len {
+                        ms.seq_roots[i].store(self.markov_seq_roots_ui[i], Ordering::Relaxed);
+                        ms.seq_scales[i].store(self.markov_seq_scales_ui[i], Ordering::Relaxed);
+                        ms.seq_phrases[i].store(self.markov_seq_phrases_ui[i].max(1), Ordering::Relaxed);
+                    }
+                    // If static mode (len=1), keep root/scale in sync with sequence slot 0
+                    if seq_len == 1 {
+                        ms.seq_roots[0].store(self.markov_root_ui, Ordering::Relaxed);
+                        ms.seq_scales[0].store(self.markov_scale_ui, Ordering::Relaxed);
+                    }
                 }
                 // Per-voice track properties (volume, sends) — written for all tracks in Markov mode
                 for i in 0..TRACK_COUNT {
@@ -1542,7 +1777,7 @@ impl eframe::App for AmbientBoxApp {
                     self.crystal_mix.clamp(0.0, 1.0)
                 } else { 0.0 });
 
-                if let Some((track_idx, patch_idx)) = self.pending_patch_load.take() {
+                if let Some((track_idx, patch_idx)) = self.pending_patch_load.pop_front() {
                     if patch_idx < self.patch_library.len() {
                         let p = &self.patch_library[patch_idx];
                         eng.apply_patch_to_track(track_idx, p.path.clone(), &p.patch);
@@ -1590,6 +1825,19 @@ impl eframe::App for AmbientBoxApp {
                         self.markov_dissonance_resolve_ui = ms.dissonance_resolve;
                         self.markov_dissonance_threshold_ui = ms.dissonance_threshold;
                         self.markov_register_drift_ui = ms.register_drift;
+                        self.markov_clock_div_ui = ms.clock_div;
+                        let seq = &ms.harmonic_seq;
+                        self.markov_seq_len_ui = seq.len().clamp(1, 8);
+                        for (i, slot) in seq.iter().take(8).enumerate() {
+                            self.markov_seq_roots_ui[i] = slot.root;
+                            self.markov_seq_scales_ui[i] = slot.scale;
+                            self.markov_seq_phrases_ui[i] = slot.phrases;
+                        }
+                        // Sync static root/scale from slot 0 if sequence present
+                        if !seq.is_empty() {
+                            self.markov_root_ui = seq[0].root;
+                            self.markov_scale_ui = seq[0].scale;
+                        }
                         for t in 0..TRACK_COUNT { self.gen_mode_ui[t] = ms.generative_mode; }
                     }
                     eng.apply_scene(&scene);

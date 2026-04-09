@@ -84,6 +84,16 @@ pub struct SceneMacro {
     pub targets: Vec<MacroTarget>,
 }
 
+/// One slot in a harmonic sequence: key, scale, and how many phrases it lasts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HarmonicSlot {
+    pub root:    u8,
+    pub scale:   u8,
+    pub phrases: u8,
+}
+
+fn default_clock_div() -> u8 { 4 }
+
 /// Serializable snapshot of the Markov engine configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarkovScene {
@@ -91,7 +101,7 @@ pub struct MarkovScene {
     pub scale: u8,
     pub density: f32,
     pub bars_per_phrase: u32,
-    pub mood: Vec<f32>,         // N_MOODS weights, unnormalized
+    pub mood: Vec<f32>,
     pub voice_roles: Vec<u8>,
     pub voice_densities: Vec<f32>,
     pub voice_enabled: Vec<bool>,
@@ -100,7 +110,14 @@ pub struct MarkovScene {
     pub dissonance_resolve: bool,
     pub dissonance_threshold: u8,
     pub register_drift: f32,
-    pub generative_mode: u8,    // GenerativeMode for all tracks (0=Off, 4=Markov)
+    pub generative_mode: u8,
+    /// Clock division: how many BeatClock subdivisions per Markov step.
+    /// 1=16th, 2=8th, 4=quarter (default), 8=half note.
+    #[serde(default = "default_clock_div")]
+    pub clock_div: u8,
+    /// Harmonic sequence. If empty or length 1, root/scale above is used statically.
+    #[serde(default)]
+    pub harmonic_seq: Vec<HarmonicSlot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -415,6 +432,12 @@ impl AmbientEngine {
     pub fn capture_markov_scene(&self, generative_mode: u8) -> MarkovScene {
         let ms = &self.markov_shared;
         use std::sync::atomic::Ordering;
+        let seq_len = ms.seq_len();
+        let harmonic_seq = (0..seq_len).map(|i| HarmonicSlot {
+            root:    ms.seq_root(i),
+            scale:   ms.seq_scales[i].load(Ordering::Relaxed),
+            phrases: ms.seq_phrases(i),
+        }).collect();
         MarkovScene {
             root: ms.root.load(Ordering::Relaxed),
             scale: ms.scale.load(Ordering::Relaxed),
@@ -430,6 +453,8 @@ impl AmbientEngine {
             dissonance_threshold: ms.dissonance_threshold.load(Ordering::Relaxed),
             register_drift: ms.register_drift.value(),
             generative_mode,
+            clock_div: ms.clock_div(),
+            harmonic_seq,
         }
     }
 
@@ -540,6 +565,21 @@ impl AmbientEngine {
             ms.dissonance_resolve.store(ms_data.dissonance_resolve, Ordering::Relaxed);
             ms.dissonance_threshold.store(ms_data.dissonance_threshold, Ordering::Relaxed);
             ms.register_drift.set(ms_data.register_drift);
+            ms.clock_div.store(ms_data.clock_div.max(1), Ordering::Relaxed);
+            // Restore harmonic sequence
+            let seq = &ms_data.harmonic_seq;
+            let seq_len = seq.len().clamp(1, crate::markov::MarkovEngineShared::SEQ_MAX);
+            ms.seq_len.store(seq_len as u8, Ordering::Relaxed);
+            for (i, slot) in seq.iter().take(seq_len).enumerate() {
+                ms.seq_roots[i].store(slot.root, Ordering::Relaxed);
+                ms.seq_scales[i].store(slot.scale, Ordering::Relaxed);
+                ms.seq_phrases[i].store(slot.phrases.max(1), Ordering::Relaxed);
+            }
+            // If sequence non-empty, seed active root/scale from slot 0
+            if !seq.is_empty() {
+                ms.root.store(seq[0].root, Ordering::Relaxed);
+                ms.scale.store(seq[0].scale, Ordering::Relaxed);
+            }
             // Propagate generative mode to all tracks
             for ti in 0..TRACK_COUNT {
                 self.generative_modes[ti].store(ms_data.generative_mode, Ordering::Relaxed);
