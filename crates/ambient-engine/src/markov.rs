@@ -403,8 +403,80 @@ pub const MOOD_EUPHORIC: MoodSet = MoodSet {
     ],
 };
 
-pub const ALL_MOODS: &[&MoodSet] = &[&MOOD_CALM, &MOOD_TENSE, &MOOD_DARK, &MOOD_EUPHORIC];
-pub const N_MOODS: usize = 4;
+/// Cosmic (Interstellar-inspired): long harmonic cycles, IV↔I plagal motion,
+/// vi as a resting point, very sparse rhythm, slow stepwise melody.
+/// Inspired by Hans Zimmer's organ-driven space feel.
+pub const MOOD_COSMIC: MoodSet = MoodSet {
+    name: "Cosmic",
+    harmonic: [
+        //  I      ii     iii    IV     V      vi     vii
+        [0.20,  0.05,  0.05,  0.30,  0.10,  0.25,  0.05], // I   → IV or vi (plagal)
+        [0.08,  0.12,  0.05,  0.20,  0.30,  0.20,  0.05], // ii
+        [0.10,  0.08,  0.12,  0.20,  0.15,  0.30,  0.05], // iii → vi
+        [0.35,  0.08,  0.05,  0.18,  0.15,  0.14,  0.05], // IV  → I (plagal cadence)
+        [0.25,  0.10,  0.05,  0.25,  0.10,  0.20,  0.05], // V   → IV or I
+        [0.25,  0.10,  0.10,  0.25,  0.12,  0.12,  0.06], // vi  → I or IV
+        [0.30,  0.08,  0.05,  0.20,  0.20,  0.12,  0.05], // vii
+    ],
+    rhythmic: [
+        //  Rest   Hold   Single Double Accent
+        [0.55,  0.30,  0.12,  0.02,  0.01], // Rest  — very sparse
+        [0.08,  0.65,  0.22,  0.03,  0.02], // Hold  — long sustained tones
+        [0.35,  0.25,  0.30,  0.06,  0.04], // Single
+        [0.40,  0.15,  0.35,  0.07,  0.03], // Double
+        [0.45,  0.20,  0.28,  0.05,  0.02], // Accent
+    ],
+    melodic: [
+        //  1      2      3      4      5      6      7
+        [0.30,  0.25,  0.12,  0.08,  0.12,  0.08,  0.05], // 1 → stepwise
+        [0.22,  0.22,  0.28,  0.12,  0.08,  0.05,  0.03], // 2 → 3
+        [0.12,  0.22,  0.22,  0.22,  0.12,  0.06,  0.04], // 3
+        [0.08,  0.12,  0.22,  0.22,  0.22,  0.10,  0.04], // 4
+        [0.18,  0.08,  0.10,  0.18,  0.24,  0.16,  0.06], // 5
+        [0.18,  0.06,  0.08,  0.10,  0.18,  0.26,  0.14], // 6
+        [0.32,  0.06,  0.06,  0.08,  0.14,  0.18,  0.16], // 7 → resolve to 1
+    ],
+};
+
+/// Gravity (Interstellar docking scene): minor, dense sustained harmonics,
+/// vi–IV–I–V cycle, mechanical rhythm with sudden silences, narrow melodic range.
+pub const MOOD_GRAVITY: MoodSet = MoodSet {
+    name: "Gravity",
+    harmonic: [
+        //  I      ii     iii    IV     V      vi     vii
+        [0.12,  0.08,  0.05,  0.20,  0.28,  0.22,  0.05], // I
+        [0.08,  0.10,  0.05,  0.18,  0.40,  0.14,  0.05], // ii → V
+        [0.10,  0.10,  0.08,  0.22,  0.22,  0.22,  0.06], // iii
+        [0.28,  0.08,  0.05,  0.12,  0.22,  0.20,  0.05], // IV → I
+        [0.22,  0.10,  0.05,  0.18,  0.12,  0.28,  0.05], // V  → vi (deceptive)
+        [0.20,  0.12,  0.08,  0.30,  0.18,  0.08,  0.04], // vi → IV
+        [0.28,  0.10,  0.05,  0.15,  0.28,  0.10,  0.04], // vii
+    ],
+    rhythmic: [
+        //  Rest   Hold   Single Double Accent
+        [0.30,  0.18,  0.32,  0.12,  0.08], // Rest
+        [0.12,  0.40,  0.32,  0.10,  0.06], // Hold — sustained with occasional attacks
+        [0.18,  0.15,  0.35,  0.20,  0.12], // Single
+        [0.22,  0.08,  0.35,  0.25,  0.10], // Double
+        [0.28,  0.10,  0.35,  0.18,  0.09], // Accent → rest (abrupt)
+    ],
+    melodic: [
+        //  1      2      3      4      5      6      7
+        [0.28,  0.20,  0.18,  0.08,  0.12,  0.08,  0.06], // 1 — narrow stepwise
+        [0.22,  0.22,  0.25,  0.14,  0.08,  0.06,  0.03], // 2
+        [0.18,  0.22,  0.22,  0.20,  0.10,  0.05,  0.03], // 3 (b3 in minor)
+        [0.10,  0.15,  0.22,  0.22,  0.18,  0.08,  0.05], // 4
+        [0.22,  0.10,  0.12,  0.18,  0.22,  0.12,  0.04], // 5
+        [0.20,  0.08,  0.10,  0.12,  0.18,  0.24,  0.08], // 6
+        [0.30,  0.08,  0.08,  0.08,  0.18,  0.14,  0.14], // 7
+    ],
+};
+
+pub const ALL_MOODS: &[&MoodSet] = &[
+    &MOOD_CALM, &MOOD_TENSE, &MOOD_DARK, &MOOD_EUPHORIC,
+    &MOOD_COSMIC, &MOOD_GRAVITY,
+];
+pub const N_MOODS: usize = 6;
 
 // ---------------------------------------------------------------------------
 // Phrase-boundary harmonic matrix (wider jumps allowed)
@@ -444,6 +516,17 @@ impl VoiceRole {
             Self::Pad     => (48, 71),
             Self::Melody  => (60, 83),
             Self::Texture => (72, 95),
+        }
+    }
+
+    /// Multiplier applied to each chord tone after role bias, to pull notes
+    /// toward the active harmony. Higher = more chord-locked.
+    pub fn chord_attraction(self) -> f32 {
+        match self {
+            Self::Bass    => 3.5, // almost always root/fifth
+            Self::Pad     => 2.5, // chord tones strongly preferred
+            Self::Melody  => 1.6, // mild pull; passing tones still happen
+            Self::Texture => 1.2, // mostly free, slight harmonic gravity
         }
     }
 
@@ -560,6 +643,8 @@ impl MelodicChain {
 
     /// Advance the melodic chain and resolve to a MIDI pitch.
     /// Call only when the rhythmic chain fires `Single`, `Double`, or `Accent`.
+    ///
+    /// `force_root`: if true, snap to the harmonic root degree (used for Bass downbeats).
     pub fn advance_and_resolve(
         &mut self,
         matrix: &MelodicMatrix,
@@ -568,10 +653,31 @@ impl MelodicChain {
         root: u8,
         scale: Scale,
         octave_offset: i8,
+        force_root: bool,
+        chord_attraction: f32,
     ) -> u8 {
-        // Apply role bias to current row
-        let biased = apply_bias_and_normalize(&matrix[self.degree], &role.degree_bias());
-        self.degree = self.rng.sample_row(&biased);
+        if force_root {
+            // Snap to the chord root degree (the harmonic function's own scale degree).
+            self.degree = harmonic.state as usize;
+        } else {
+            // 1. Apply role degree bias
+            let biased = apply_bias_and_normalize(&matrix[self.degree], &role.degree_bias());
+
+            // 2. Apply chord-tone attraction scaled by global param and role weight.
+            //    attraction=0 → no boost; attraction=1 → full role multiplier.
+            let role_mult = role.chord_attraction(); // max multiplier for this role
+            let effective = 1.0 + (role_mult - 1.0) * chord_attraction;
+            let chord_degs = harmonic.chord_degrees();
+            let mut attracted = biased;
+            for &cd in &chord_degs {
+                attracted[cd] *= effective;
+            }
+            // Renormalize after attraction boost
+            let total: f32 = attracted.iter().sum();
+            if total > 0.0 { for v in &mut attracted { *v /= total; } }
+
+            self.degree = self.rng.sample_row(&attracted);
+        }
 
         // Resolve degree to MIDI, clamped to role register
         let raw = scale.degree_to_midi(root, self.degree, octave_offset);
@@ -581,10 +687,6 @@ impl MelodicChain {
         let mut midi = raw;
         while midi < lo && midi + 12 <= hi { midi += 12; }
         while midi > hi && midi >= lo + 12 { midi -= 12; }
-
-        // Soft constraint: on strong harmonic positions, snap to nearest chord tone
-        // (not enforced here — left to future Strategy 3 implementation)
-        let _ = harmonic; // reserved for future use
 
         midi.clamp(lo, hi)
     }
@@ -766,6 +868,21 @@ pub struct MarkovEngineShared {
     pub launchpad: Arc<Vec<[AtomicU8; LAUNCHPAD_COLS]>>,
     /// Current write column in the launchpad ring buffer (0..LAUNCHPAD_COLS).
     pub launchpad_col: Arc<AtomicUsize>,
+
+    // ── Harmonic behaviour controls ──────────────────────────────────────────
+    /// Chord-tone attraction strength (0.0–1.0).
+    /// 0 = voices wander by mood matrix only; 1 = strongly locked to chord tones.
+    pub chord_attraction: Shared,
+    /// When true, Bass voices snap to the chord root on each bar downbeat.
+    pub bass_lock: Arc<std::sync::atomic::AtomicBool>,
+    /// When true, dissonant intervals between simultaneous note-ons are nudged apart.
+    pub dissonance_resolve: Arc<std::sync::atomic::AtomicBool>,
+    /// How aggressively dissonance is resolved.
+    /// 0 = semitones only, 1 = semitones + tritones, 2 = semitones + tritones + minor 7ths.
+    pub dissonance_threshold: Arc<AtomicU8>,
+    /// Per-phrase register drift probability override (0.0–1.0).
+    /// 0 = no drift; 1 = always drift each phrase. Overrides mood-derived probability.
+    pub register_drift: Shared,
 }
 
 impl MarkovEngineShared {
@@ -789,12 +906,22 @@ impl MarkovEngineShared {
                 (0..n_voices).map(|_| std::array::from_fn(|_| AtomicU8::new(0))).collect()
             ),
             launchpad_col: Arc::new(AtomicUsize::new(0)),
+            chord_attraction:     shared(0.5),
+            bass_lock:            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            dissonance_resolve:   Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            dissonance_threshold: Arc::new(AtomicU8::new(1)), // semitones + tritones
+            register_drift:       shared(0.2),
         }
     }
 
     pub fn root(&self) -> u8 { self.root.load(Ordering::Relaxed) }
     pub fn scale(&self) -> Scale { Scale::from_u8(self.scale.load(Ordering::Relaxed)) }
     pub fn density(&self) -> f32 { self.density.value() }
+    pub fn chord_attraction(&self) -> f32 { self.chord_attraction.value().clamp(0.0, 1.0) }
+    pub fn bass_lock(&self) -> bool { self.bass_lock.load(Ordering::Relaxed) }
+    pub fn dissonance_resolve(&self) -> bool { self.dissonance_resolve.load(Ordering::Relaxed) }
+    pub fn dissonance_threshold(&self) -> u8 { self.dissonance_threshold.load(Ordering::Relaxed) }
+    pub fn register_drift(&self) -> f32 { self.register_drift.value().clamp(0.0, 1.0) }
 
     pub fn role(&self, i: usize) -> VoiceRole {
         VoiceRole::from_u8(self.roles[i].load(Ordering::Relaxed))
@@ -827,6 +954,10 @@ pub struct MarkovVoice {
     pub rhythmic: RhythmicChain,
     pub melodic:  MelodicChain,
     pub current_note: Option<u8>,
+    /// Set by on_bar for Bass voices; consumed on the next attack to force root snap.
+    pending_root_snap: bool,
+    /// Per-phrase register drift: added to octave_offset from shared (-1, 0, or +1).
+    pub octave_drift: i8,
 }
 
 /// Events emitted by a single voice per subdivision.
@@ -848,6 +979,8 @@ impl MarkovVoice {
             rhythmic: RhythmicChain::new(seed),
             melodic:  MelodicChain::new(seed ^ 0xDEAD_BEEF, 0),
             current_note: None,
+            pending_root_snap: false,
+            octave_drift: 0,
         }
     }
 
@@ -887,14 +1020,21 @@ impl MarkovVoice {
                 // Release previous note.
                 ev.note_off = self.current_note.take();
 
-                // Advance melodic chain.
+                // Bass voices snap to chord root on downbeats.
+                let force_root = self.pending_root_snap && role == VoiceRole::Bass;
+                self.pending_root_snap = false;
+
+                // Advance melodic chain (combine shared octave offset with phrase drift).
+                let octave = shared.octave_offset(voice_idx) + self.octave_drift;
                 let pitch = self.melodic.advance_and_resolve(
                     melodic_matrix,
                     role,
                     harmonic,
                     shared.root(),
                     shared.scale(),
-                    shared.octave_offset(voice_idx),
+                    octave,
+                    force_root,
+                    shared.chord_attraction(),
                 );
                 self.current_note = Some(pitch);
                 ev.note_on = Some(pitch);
@@ -917,15 +1057,18 @@ pub struct MarkovEngine {
     pub harmonic: HarmonicChain,
     pub phrase:   PhraseCounter,
     moods:        [&'static MoodSet; N_MOODS],
+    /// RNG used for phrase-level decisions (register drift).
+    phrase_rng:   Lcg,
 }
 
 impl MarkovEngine {
     pub fn new(n_voices: usize, seed: u64) -> Self {
         Self {
-            voices:   (0..n_voices).map(|i| MarkovVoice::new(seed ^ (i as u64 * 0x1111_1111))).collect(),
-            harmonic: HarmonicChain::new(seed ^ 0xFEED_FACE),
-            phrase:   PhraseCounter::new(4),
-            moods:    [&MOOD_CALM, &MOOD_TENSE, &MOOD_DARK, &MOOD_EUPHORIC],
+            voices:      (0..n_voices).map(|i| MarkovVoice::new(seed ^ (i as u64 * 0x1111_1111))).collect(),
+            harmonic:    HarmonicChain::new(seed ^ 0xFEED_FACE),
+            phrase:      PhraseCounter::new(4),
+            moods:       [&MOOD_CALM, &MOOD_TENSE, &MOOD_DARK, &MOOD_EUPHORIC, &MOOD_COSMIC, &MOOD_GRAVITY],
+            phrase_rng:  Lcg::new(seed ^ 0xA5A5_B6B6),
         }
     }
 
@@ -935,11 +1078,35 @@ impl MarkovEngine {
         let rhythmic = shared.mood.blend_rhythmic(&self.moods);
         let melodic  = shared.mood.blend_melodic(&self.moods);
 
-        let events: Vec<VoiceEvent> = self.voices
+        let mut events: Vec<VoiceEvent> = self.voices
             .iter_mut()
             .enumerate()
             .map(|(i, v)| v.on_subdivision(&rhythmic, &melodic, &self.harmonic, shared, i))
             .collect();
+
+        // ── Dissonance resolution post-pass ──────────────────────────────────
+        if shared.dissonance_resolve() {
+            let threshold = shared.dissonance_threshold(); // 0=semitones, 1=+tritone, 2=+minor7th
+            let n = events.len();
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    let (pi, pj) = match (events[i].note_on, events[j].note_on) {
+                        (Some(a), Some(b)) => (a, b),
+                        _ => continue,
+                    };
+                    let interval = (pi as i16 - pj as i16).unsigned_abs() % 12;
+                    let is_dissonant = interval == 1            // minor 2nd (always)
+                        || (threshold >= 1 && interval == 6)   // tritone
+                        || (threshold >= 2 && interval == 10); // minor 7th
+                    if is_dissonant {
+                        let (lo, hi) = shared.role(j).register();
+                        let nudged = pj.saturating_add(1).clamp(lo, hi);
+                        events[j].note_on = Some(nudged);
+                        self.voices[j].current_note = Some(nudged);
+                    }
+                }
+            }
+        }
 
         // Write launchpad display buffer (lock-free, best-effort).
         let col = shared.launchpad_col.fetch_add(1, Ordering::Relaxed) % LAUNCHPAD_COLS;
@@ -964,6 +1131,32 @@ impl MarkovEngine {
         } else {
             self.harmonic.advance(&harmonic_matrix);
         }
+
+        // Flag Bass voices to snap to root on their next attack (if bass_lock enabled).
+        if shared.bass_lock() {
+            for (i, voice) in self.voices.iter_mut().enumerate() {
+                if shared.role(i) == VoiceRole::Bass {
+                    voice.pending_root_snap = true;
+                }
+            }
+        }
+
+        // ── Per-phrase register drift ─────────────────────────────────────────
+        // Bass excluded. Probability = register_drift knob (0=off, 1=always).
+        if phrase_ev.phrase_boundary {
+            let drift_prob = shared.register_drift();
+            if drift_prob > 0.0 {
+                for (i, voice) in self.voices.iter_mut().enumerate() {
+                    if shared.role(i) == VoiceRole::Bass { continue; }
+                    let r = (self.phrase_rng.next_u32() as f32) / (u32::MAX as f32);
+                    if r < drift_prob {
+                        let dir: i8 = if self.phrase_rng.next_u32() & 1 == 0 { 1 } else { -1 };
+                        voice.octave_drift = (voice.octave_drift + dir).clamp(-1, 1);
+                    }
+                }
+            }
+        }
+
         phrase_ev
     }
 
@@ -1031,7 +1224,7 @@ mod tests {
                 &MOOD_CALM.melodic,
                 VoiceRole::Melody,
                 &harmonic,
-                60, Scale::Major, 0,
+                60, Scale::Major, 0, false, 0.5,
             );
             let (lo, hi) = VoiceRole::Melody.register();
             assert!(pitch >= lo && pitch <= hi,
@@ -1061,8 +1254,8 @@ mod tests {
     #[test]
     fn mood_blend_uniform_gives_average() {
         let blend = MoodBlend::new();
-        blend.set(&[0.25, 0.25, 0.25, 0.25]);
-        let moods = [&MOOD_CALM, &MOOD_TENSE, &MOOD_DARK, &MOOD_EUPHORIC];
+        blend.set(&[0.166, 0.166, 0.166, 0.166, 0.166, 0.17]);
+        let moods = [&MOOD_CALM, &MOOD_TENSE, &MOOD_DARK, &MOOD_EUPHORIC, &MOOD_COSMIC, &MOOD_GRAVITY];
         let mat = blend.blend_rhythmic(&moods);
         // Each row should still sum to ~1.0
         for row in &mat {
@@ -1108,7 +1301,7 @@ mod tests {
     fn mood_blend_normalization() {
         let blend = MoodBlend::new();
         // Unnormalized input — should be auto-normalized.
-        blend.set(&[2.0, 2.0, 0.0, 0.0]);
+        blend.set(&[2.0, 2.0, 0.0, 0.0, 0.0, 0.0]);
         assert!((blend.weight(0) - 0.5).abs() < 0.001);
         assert!((blend.weight(1) - 0.5).abs() < 0.001);
     }

@@ -12,7 +12,7 @@ use fundsp::prelude::midi_hz;
 use std::sync::Arc;
 
 use ambient_engine::{
-    ACTIVE_MACRO_KNOBS, AmbientEngine, AmbientPatch, MacroSetKind, Scene, MACRO_COUNT, TRACK_COUNT,
+    ACTIVE_MACRO_KNOBS, AmbientEngine, AmbientPatch, MacroSetKind, MarkovScene, Scene, MACRO_COUNT, TRACK_COUNT,
     VOICE_COUNT, load_scene_json, save_scene_json,
     BeatClock, BeatClockShared,
     EuclideanGen, GenerativeMode, ProbTableGen,
@@ -130,6 +130,7 @@ where
     let beat_clock_shared = BeatClockShared::new(120.0);
     let beat_clock_shared_clone = beat_clock_shared.clone();
     let mut beat_clock = BeatClock::default();
+    let mut was_playing = false;
 
     let stream = device.build_output_stream(
         config,
@@ -281,6 +282,18 @@ where
                     }
                 }
             }
+
+            // --- Stop: silence all voices on playing→stopped transition ---
+            let now_playing = beat_clock_shared.is_playing();
+            if was_playing && !now_playing {
+                for ti in 0..TRACK_COUNT {
+                    for slot in 0..VOICE_COUNT {
+                        eng.tracks[ti].voice_gates[slot].set(0.0);
+                    }
+                    voice_notes[ti] = [None; VOICE_COUNT];
+                }
+            }
+            was_playing = now_playing;
 
             // --- Generative pattern generators (BeatClock-driven) ---
             {
@@ -454,6 +467,11 @@ struct AmbientBoxApp {
     markov_voice_density_ui: [f32; TRACK_COUNT],
     markov_voice_role_ui: [u8; TRACK_COUNT],
     markov_voice_enabled_ui: [bool; TRACK_COUNT],
+    markov_chord_attraction_ui: f32,
+    markov_bass_lock_ui: bool,
+    markov_dissonance_resolve_ui: bool,
+    markov_dissonance_threshold_ui: u8,
+    markov_register_drift_ui: f32,
 
     // Global shimmer UI state
     shimmer_on:    bool,
@@ -633,6 +651,11 @@ impl AmbientBoxApp {
                 VoiceRole::Texture as u8,
             ],
             markov_voice_enabled_ui: [true; TRACK_COUNT],
+            markov_chord_attraction_ui: 0.5,
+            markov_bass_lock_ui: true,
+            markov_dissonance_resolve_ui: true,
+            markov_dissonance_threshold_ui: 1,
+            markov_register_drift_ui: 0.2,
             shimmer_on:    false,
             shimmer_mix:   0.4,
             shimmer_amt:   0.5,
@@ -706,6 +729,27 @@ impl AmbientBoxApp {
             }
             if batch.walker[ti] {
                 let _ = self.control.try_send(ControlEvent::WalkerRestart { track: ti as u8 });
+            }
+        }
+    }
+
+    /// Auto-load ambient patches for each Markov voice role on mode switch.
+    /// Preferred patches per role; falls back to any match in the category.
+    fn auto_load_ambient_patches(&mut self) {
+        // (track_index, preferred_name, fallback_category)
+        let assignments: [(usize, &str, &str); TRACK_COUNT] = [
+            (0, "Ambient Bass",     "Bass"),
+            (1, "Ambient Pad",      "Pad"),
+            (2, "Ambient Sprinkle", "Pluck"),
+            (3, "Ambient Texture",  "Ambient"),
+        ];
+        for (track, preferred, fallback_cat) in assignments {
+            // Try preferred name first, then fallback category
+            let idx = self.patch_library.iter().position(|p| p.name == preferred)
+                .or_else(|| self.patch_library.iter().position(|p| p.category == fallback_cat));
+            if let Some(idx) = idx {
+                self.track_patch_choice[track] = idx;
+                self.pending_patch_load = Some((track, idx));
             }
         }
     }
@@ -837,6 +881,11 @@ impl eframe::App for AmbientBoxApp {
                     for i in 0..N_MOODS {
                         self.markov_mood_ui[i] = ms.mood.weight(i);
                     }
+                    self.markov_chord_attraction_ui = ms.chord_attraction.value();
+                    self.markov_bass_lock_ui = ms.bass_lock.load(Ordering::Relaxed);
+                    self.markov_dissonance_resolve_ui = ms.dissonance_resolve.load(Ordering::Relaxed);
+                    self.markov_dissonance_threshold_ui = ms.dissonance_threshold.load(Ordering::Relaxed);
+                    self.markov_register_drift_ui = ms.register_drift.value();
                     // Snapshot launchpad into UI-owned cache so the grid renders every frame
                     self.markov_launchpad_col_cache = ms.launchpad_col.load(Ordering::Relaxed) % LAUNCHPAD_COLS;
                     for row in 0..TRACK_COUNT {
@@ -881,7 +930,9 @@ impl eframe::App for AmbientBoxApp {
             ui.horizontal(|ui| {
                 let btn = if self.transport_sync.playing { "⏹ Stop" } else { "▶ Play" };
                 if ui.button(btn).clicked() {
-                    let due = self.transport_sync.set_playing(!self.transport_sync.playing);
+                    let new_playing = !self.transport_sync.playing;
+                    let due = self.transport_sync.set_playing(new_playing);
+                    self.beat_clock_shared.set_playing(new_playing);
                     self.dispatch_restarts(due);
                 }
                 ui.label("BPM:");
@@ -909,6 +960,7 @@ impl eframe::App for AmbientBoxApp {
                     egui::RichText::new("MARKOV").color(if markov_active { egui::Color32::from_rgb(200, 140, 255) } else { egui::Color32::DARK_GRAY }).strong()
                 ).clicked() && !markov_active {
                     for t in 0..TRACK_COUNT { self.gen_mode_ui[t] = GenerativeMode::Markov as u8; }
+                    self.auto_load_ambient_patches();
                 }
             });
             ui.separator();
@@ -943,12 +995,14 @@ impl eframe::App for AmbientBoxApp {
                 });
                 ui.horizontal(|ui| {
                     ui.label("Mood:");
-                    let mood_labels = ["Calm", "Tense", "Dark", "Euphoric"];
+                    let mood_labels = ["Calm", "Tense", "Dark", "Euphoric", "Cosmic", "Gravity"];
                     let mood_colors = [
                         egui::Color32::from_rgb(100, 200, 255),
                         egui::Color32::from_rgb(255, 100, 100),
                         egui::Color32::from_rgb(120, 80, 200),
                         egui::Color32::from_rgb(255, 220, 60),
+                        egui::Color32::from_rgb(180, 230, 255),
+                        egui::Color32::from_rgb(160, 140, 220),
                     ];
                     for i in 0..N_MOODS {
                         let lbl = mood_labels.get(i).copied().unwrap_or("?");
@@ -960,6 +1014,35 @@ impl eframe::App for AmbientBoxApp {
                     if sum > 0.001 {
                         ui.label(egui::RichText::new(format!("Σ={:.2}", sum)).small().weak());
                     }
+                });
+                // ── Voice behaviour controls ──────────────────────────────────
+                ui.horizontal(|ui| {
+                    ui.label("Harmony:");
+                    ui.add(egui::Slider::new(&mut self.markov_chord_attraction_ui, 0.0f32..=1.0)
+                        .step_by(0.01).clamping(egui::SliderClamping::Always));
+                    ui.checkbox(&mut self.markov_bass_lock_ui, "Bass lock");
+                    ui.separator();
+                    let resolve_color = if self.markov_dissonance_resolve_ui {
+                        egui::Color32::from_rgb(100, 220, 140)
+                    } else {
+                        egui::Color32::GRAY
+                    };
+                    if ui.selectable_label(self.markov_dissonance_resolve_ui,
+                        egui::RichText::new("Resolve").color(resolve_color)
+                    ).clicked() {
+                        self.markov_dissonance_resolve_ui = !self.markov_dissonance_resolve_ui;
+                    }
+                    ui.add_enabled_ui(self.markov_dissonance_resolve_ui, |ui| {
+                        for (val, lbl) in [(0u8, "2nds"), (1u8, "+tritone"), (2u8, "+7ths")] {
+                            if ui.selectable_label(self.markov_dissonance_threshold_ui == val, lbl).clicked() {
+                                self.markov_dissonance_threshold_ui = val;
+                            }
+                        }
+                    });
+                    ui.separator();
+                    ui.label("Drift:");
+                    ui.add(egui::Slider::new(&mut self.markov_register_drift_ui, 0.0f32..=1.0)
+                        .step_by(0.01).clamping(egui::SliderClamping::Always));
                 });
                 ui.separator();
                 // Per-voice rows with inline patch
@@ -998,6 +1081,9 @@ impl eframe::App for AmbientBoxApp {
                         ui.label("Dens:");
                         ui.add(egui::Slider::new(&mut self.markov_voice_density_ui[i], 0.0f32..=1.0)
                             .step_by(0.01).clamping(egui::SliderClamping::Always));
+                        let _ = synth_ui::knob(ui, "Vol", &mut self.track_vol_ui[i], 0.0, 1.0);
+                        let _ = synth_ui::knob(ui, "Shim", &mut self.track_shimmer_send_ui[i], 0.0, 1.0);
+                        let _ = synth_ui::knob(ui, "Crys", &mut self.track_crystal_send_ui[i], 0.0, 1.0);
                     });
                 }
                 // Launchpad grid — rendered from UI-owned cache, no lock needed
@@ -1420,6 +1506,17 @@ impl eframe::App for AmbientBoxApp {
                     let norm = if total > 0.001 { total } else { 1.0 };
                     let normalized: [f32; N_MOODS] = std::array::from_fn(|i| self.markov_mood_ui[i] / norm);
                     ms.mood.set(&normalized);
+                    ms.chord_attraction.set(self.markov_chord_attraction_ui);
+                    ms.bass_lock.store(self.markov_bass_lock_ui, Ordering::Relaxed);
+                    ms.dissonance_resolve.store(self.markov_dissonance_resolve_ui, Ordering::Relaxed);
+                    ms.dissonance_threshold.store(self.markov_dissonance_threshold_ui, Ordering::Relaxed);
+                    ms.register_drift.set(self.markov_register_drift_ui);
+                }
+                // Per-voice track properties (volume, sends) — written for all tracks in Markov mode
+                for i in 0..TRACK_COUNT {
+                    eng.tracks[i].track_vol.set(self.track_vol_ui[i].clamp(0.0, 1.0));
+                    eng.tracks[i].shimmer_send.set(self.track_shimmer_send_ui[i].clamp(0.0, 1.0));
+                    eng.tracks[i].crystal_send.set(self.track_crystal_send_ui[i].clamp(0.0, 1.0));
                 }
                 let ecfg = &eng.euclidean_configs[ti];
                 ecfg.hits.store(self.euclidean_hits_ui[ti], Ordering::Relaxed);
@@ -1455,12 +1552,17 @@ impl eframe::App for AmbientBoxApp {
 
                 if let Some(req) = self.pending_scene_save.take() {
                     let scale = if req.scale_minor { "minor" } else { "major" };
-                    let scene = eng.capture_scene(
+                    let mut scene = eng.capture_scene(
                         req.name.clone(),
                         req.bpm,
                         req.key,
                         scale,
                     );
+                    // Include Markov state when in Markov mode
+                    let mode = GenerativeMode::from_u8(self.gen_mode_ui[0]);
+                    if mode == GenerativeMode::Markov {
+                        scene.markov = Some(eng.capture_markov_scene(GenerativeMode::Markov as u8));
+                    }
                     pending_scene_save = Some((req.path, scene, req.name));
                 }
 
@@ -1469,7 +1571,34 @@ impl eframe::App for AmbientBoxApp {
                     self.scene_bpm = scene.bpm;
                     self.scene_key = scene.key % 12;
                     self.scene_scale_minor = scene.scale.eq_ignore_ascii_case("minor");
+                    // Sync Markov UI state from scene before applying
+                    if let Some(ms) = &scene.markov {
+                        self.markov_root_ui = ms.root;
+                        self.markov_scale_ui = ms.scale;
+                        self.markov_density_ui = ms.density;
+                        self.markov_bars_per_phrase_ui = ms.bars_per_phrase;
+                        for i in 0..TRACK_COUNT {
+                            if let Some(&r) = ms.voice_roles.get(i) { self.markov_voice_role_ui[i] = r; }
+                            if let Some(&d) = ms.voice_densities.get(i) { self.markov_voice_density_ui[i] = d; }
+                            if let Some(&e) = ms.voice_enabled.get(i) { self.markov_voice_enabled_ui[i] = e; }
+                        }
+                        for i in 0..N_MOODS {
+                            if let Some(&w) = ms.mood.get(i) { self.markov_mood_ui[i] = w; }
+                        }
+                        self.markov_chord_attraction_ui = ms.chord_attraction;
+                        self.markov_bass_lock_ui = ms.bass_lock;
+                        self.markov_dissonance_resolve_ui = ms.dissonance_resolve;
+                        self.markov_dissonance_threshold_ui = ms.dissonance_threshold;
+                        self.markov_register_drift_ui = ms.register_drift;
+                        for t in 0..TRACK_COUNT { self.gen_mode_ui[t] = ms.generative_mode; }
+                    }
                     eng.apply_scene(&scene);
+                    // Sync per-voice UI from restored scene values
+                    for i in 0..TRACK_COUNT {
+                        self.track_vol_ui[i] = eng.tracks[i].track_vol.value();
+                        self.track_shimmer_send_ui[i] = eng.tracks[i].shimmer_send.value();
+                        self.track_crystal_send_ui[i] = eng.tracks[i].crystal_send.value();
+                    }
                     self.scene_status = format!("Loaded {path}");
                 }
             }

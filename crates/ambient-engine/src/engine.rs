@@ -84,6 +84,25 @@ pub struct SceneMacro {
     pub targets: Vec<MacroTarget>,
 }
 
+/// Serializable snapshot of the Markov engine configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarkovScene {
+    pub root: u8,
+    pub scale: u8,
+    pub density: f32,
+    pub bars_per_phrase: u32,
+    pub mood: Vec<f32>,         // N_MOODS weights, unnormalized
+    pub voice_roles: Vec<u8>,
+    pub voice_densities: Vec<f32>,
+    pub voice_enabled: Vec<bool>,
+    pub chord_attraction: f32,
+    pub bass_lock: bool,
+    pub dissonance_resolve: bool,
+    pub dissonance_threshold: u8,
+    pub register_drift: f32,
+    pub generative_mode: u8,    // GenerativeMode for all tracks (0=Off, 4=Markov)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SceneTrack {
     pub patch_path: String,
@@ -122,6 +141,9 @@ pub struct Scene {
     pub tracks: [SceneTrack; TRACK_COUNT],
     pub macros: Vec<SceneMacro>,
     pub global: SceneGlobal,
+    /// Markov engine state. Present when mode was Markov at save time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub markov: Option<MarkovScene>,
 }
 
 pub struct AmbientEngine {
@@ -389,6 +411,28 @@ impl AmbientEngine {
         self.core.get_stereo()
     }
 
+    /// Snapshot the Markov shared state into a serializable struct.
+    pub fn capture_markov_scene(&self, generative_mode: u8) -> MarkovScene {
+        let ms = &self.markov_shared;
+        use std::sync::atomic::Ordering;
+        MarkovScene {
+            root: ms.root.load(Ordering::Relaxed),
+            scale: ms.scale.load(Ordering::Relaxed),
+            density: ms.density.value(),
+            bars_per_phrase: ms.bars_per_phrase.load(Ordering::Relaxed),
+            mood: (0..crate::markov::N_MOODS).map(|i| ms.mood.weight(i)).collect(),
+            voice_roles: (0..TRACK_COUNT).map(|i| ms.roles[i].load(Ordering::Relaxed)).collect(),
+            voice_densities: (0..TRACK_COUNT).map(|i| ms.voice_density[i].value()).collect(),
+            voice_enabled: (0..TRACK_COUNT).map(|i| ms.voice_enabled[i].load(Ordering::Relaxed)).collect(),
+            chord_attraction: ms.chord_attraction.value(),
+            bass_lock: ms.bass_lock.load(Ordering::Relaxed),
+            dissonance_resolve: ms.dissonance_resolve.load(Ordering::Relaxed),
+            dissonance_threshold: ms.dissonance_threshold.load(Ordering::Relaxed),
+            register_drift: ms.register_drift.value(),
+            generative_mode,
+        }
+    }
+
     pub fn capture_scene(&self, name: impl Into<String>, bpm: u32, key: u8, scale: impl Into<String>) -> Scene {
         let tracks: [SceneTrack; TRACK_COUNT] = std::array::from_fn(|ti| {
             let t = &self.core.tracks[ti];
@@ -420,6 +464,7 @@ impl AmbientEngine {
             macro_set: self.macro_set_kind,
             tracks,
             macros,
+            markov: None, // caller sets this via capture_markov_scene() if in Markov mode
             global: SceneGlobal {
                 master_vol: self.core.master_vol.value(),
                 shimmer_mix: self.core.shimmer.mix.value(),
@@ -472,6 +517,34 @@ impl AmbientEngine {
         }
 
         self.evaluate_macros();
+
+        // Restore Markov state if present
+        if let Some(ms_data) = &scene.markov {
+            use std::sync::atomic::Ordering;
+            let ms = &self.markov_shared;
+            ms.root.store(ms_data.root, Ordering::Relaxed);
+            ms.scale.store(ms_data.scale, Ordering::Relaxed);
+            ms.density.set(ms_data.density);
+            ms.bars_per_phrase.store(ms_data.bars_per_phrase, Ordering::Relaxed);
+            if ms_data.mood.len() == crate::markov::N_MOODS {
+                let arr: [f32; crate::markov::N_MOODS] = std::array::from_fn(|i| ms_data.mood[i]);
+                ms.mood.set(&arr);
+            }
+            for i in 0..TRACK_COUNT {
+                if let Some(&r) = ms_data.voice_roles.get(i) { ms.roles[i].store(r, Ordering::Relaxed); }
+                if let Some(&d) = ms_data.voice_densities.get(i) { ms.voice_density[i].set(d); }
+                if let Some(&e) = ms_data.voice_enabled.get(i) { ms.voice_enabled[i].store(e, Ordering::Relaxed); }
+            }
+            ms.chord_attraction.set(ms_data.chord_attraction);
+            ms.bass_lock.store(ms_data.bass_lock, Ordering::Relaxed);
+            ms.dissonance_resolve.store(ms_data.dissonance_resolve, Ordering::Relaxed);
+            ms.dissonance_threshold.store(ms_data.dissonance_threshold, Ordering::Relaxed);
+            ms.register_drift.set(ms_data.register_drift);
+            // Propagate generative mode to all tracks
+            for ti in 0..TRACK_COUNT {
+                self.generative_modes[ti].store(ms_data.generative_mode, Ordering::Relaxed);
+            }
+        }
     }
 }
 
@@ -546,6 +619,7 @@ pub fn scene_from_single_patch(
         macro_set: MacroSetKind::AmbientCore,
         tracks,
         macros: Vec::new(),
+        markov: None,
         global: SceneGlobal {
             master_vol: 0.7,
             shimmer_mix: 0.0,

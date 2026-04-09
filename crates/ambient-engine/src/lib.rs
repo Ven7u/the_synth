@@ -31,6 +31,7 @@ pub use markov::{
 pub use patch::AmbientPatch;
 pub use engine::{
     AmbientEngine,
+    MarkovScene,
     MacroSetKind,
     MacroParam,
     MacroTarget,

@@ -1,0 +1,99 @@
+{
+  "name": "Tension Rising",
+  "bpm": 84,
+  "key": 4,
+  "scale": "minor",
+  "macro_set": "AmbientCore",
+  "tracks": [
+    {
+      "patch_path": "assets/patches/Bass/Midnight Crawler.json",
+      "patch": {
+        "name": "Midnight Crawler", "category": "Bass", "synth_model": "theSynth",
+        "osc_wave": [1, 0, 0], "osc_octave": [-2, -1, 0], "osc_detune": [0.0, 5.0, 0.0],
+        "osc_vol": [0.7, 0.3, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.58, 0.5, 0.5], "osc_pw_enabled": [true, false, false],
+        "osc_unison_enabled": [false, false, false], "osc_unison_count": [2, 2, 2],
+        "osc_unison_spread": [20.0, 20.0, 20.0], "hard_sync": false,
+        "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
+        "noise_vol": 0.0, "lfo_enabled": true, "lfo_rate": 0.15, "lfo_depth": 0.08,
+        "lfo_shape": 0, "lfo_dest": 1, "filter_enabled": true, "filter_cutoff": 320.0,
+        "filter_q": 0.25, "filter_env_amount": 0.35, "fenv_adsr": [0.05, 0.4, 0.55, 0.8],
+        "amp_adsr": [0.04, 0.2, 0.8, 0.6], "glide_time": 0.08
+      },
+      "volume": 0.72, "cutoff": 400.0, "resonance": 0.22, "shimmer_send": 0.05, "crystal_send": 0.0
+    },
+    {
+      "patch_path": "assets/patches/Pad/Dark Pad.json",
+      "patch": {
+        "name": "Dark Pad", "category": "Pad", "synth_model": "theSynth",
+        "osc_wave": [1, 1, 0], "osc_octave": [-1, 0, 0], "osc_detune": [0.0, 8.0, 0.0],
+        "osc_vol": [0.5, 0.45, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.55, 0.5, 0.5], "osc_pw_enabled": [true, false, false],
+        "osc_unison_enabled": [true, false, false], "osc_unison_count": [4, 2, 2],
+        "osc_unison_spread": [25.0, 20.0, 20.0], "hard_sync": false,
+        "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
+        "noise_vol": 0.05, "lfo_enabled": true, "lfo_rate": 0.2, "lfo_depth": 0.1,
+        "lfo_shape": 0, "lfo_dest": 1, "filter_enabled": true, "filter_cutoff": 700.0,
+        "filter_q": 0.15, "filter_env_amount": 0.3, "fenv_adsr": [1.5, 1.0, 0.6, 3.0],
+        "amp_adsr": [2.0, 0.8, 0.75, 4.0], "glide_time": 0.1
+      },
+      "volume": 0.58, "cutoff": 800.0, "resonance": 0.15, "shimmer_send": 0.35, "crystal_send": 0.1
+    },
+    {
+      "patch_path": "assets/patches/Pad/Neon Drift.json",
+      "patch": {
+        "name": "Neon Drift", "category": "Pad", "synth_model": "theSynth",
+        "osc_wave": [1, 1, 0], "osc_octave": [0, 1, 0], "osc_detune": [0.0, 9.0, 0.0],
+        "osc_vol": [0.45, 0.4, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.6, 0.5, 0.5], "osc_pw_enabled": [true, false, false],
+        "osc_unison_enabled": [true, true, false], "osc_unison_count": [5, 3, 2],
+        "osc_unison_spread": [28.0, 18.0, 20.0], "hard_sync": false,
+        "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
+        "noise_vol": 0.03, "lfo_enabled": true, "lfo_rate": 0.18, "lfo_depth": 0.14,
+        "lfo_shape": 0, "lfo_dest": 1, "filter_enabled": true, "filter_cutoff": 1200.0,
+        "filter_q": 0.12, "filter_env_amount": 0.25, "fenv_adsr": [1.5, 0.8, 0.6, 3.0],
+        "amp_adsr": [2.0, 0.6, 0.72, 4.0], "glide_time": 0.15
+      },
+      "volume": 0.50, "cutoff": 1400.0, "resonance": 0.12, "shimmer_send": 0.38, "crystal_send": 0.2
+    },
+    {
+      "patch_path": "assets/patches/Ambient/Ambient Texture.json",
+      "patch": {
+        "name": "Ambient Texture", "category": "Ambient", "synth_model": "theSynth",
+        "osc_wave": [1, 0, 0], "osc_octave": [1, 2, 0], "osc_detune": [0.0, 11.0, 0.0],
+        "osc_vol": [0.3, 0.25, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.62, 0.5, 0.5], "osc_pw_enabled": [true, false, false],
+        "osc_unison_enabled": [true, true, false], "osc_unison_count": [8, 6, 2],
+        "osc_unison_spread": [45.0, 32.0, 20.0], "hard_sync": false,
+        "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
+        "noise_vol": 0.12, "lfo_enabled": true, "lfo_rate": 0.06, "lfo_depth": 0.18,
+        "lfo_shape": 0, "lfo_dest": 2, "filter_enabled": true, "filter_cutoff": 2200.0,
+        "filter_q": 0.06, "filter_env_amount": 0.08, "fenv_adsr": [5.0, 2.0, 0.65, 6.0],
+        "amp_adsr": [6.0, 1.5, 0.7, 9.0], "glide_time": 0.35
+      },
+      "volume": 0.35, "cutoff": 2800.0, "resonance": 0.08, "shimmer_send": 0.45, "crystal_send": 0.22
+    }
+  ],
+  "macros": [],
+  "global": {
+    "master_vol": 0.62,
+    "shimmer_mix": 0.32, "shimmer_amount": 0.45, "shimmer_size": 0.72, "shimmer_damp": 0.42, "shimmer_pitch": 1,
+    "crystal_mix": 0.25, "crystal_grain_ms": 75.0, "crystal_scatter": 0.38, "crystal_feedback": 0.38, "crystal_delay_ms": 280.0, "crystal_pitch": 1
+  },
+  "markov": {
+    "root": 52,
+    "scale": 1,
+    "density": 0.58,
+    "bars_per_phrase": 4,
+    "mood": [0.0, 0.55, 0.2, 0.0, 0.0, 0.25],
+    "voice_roles": [0, 1, 1, 3],
+    "voice_densities": [0.0, 0.0, 0.0, 0.0],
+    "voice_enabled": [true, true, true, true],
+    "chord_attraction": 0.55,
+    "bass_lock": true,
+    "dissonance_resolve": true,
+    "dissonance_threshold": 1,
+    "register_drift": 0.35,
+    "generative_mode": 4
+  }
+}

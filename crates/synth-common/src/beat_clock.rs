@@ -13,6 +13,7 @@
 //! - 1 beat = `subdivisions` subdivisions  (default 4 → 16th notes)
 //! - Position: (bar, beat, subdivision) — all zero-indexed
 
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
 use fundsp::prelude32::{shared, Shared};
 
 // ---------------------------------------------------------------------------
@@ -61,11 +62,13 @@ impl BeatEvents {
 pub struct BeatClockShared {
     /// Beats per minute. Clamp to [1, 999] before writing.
     pub bpm: Shared,
+    /// Transport playing state. When false, tick() returns empty events.
+    pub playing: Arc<AtomicBool>,
 }
 
 impl BeatClockShared {
     pub fn new(bpm: f32) -> Self {
-        Self { bpm: shared(bpm) }
+        Self { bpm: shared(bpm), playing: Arc::new(AtomicBool::new(false)) }
     }
 
     pub fn bpm(&self) -> f32 {
@@ -74,6 +77,14 @@ impl BeatClockShared {
 
     pub fn set_bpm(&self, bpm: f32) {
         self.bpm.set_value(bpm.clamp(1.0, 999.0));
+    }
+
+    pub fn set_playing(&self, playing: bool) {
+        self.playing.store(playing, Ordering::Relaxed);
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.playing.load(Ordering::Relaxed)
     }
 }
 
@@ -133,6 +144,7 @@ impl BeatClock {
     /// the first crossing is reported — callers processing rhythmic events should call
     /// `tick` once per buffer and act on the coarsest flag needed.
     pub fn tick(&mut self, frames: usize, sr: f64, shared: &BeatClockShared) -> BeatEvents {
+        self.running = shared.is_playing();
         if !self.running || frames == 0 {
             return BeatEvents::default();
         }
