@@ -258,7 +258,7 @@ impl RhythmicState {
 // MoodSet — named triple of matrices
 // ---------------------------------------------------------------------------
 
-/// A named mood: three matrices, a display label, and a gate length hint.
+/// A named mood: three matrices, a display label, and behavioural hints.
 #[derive(Clone)]
 pub struct MoodSet {
     pub name:       &'static str,
@@ -267,6 +267,16 @@ pub struct MoodSet {
     pub melodic:    MelodicMatrix,
     /// How long notes sustain relative to the step interval (0.0=1 subdiv, 1.0=16 subdivs).
     pub gate_length: f32,
+    /// Rhythmic speed multiplier. 1.0 = use role's base divisor as-is.
+    /// <1.0 = slower (e.g. 0.5 = half speed, every voice steps half as often).
+    /// >1.0 = faster (e.g. 2.0 = double speed).
+    /// Blended across moods, then applied to each role's rhythmic_divisor.
+    pub rhythmic_speed: f32,
+    /// Probability that the harmonic chain advances on each bar (0.0–1.0).
+    /// 1.0 = always advance (current behaviour). 0.0 = chord never changes.
+    /// At 0.3, the chord holds ~3 bars on average before changing.
+    /// Blended across moods, then rolled per bar in on_bar().
+    pub chord_change_prob: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -281,6 +291,8 @@ pub struct MoodSet {
 pub const MOOD_CALM: MoodSet = MoodSet {
     name: "Calm",
     gate_length: 0.85, // long, breathing sustains
+    rhythmic_speed: 0.7, // slower pulse — Satie's unhurried tempo
+    chord_change_prob: 0.4, // chords linger — I↔IV pendulum is slow
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
         [0.40,  0.05,  0.02,  0.35,  0.05,  0.10,  0.03], // I   — sits, then → IV
@@ -319,6 +331,8 @@ pub const MOOD_CALM: MoodSet = MoodSet {
 pub const MOOD_TENSE: MoodSet = MoodSet {
     name: "Tense",
     gate_length: 0.20, // short, stabby, agitated
+    rhythmic_speed: 1.5, // frantic pace — Herrmann's relentless tension
+    chord_change_prob: 0.9, // harmony shifts restlessly — unresolved Wagner chromaticism
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
         [0.05,  0.15,  0.05,  0.10,  0.40,  0.10,  0.15], // I   — destabilizes to V/vii
@@ -357,6 +371,8 @@ pub const MOOD_TENSE: MoodSet = MoodSet {
 pub const MOOD_DARK: MoodSet = MoodSet {
     name: "Dark",
     gate_length: 0.90, // heavy, drone-like sustains when notes appear
+    rhythmic_speed: 0.6, // slow, brooding — Radiohead's sparse pacing
+    chord_change_prob: 0.35, // chords hang in darkness — Aeolian cadence is unhurried
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
         [0.10,  0.03,  0.08,  0.12,  0.10,  0.35,  0.22], // I   → vi/vii (darkens)
@@ -395,6 +411,8 @@ pub const MOOD_DARK: MoodSet = MoodSet {
 pub const MOOD_EUPHORIC: MoodSet = MoodSet {
     name: "Euphoric",
     gate_length: 0.30, // short, bright, bouncy
+    rhythmic_speed: 1.8, // fast energetic pulse — EDM build energy
+    chord_change_prob: 1.0, // harmony always moves forward — Pachelbel never stops
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
         [0.08,  0.05,  0.05,  0.25,  0.40,  0.12,  0.05], // I   → V/IV (moves forward)
@@ -433,6 +451,8 @@ pub const MOOD_EUPHORIC: MoodSet = MoodSet {
 pub const MOOD_COSMIC: MoodSet = MoodSet {
     name: "Cosmic",
     gate_length: 0.95, // near-infinite sustain, drone-like
+    rhythmic_speed: 0.4, // glacial — Vangelis/Tangerine Dream timelessness
+    chord_change_prob: 0.15, // chords barely change — Interstellar organ sits for minutes
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
         [0.45,  0.02,  0.03,  0.35,  0.02,  0.10,  0.03], // I   — sits, then → IV
@@ -472,6 +492,8 @@ pub const MOOD_COSMIC: MoodSet = MoodSet {
 pub const MOOD_GRAVITY: MoodSet = MoodSet {
     name: "Gravity",
     gate_length: 0.55, // medium — deliberate, mechanical
+    rhythmic_speed: 1.4, // mechanical clock-pulse — Glass's relentless arpeggiation
+    chord_change_prob: 0.85, // tight chord cycles — minimalist loops advance steadily
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
         [0.08,  0.05,  0.03,  0.12,  0.50,  0.15,  0.07], // I   → V (pushes forward)
@@ -637,14 +659,24 @@ impl RhythmicChain {
     /// Call once per subdivision. Returns the new state only when the role's
     /// divisor threshold is reached (i.e. not every subdivision triggers a step).
     /// Returns `None` when this subdivision is skipped for this role.
+    ///
+    /// `rhythmic_speed`: mood-blended speed multiplier (1.0 = normal).
+    /// >1.0 = faster (lower effective divisor), <1.0 = slower (higher effective divisor).
     pub fn on_subdivision(
         &mut self,
         matrix: &RhythmicMatrix,
         density: f32,
         role: VoiceRole,
+        rhythmic_speed: f32,
     ) -> Option<RhythmicState> {
         self.subdiv_counter += 1;
-        if self.subdiv_counter < role.rhythmic_divisor() {
+        // Scale the role's base divisor by the inverse of rhythmic_speed.
+        // speed=2.0 → effective_divisor = base/2 (steps twice as often).
+        // speed=0.5 → effective_divisor = base*2 (steps half as often).
+        let effective_divisor = (role.rhythmic_divisor() as f32 / rhythmic_speed.max(0.1))
+            .round()
+            .max(1.0) as u32;
+        if self.subdiv_counter < effective_divisor {
             return None;
         }
         self.subdiv_counter = 0;
@@ -832,6 +864,22 @@ impl MoodBlend {
     /// Blend gate_length from mood weights. Returns value in [0.0, 1.0].
     pub fn blend_gate_length(&self, moods: &[&MoodSet; N_MOODS]) -> f32 {
         moods.iter().enumerate().map(|(i, m)| self.weight(i) * m.gate_length).sum::<f32>().clamp(0.0, 1.0)
+    }
+
+    /// Blend rhythmic_speed from mood weights. Returns multiplier (>0).
+    pub fn blend_rhythmic_speed(&self, moods: &[&MoodSet; N_MOODS]) -> f32 {
+        moods.iter().enumerate()
+            .map(|(i, m)| self.weight(i) * m.rhythmic_speed)
+            .sum::<f32>()
+            .max(0.1) // never fully stop
+    }
+
+    /// Blend chord_change_prob from mood weights. Returns probability in [0.0, 1.0].
+    pub fn blend_chord_change_prob(&self, moods: &[&MoodSet; N_MOODS]) -> f32 {
+        moods.iter().enumerate()
+            .map(|(i, m)| self.weight(i) * m.chord_change_prob)
+            .sum::<f32>()
+            .clamp(0.0, 1.0)
     }
 
     pub fn blend_melodic(&self, moods: &[&MoodSet; N_MOODS]) -> MelodicMatrix {
@@ -1071,6 +1119,7 @@ impl MarkovVoice {
     /// Call once per Markov step (after clock division is applied by the engine).
     /// `gate_subdivs`: maximum number of steps a note sustains before auto-off.
     ///   1 = staccato (note cut after one step), 16 = let patch ADSR decay naturally.
+    /// `rhythmic_speed`: mood-blended speed multiplier (1.0 = normal).
     pub fn on_subdivision(
         &mut self,
         rhythmic_matrix: &RhythmicMatrix,
@@ -1079,6 +1128,7 @@ impl MarkovVoice {
         shared:          &MarkovEngineShared,
         voice_idx:       usize,
         gate_subdivs:    u32,
+        rhythmic_speed:  f32,
     ) -> VoiceEvent {
         if !shared.voice_enabled(voice_idx) {
             let note_off = self.current_note.take();
@@ -1100,7 +1150,7 @@ impl MarkovVoice {
             }
         }
 
-        let Some(rhythmic_state) = self.rhythmic.on_subdivision(rhythmic_matrix, density, role)
+        let Some(rhythmic_state) = self.rhythmic.on_subdivision(rhythmic_matrix, density, role, rhythmic_speed)
         else {
             return VoiceEvent::default();
         };
@@ -1184,10 +1234,13 @@ impl MarkovEngine {
         let gate_blend = shared.mood.blend_gate_length(&self.moods).clamp(0.0, 1.0);
         let gate_subdivs = ((gate_blend * 15.0) as u32 + 1).max(1);
 
+        // Blend rhythmic speed from moods.
+        let rhythmic_speed = shared.mood.blend_rhythmic_speed(&self.moods);
+
         let mut events: Vec<VoiceEvent> = self.voices
             .iter_mut()
             .enumerate()
-            .map(|(i, v)| v.on_subdivision(&rhythmic, &melodic, &self.harmonic, shared, i, gate_subdivs))
+            .map(|(i, v)| v.on_subdivision(&rhythmic, &melodic, &self.harmonic, shared, i, gate_subdivs, rhythmic_speed))
             .collect();
 
         // ── Dissonance resolution post-pass ──────────────────────────────────
@@ -1250,7 +1303,17 @@ impl MarkovEngine {
             }
             self.harmonic.advance(&PHRASE_BOUNDARY_HARMONIC);
         } else {
-            self.harmonic.advance(&harmonic_matrix);
+            // ── Harmonic rhythm control ───────────────────────────────────────
+            // Roll against blended chord_change_prob to decide whether the
+            // harmonic chain actually advances this bar. At 1.0 it always
+            // advances (previous behaviour). At 0.15 (Cosmic) the chord holds
+            // ~6–7 bars on average.
+            let chord_prob = shared.mood.blend_chord_change_prob(&self.moods);
+            let r = (self.phrase_rng.next_u32() as f32) / (u32::MAX as f32);
+            if r < chord_prob {
+                self.harmonic.advance(&harmonic_matrix);
+            }
+            // else: chord holds — harmonic chain stays on current state.
         }
 
         // Flag Bass voices to snap to root on their next attack (if bass_lock enabled).
@@ -1682,7 +1745,7 @@ mod tests {
         chain.state = RhythmicState::Single;
         let mut rest_count = 0u32;
         for _ in 0..200 {
-            if let Some(st) = chain.on_subdivision(&MOOD_CALM.rhythmic, 0.0, VoiceRole::Melody) {
+            if let Some(st) = chain.on_subdivision(&MOOD_CALM.rhythmic, 0.0, VoiceRole::Melody, 1.0) {
                 if st == RhythmicState::Rest { rest_count += 1; }
             }
         }
@@ -1695,7 +1758,7 @@ mod tests {
         chain.state = RhythmicState::Single;
         let mut rest_count = 0u32;
         for _ in 0..200 {
-            if let Some(st) = chain.on_subdivision(&MOOD_CALM.rhythmic, 1.0, VoiceRole::Melody) {
+            if let Some(st) = chain.on_subdivision(&MOOD_CALM.rhythmic, 1.0, VoiceRole::Melody, 1.0) {
                 if st == RhythmicState::Rest { rest_count += 1; }
             }
         }
