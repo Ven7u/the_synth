@@ -5,6 +5,8 @@
 
 #![allow(clippy::precedence)]
 
+mod recorder;
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample, Stream};
 use eframe::egui;
@@ -51,7 +53,8 @@ fn main() -> eframe::Result {
     let engine = Arc::new(std::sync::Mutex::new(AmbientEngine::new(sr)));
     let (tx, rx) = make_control_channel(1024);
 
-    let (beat_clock_shared, _stream) = build_stream(Arc::clone(&engine), rx, sr).expect("Failed to build audio stream");
+    let recorder_sink: RecorderSink = Arc::new(std::sync::Mutex::new(None));
+    let (beat_clock_shared, _stream) = build_stream(Arc::clone(&engine), rx, sr, Arc::clone(&recorder_sink)).expect("Failed to build audio stream");
     _stream.play().expect("Failed to start audio stream");
 
     let options = eframe::NativeOptions {
@@ -67,7 +70,7 @@ fn main() -> eframe::Result {
         Box::new(move |cc| {
             let last_scene = cc.storage
                 .and_then(|s| s.get_string("last_scene"));
-            Ok(Box::new(AmbientBoxApp::new(engine, tx, _stream, beat_clock_shared, last_scene)))
+            Ok(Box::new(AmbientBoxApp::new(engine, tx, _stream, beat_clock_shared, last_scene, recorder_sink, sr as u32)))
         }),
     )
 }
@@ -83,10 +86,13 @@ fn get_default_sr() -> Option<f64> {
 // cpal stream
 // ---------------------------------------------------------------------------
 
+type RecorderSink = Arc<std::sync::Mutex<Option<recorder::Recorder>>>;
+
 fn build_stream(
     engine: Arc<std::sync::Mutex<AmbientEngine>>,
     rx: synth_control::ControlReceiver,
     sr: f64,
+    recorder_sink: RecorderSink,
 ) -> anyhow::Result<(BeatClockShared, Stream)> {
     let host = cpal::default_host();
     let device = host.default_output_device()
@@ -94,9 +100,9 @@ fn build_stream(
     let config = device.default_output_config()?;
 
     let (shared, stream) = match config.sample_format() {
-        cpal::SampleFormat::F32 => make_stream::<f32>(&device, &config.into(), engine, rx, sr)?,
-        cpal::SampleFormat::I16 => make_stream::<i16>(&device, &config.into(), engine, rx, sr)?,
-        cpal::SampleFormat::U16 => make_stream::<u16>(&device, &config.into(), engine, rx, sr)?,
+        cpal::SampleFormat::F32 => make_stream::<f32>(&device, &config.into(), engine, rx, sr, recorder_sink)?,
+        cpal::SampleFormat::I16 => make_stream::<i16>(&device, &config.into(), engine, rx, sr, recorder_sink)?,
+        cpal::SampleFormat::U16 => make_stream::<u16>(&device, &config.into(), engine, rx, sr, recorder_sink)?,
         _ => anyhow::bail!("Unsupported sample format"),
     };
     Ok((shared, stream))
@@ -108,6 +114,7 @@ fn make_stream<T>(
     engine: Arc<std::sync::Mutex<AmbientEngine>>,
     rx: synth_control::ControlReceiver,
     sr: f64,
+    recorder_sink: RecorderSink,
 ) -> anyhow::Result<(BeatClockShared, Stream)>
 where
     T: SizedSample + FromSample<f32>,
@@ -438,6 +445,13 @@ where
                     (0.0f32, 0.0f32)
                 };
 
+                // Recorder tap — non-blocking, won't affect real-time thread.
+                if let Ok(rec) = recorder_sink.try_lock() {
+                    if let Some(ref r_handle) = *rec {
+                        r_handle.push(l, r);
+                    }
+                }
+
                 last_out_l = l;
                 last_out_r = r;
                 let left  = T::from_sample(l);
@@ -590,6 +604,11 @@ struct AmbientBoxApp {
     pending_scene_save: Option<PendingSceneSave>,
     pending_scene_load_path: Option<String>,
     pending_scene_load: Option<(String, Scene)>,
+
+    // Recording
+    recorder_sink: RecorderSink,
+    rec_status: String,
+    sample_rate: u32,
 }
 
 impl AmbientBoxApp {
@@ -666,6 +685,8 @@ impl AmbientBoxApp {
         stream: Stream,
         beat_clock_shared: BeatClockShared,
         last_scene: Option<String>,
+        recorder_sink: RecorderSink,
+        sr: u32,
     ) -> Self {
         let mut midi = MidiEngine::new();
         midi.list_ports();
@@ -777,6 +798,9 @@ impl AmbientBoxApp {
             pending_scene_save: None,
             pending_scene_load_path: last_scene.map(|name| format!("scenes/{name}.json")),
             pending_scene_load: None,
+            recorder_sink,
+            rec_status: String::new(),
+            sample_rate: sr,
         }
     }
 
@@ -2001,6 +2025,52 @@ impl eframe::App for AmbientBoxApp {
                     }
                 });
             }
+            // ── Recording ────────────────────────────────────────────────────
+            ui.horizontal(|ui| {
+                let is_recording = self.recorder_sink.lock().map(|g| g.is_some()).unwrap_or(false);
+                if is_recording {
+                    if ui.button(egui::RichText::new("■ Stop Recording").color(egui::Color32::RED)).clicked() {
+                        if let Ok(mut guard) = self.recorder_sink.lock() {
+                            if let Some(rec) = guard.take() {
+                                let path = rec.path.clone();
+                                match rec.stop() {
+                                    Ok(()) => self.rec_status = format!("Saved: {path}"),
+                                    Err(e) => self.rec_status = format!("Record error: {e}"),
+                                }
+                            }
+                        }
+                    }
+                } else if ui.button("● Record WAV").clicked() {
+                    let default_path = {
+                        let name = if self.scene_name.trim().is_empty() { "recording" } else { self.scene_name.trim() };
+                        format!("recordings/{name}.wav")
+                    };
+                    let path = rfd::FileDialog::new()
+                        .set_title("Save recording as")
+                        .set_file_name(std::path::Path::new(&default_path).file_name().and_then(|n| n.to_str()).unwrap_or("recording.wav"))
+                        .add_filter("WAV audio", &["wav"])
+                        .save_file()
+                        .map(|p| p.to_string_lossy().to_string());
+                    if let Some(path) = path {
+                        if let Some(parent) = std::path::Path::new(&path).parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        match recorder::Recorder::start(path.clone(), self.sample_rate) {
+                            Ok(rec) => {
+                                if let Ok(mut guard) = self.recorder_sink.lock() {
+                                    *guard = Some(rec);
+                                }
+                                self.rec_status = format!("Recording → {path}");
+                            }
+                            Err(e) => self.rec_status = format!("Record start failed: {e}"),
+                        }
+                    }
+                }
+                if !self.rec_status.is_empty() {
+                    ui.label(egui::RichText::new(&self.rec_status).small());
+                }
+            });
+
             if self.pending_scene_load.is_none() {
                 if let Some(path) = self.pending_scene_load_path.take() {
                     match load_scene_json(&path) {
