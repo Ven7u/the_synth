@@ -6,6 +6,7 @@
 #![allow(clippy::precedence)]
 
 mod recorder;
+mod midi_recorder;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample, Stream};
@@ -54,7 +55,8 @@ fn main() -> eframe::Result {
     let (tx, rx) = make_control_channel(1024);
 
     let recorder_sink: RecorderSink = Arc::new(std::sync::Mutex::new(None));
-    let (beat_clock_shared, _stream) = build_stream(Arc::clone(&engine), rx, sr, Arc::clone(&recorder_sink)).expect("Failed to build audio stream");
+    let midi_sink_shared: MidiSinkShared = Arc::new(std::sync::Mutex::new(None));
+    let (beat_clock_shared, _stream) = build_stream(Arc::clone(&engine), rx, sr, Arc::clone(&recorder_sink), Arc::clone(&midi_sink_shared)).expect("Failed to build audio stream");
     _stream.play().expect("Failed to start audio stream");
 
     let options = eframe::NativeOptions {
@@ -70,7 +72,7 @@ fn main() -> eframe::Result {
         Box::new(move |cc| {
             let last_scene = cc.storage
                 .and_then(|s| s.get_string("last_scene"));
-            Ok(Box::new(AmbientBoxApp::new(engine, tx, _stream, beat_clock_shared, last_scene, recorder_sink, sr as u32)))
+            Ok(Box::new(AmbientBoxApp::new(engine, tx, _stream, beat_clock_shared, last_scene, recorder_sink, midi_sink_shared, sr as u32)))
         }),
     )
 }
@@ -87,12 +89,15 @@ fn get_default_sr() -> Option<f64> {
 // ---------------------------------------------------------------------------
 
 type RecorderSink = Arc<std::sync::Mutex<Option<recorder::Recorder>>>;
+/// Shared MIDI sink: set to Some(sink) when MIDI recording is active.
+type MidiSinkShared = Arc<std::sync::Mutex<Option<midi_recorder::MidiSink>>>;
 
 fn build_stream(
     engine: Arc<std::sync::Mutex<AmbientEngine>>,
     rx: synth_control::ControlReceiver,
     sr: f64,
     recorder_sink: RecorderSink,
+    midi_sink: MidiSinkShared,
 ) -> anyhow::Result<(BeatClockShared, Stream)> {
     let host = cpal::default_host();
     let device = host.default_output_device()
@@ -100,9 +105,9 @@ fn build_stream(
     let config = device.default_output_config()?;
 
     let (shared, stream) = match config.sample_format() {
-        cpal::SampleFormat::F32 => make_stream::<f32>(&device, &config.into(), engine, rx, sr, recorder_sink)?,
-        cpal::SampleFormat::I16 => make_stream::<i16>(&device, &config.into(), engine, rx, sr, recorder_sink)?,
-        cpal::SampleFormat::U16 => make_stream::<u16>(&device, &config.into(), engine, rx, sr, recorder_sink)?,
+        cpal::SampleFormat::F32 => make_stream::<f32>(&device, &config.into(), engine, rx, sr, recorder_sink, midi_sink)?,
+        cpal::SampleFormat::I16 => make_stream::<i16>(&device, &config.into(), engine, rx, sr, recorder_sink, midi_sink)?,
+        cpal::SampleFormat::U16 => make_stream::<u16>(&device, &config.into(), engine, rx, sr, recorder_sink, midi_sink)?,
         _ => anyhow::bail!("Unsupported sample format"),
     };
     Ok((shared, stream))
@@ -115,6 +120,7 @@ fn make_stream<T>(
     rx: synth_control::ControlReceiver,
     sr: f64,
     recorder_sink: RecorderSink,
+    midi_sink: MidiSinkShared,
 ) -> anyhow::Result<(BeatClockShared, Stream)>
 where
     T: SizedSample + FromSample<f32>,
@@ -147,6 +153,9 @@ where
     let beat_clock_shared_clone = beat_clock_shared.clone();
     let mut beat_clock = BeatClock::default();
     let mut was_playing = false;
+
+    // Running sample counter for MIDI timestamp.
+    let mut sample_pos: u64 = 0;
 
     // Debug counters (audio-thread local, printed to stderr periodically).
     let mut dbg_callback_count: u64 = 0;
@@ -351,6 +360,10 @@ where
                             // Return empty events (voices handle gate age internally on next real step).
                             vec![Default::default(); TRACK_COUNT]
                         };
+                        // Snapshot MIDI sink once per subdivision block.
+                        let midi_tap = midi_sink.try_lock().ok()
+                            .and_then(|g| g.as_ref().map(|s| s.clone()));
+
                         for (ti, voice_ev) in voice_events.iter().enumerate().take(TRACK_COUNT) {
                             if let Some(pitch) = voice_ev.note_off {
                                 let found = voice_notes[ti].iter_mut().enumerate().any(|(slot, note)| {
@@ -361,6 +374,9 @@ where
                                 });
                                 if !found {
                                     dbg_miss_noteoff[ti] += 1;
+                                }
+                                if let Some(ref sink) = midi_tap {
+                                    sink.note_off(sample_pos, ti as u8, pitch);
                                 }
                             }
                             if let Some(pitch) = voice_ev.note_on {
@@ -379,6 +395,10 @@ where
                                     eng.tracks[ti].voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
                                     let velocity = if voice_ev.accent { 1.0f32 } else { 0.75f32 };
                                     eng.tracks[ti].voice_gates[slot].set(velocity);
+                                    if let Some(ref sink) = midi_tap {
+                                        let vel_u8 = (velocity * 127.0) as u8;
+                                        sink.note_on(sample_pos, ti as u8, pitch, vel_u8);
+                                    }
                                 }
                             }
                         }
@@ -459,6 +479,7 @@ where
                 for (i, smp) in frame.iter_mut().enumerate() {
                     *smp = if i & 1 == 0 { left } else { right };
                 }
+                sample_pos += 1;
             }
 
             // --- Periodic debug dump every ~5 s (at 512-frame buffers / 44100 Hz ≈ 430 callbacks/s) ---
@@ -605,9 +626,13 @@ struct AmbientBoxApp {
     pending_scene_load_path: Option<String>,
     pending_scene_load: Option<(String, Scene)>,
 
-    // Recording
+    // WAV recording
     recorder_sink: RecorderSink,
     rec_status: String,
+    // MIDI recording
+    midi_sink_shared: MidiSinkShared,
+    midi_recorder: Option<midi_recorder::MidiRecorder>,
+    midi_rec_status: String,
     sample_rate: u32,
 }
 
@@ -686,6 +711,7 @@ impl AmbientBoxApp {
         beat_clock_shared: BeatClockShared,
         last_scene: Option<String>,
         recorder_sink: RecorderSink,
+        midi_sink_shared: MidiSinkShared,
         sr: u32,
     ) -> Self {
         let mut midi = MidiEngine::new();
@@ -800,6 +826,9 @@ impl AmbientBoxApp {
             pending_scene_load: None,
             recorder_sink,
             rec_status: String::new(),
+            midi_sink_shared,
+            midi_recorder: None,
+            midi_rec_status: String::new(),
             sample_rate: sr,
         }
     }
@@ -2068,6 +2097,53 @@ impl eframe::App for AmbientBoxApp {
                 }
                 if !self.rec_status.is_empty() {
                     ui.label(egui::RichText::new(&self.rec_status).small());
+                }
+
+                ui.separator();
+
+                // MIDI recording
+                let midi_recording = self.midi_recorder.is_some();
+                if midi_recording {
+                    if ui.button(egui::RichText::new("■ Stop MIDI Rec").color(egui::Color32::from_rgb(255, 140, 0))).clicked() {
+                        // Pull the sink out of the shared slot first so the audio thread stops sending.
+                        if let Ok(mut guard) = self.midi_sink_shared.lock() {
+                            *guard = None;
+                        }
+                        if let Some(rec) = self.midi_recorder.take() {
+                            let path = rec.path.clone();
+                            match rec.stop() {
+                                Ok(()) => self.midi_rec_status = format!("MIDI saved: {path}"),
+                                Err(e) => self.midi_rec_status = format!("MIDI error: {e}"),
+                            }
+                        }
+                    }
+                } else if ui.button("● Record MIDI").clicked() {
+                    let default_name = if self.scene_name.trim().is_empty() { "recording" } else { self.scene_name.trim() };
+                    let path = rfd::FileDialog::new()
+                        .set_title("Save MIDI recording as")
+                        .set_file_name(&format!("{default_name}.mid"))
+                        .add_filter("MIDI file", &["mid"])
+                        .save_file()
+                        .map(|p| p.to_string_lossy().to_string());
+                    if let Some(path) = path {
+                        if let Some(parent) = std::path::Path::new(&path).parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        let bpm = self.beat_clock_shared.bpm() as f32;
+                        match midi_recorder::MidiRecorder::start(path.clone(), self.sample_rate, bpm, TRACK_COUNT) {
+                            Ok((rec, sink)) => {
+                                if let Ok(mut guard) = self.midi_sink_shared.lock() {
+                                    *guard = Some(sink);
+                                }
+                                self.midi_recorder = Some(rec);
+                                self.midi_rec_status = format!("MIDI recording → {path}");
+                            }
+                            Err(e) => self.midi_rec_status = format!("MIDI start failed: {e}"),
+                        }
+                    }
+                }
+                if !self.midi_rec_status.is_empty() {
+                    ui.label(egui::RichText::new(&self.midi_rec_status).small());
                 }
             });
 
