@@ -273,210 +273,232 @@ pub struct MoodSet {
 // Built-in moods
 // ---------------------------------------------------------------------------
 
-/// Calm: tonic-heavy, sparse rhythm, stepwise melody, strong tonic pull.
+/// Calm — inspired by Satie (Gymnopédies), Debussy, Brian Eno (Music for Airports).
+/// Harmonic signature: I↔IV plagal pendulum, V is rare and resolves immediately.
+/// Tonic sits for long stretches (I self-loop 0.40). Harmony barely moves.
+/// Melodic signature: Satie-like stepwise 1→2→3→2→1 pendulum, very narrow range.
+/// Rhythmic signature: extremely sparse, Rest/Hold dominate, Double/Accent near-zero.
 pub const MOOD_CALM: MoodSet = MoodSet {
     name: "Calm",
-    gate_length: 0.75, // long sustained notes
+    gate_length: 0.85, // long, breathing sustains
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
-        [0.25,  0.10,  0.05,  0.25,  0.20,  0.10,  0.05], // I
-        [0.05,  0.15,  0.05,  0.15,  0.40,  0.15,  0.05], // ii
-        [0.10,  0.10,  0.10,  0.25,  0.20,  0.20,  0.05], // iii
-        [0.25,  0.10,  0.05,  0.20,  0.25,  0.10,  0.05], // IV
-        [0.45,  0.05,  0.05,  0.10,  0.15,  0.15,  0.05], // V
-        [0.15,  0.20,  0.05,  0.20,  0.25,  0.10,  0.05], // vi
-        [0.35,  0.10,  0.05,  0.15,  0.20,  0.10,  0.05], // vii
+        [0.40,  0.05,  0.02,  0.35,  0.05,  0.10,  0.03], // I   — sits, then → IV
+        [0.10,  0.10,  0.05,  0.15,  0.40,  0.15,  0.05], // ii  → V (when it appears)
+        [0.10,  0.05,  0.05,  0.35,  0.10,  0.30,  0.05], // iii → IV or vi
+        [0.55,  0.05,  0.03,  0.15,  0.10,  0.10,  0.02], // IV  → I (plagal resolution)
+        [0.65,  0.05,  0.03,  0.10,  0.05,  0.10,  0.02], // V   → I (immediate resolve)
+        [0.15,  0.10,  0.05,  0.40,  0.10,  0.15,  0.05], // vi  → IV
+        [0.50,  0.05,  0.05,  0.15,  0.10,  0.10,  0.05], // vii → I
     ],
     rhythmic: [
         //  Rest   Hold   Single Double Accent
-        [0.40,  0.20,  0.35,  0.03,  0.02], // Rest
-        [0.15,  0.45,  0.35,  0.03,  0.02], // Hold
-        [0.25,  0.20,  0.40,  0.10,  0.05], // Single
-        [0.30,  0.10,  0.45,  0.10,  0.05], // Double
-        [0.35,  0.15,  0.40,  0.08,  0.02], // Accent
+        [0.50,  0.20,  0.25,  0.03,  0.02], // Rest  — stays silent
+        [0.10,  0.55,  0.30,  0.03,  0.02], // Hold  — long sustains
+        [0.30,  0.25,  0.35,  0.06,  0.04], // Single
+        [0.45,  0.15,  0.30,  0.07,  0.03], // Double → rest (transient)
+        [0.45,  0.20,  0.28,  0.05,  0.02], // Accent → rest (transient)
     ],
     melodic: [
         //  1      2      3      4      5      6      7
-        [0.25,  0.30,  0.15,  0.05,  0.15,  0.05,  0.05], // 1
-        [0.20,  0.20,  0.30,  0.15,  0.08,  0.05,  0.02], // 2
-        [0.10,  0.25,  0.20,  0.25,  0.12,  0.05,  0.03], // 3
-        [0.05,  0.15,  0.20,  0.20,  0.25,  0.10,  0.05], // 4
-        [0.20,  0.08,  0.12,  0.15,  0.25,  0.15,  0.05], // 5
-        [0.10,  0.05,  0.10,  0.10,  0.20,  0.25,  0.20], // 6
-        [0.30,  0.05,  0.05,  0.05,  0.15,  0.15,  0.25], // 7
+        [0.25,  0.40,  0.15,  0.03,  0.12,  0.03,  0.02], // 1 → 2 (stepwise)
+        [0.30,  0.15,  0.35,  0.10,  0.05,  0.03,  0.02], // 2 → 1 or 3
+        [0.10,  0.35,  0.20,  0.20,  0.10,  0.03,  0.02], // 3 → 2 (stepwise back)
+        [0.05,  0.10,  0.35,  0.15,  0.30,  0.03,  0.02], // 4 → 3 or 5
+        [0.20,  0.05,  0.10,  0.15,  0.25,  0.15,  0.10], // 5
+        [0.08,  0.05,  0.05,  0.05,  0.35,  0.20,  0.22], // 6 → 5
+        [0.55,  0.05,  0.05,  0.03,  0.12,  0.10,  0.10], // 7 → 1 (resolve)
     ],
 };
 
-/// Tense: dominant-heavy, dense/accented rhythm, leaping dissonant melody.
+/// Tense — inspired by Wagner (Tristan und Isolde), Herrmann (Vertigo), Penderecki.
+/// Harmonic signature: V is a black hole that never resolves. ii→V→V→vii→V loops.
+/// I has minimal self-loop (stability impossible). The "Tristan" dominant hangs.
+/// Melodic signature: tritone-prone (4↔7), avoids resolution to 1, wide leaps.
+/// Rhythmic signature: bursts — Rest explodes into Double/Accent, then collapses.
 pub const MOOD_TENSE: MoodSet = MoodSet {
     name: "Tense",
-    gate_length: 0.25, // short, punchy, agitated
+    gate_length: 0.20, // short, stabby, agitated
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
-        [0.10,  0.15,  0.05,  0.15,  0.35,  0.10,  0.10], // I
-        [0.05,  0.10,  0.05,  0.10,  0.50,  0.10,  0.10], // ii
-        [0.08,  0.12,  0.08,  0.20,  0.30,  0.12,  0.10], // iii
-        [0.15,  0.10,  0.05,  0.10,  0.40,  0.10,  0.10], // IV
-        [0.30,  0.08,  0.05,  0.10,  0.25,  0.12,  0.10], // V
-        [0.10,  0.20,  0.05,  0.15,  0.35,  0.08,  0.07], // vi
-        [0.25,  0.10,  0.05,  0.10,  0.30,  0.10,  0.10], // vii
+        [0.05,  0.15,  0.05,  0.10,  0.40,  0.10,  0.15], // I   — destabilizes to V/vii
+        [0.03,  0.08,  0.05,  0.10,  0.55,  0.10,  0.09], // ii  → V (dominant pull)
+        [0.05,  0.12,  0.05,  0.15,  0.35,  0.15,  0.13], // iii → V
+        [0.08,  0.10,  0.05,  0.05,  0.45,  0.12,  0.15], // IV  → V
+        [0.15,  0.12,  0.05,  0.08,  0.30,  0.15,  0.15], // V   — hangs (self-loop 0.30)
+        [0.05,  0.25,  0.08,  0.12,  0.30,  0.08,  0.12], // vi  → ii or V
+        [0.12,  0.15,  0.08,  0.10,  0.30,  0.10,  0.15], // vii — circles with V
     ],
     rhythmic: [
         //  Rest   Hold   Single Double Accent
-        [0.15,  0.05,  0.40,  0.25,  0.15], // Rest
-        [0.10,  0.20,  0.40,  0.20,  0.10], // Hold
-        [0.10,  0.10,  0.35,  0.30,  0.15], // Single
-        [0.15,  0.05,  0.35,  0.35,  0.10], // Double
-        [0.20,  0.05,  0.35,  0.25,  0.15], // Accent
+        [0.15,  0.03,  0.30,  0.32,  0.20], // Rest  → burst (Double/Accent)
+        [0.15,  0.10,  0.35,  0.25,  0.15], // Hold  → breaks into attack
+        [0.12,  0.05,  0.30,  0.33,  0.20], // Single → Double/Accent
+        [0.25,  0.03,  0.30,  0.27,  0.15], // Double → Rest (collapse)
+        [0.30,  0.03,  0.30,  0.22,  0.15], // Accent → Rest (collapse)
     ],
     melodic: [
         //  1      2      3      4      5      6      7
-        [0.15,  0.10,  0.20,  0.05,  0.30,  0.10,  0.10], // 1
-        [0.10,  0.10,  0.15,  0.10,  0.25,  0.20,  0.10], // 2
-        [0.20,  0.10,  0.10,  0.10,  0.25,  0.15,  0.10], // 3
-        [0.15,  0.10,  0.15,  0.10,  0.30,  0.10,  0.10], // 4
-        [0.25,  0.05,  0.15,  0.10,  0.15,  0.15,  0.15], // 5
-        [0.20,  0.05,  0.10,  0.10,  0.25,  0.15,  0.15], // 6
-        [0.35,  0.05,  0.10,  0.05,  0.25,  0.10,  0.10], // 7
+        [0.05,  0.08,  0.12,  0.20,  0.25,  0.15,  0.15], // 1 → 4/5/7 (leaps out)
+        [0.08,  0.05,  0.12,  0.20,  0.15,  0.25,  0.15], // 2 → 4/6 (avoid tonic)
+        [0.10,  0.08,  0.05,  0.12,  0.25,  0.15,  0.25], // 3 → 5/7 (tritone)
+        [0.08,  0.10,  0.15,  0.05,  0.30,  0.12,  0.20], // 4 → 5/7 (tritone pair)
+        [0.10,  0.05,  0.10,  0.25,  0.10,  0.20,  0.20], // 5 → 4/6/7 (destabilize)
+        [0.08,  0.05,  0.08,  0.15,  0.25,  0.10,  0.29], // 6 → 7 (leading to nowhere)
+        [0.12,  0.08,  0.10,  0.20,  0.25,  0.15,  0.10], // 7 → 4/5 (avoids 1!)
     ],
 };
 
-/// Dark: minor-leaning, modal, sparse with sudden accents, low-register wandering.
+/// Dark — inspired by Radiohead (Exit Music), Pink Floyd (Breathe), Andalusian cadence.
+/// Harmonic signature: vi and vii are home bases. Aeolian cadence I→vii→vi→V→vi.
+/// V→vi deceptive cadence (0.40) denies resolution. bVI/bVII modal character.
+/// Melodic signature: descending, minor 3rd emphasis, b6/b7 prominent, 7→6→5 chains.
+/// Rhythmic signature: sparse with sudden stabs — silence, then violent Accent, then silence.
 pub const MOOD_DARK: MoodSet = MoodSet {
     name: "Dark",
-    gate_length: 0.85, // very long, heavy sustains
+    gate_length: 0.90, // heavy, drone-like sustains when notes appear
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
-        [0.30,  0.05,  0.05,  0.10,  0.15,  0.25,  0.10], // I   → vi (modal)
-        [0.05,  0.20,  0.05,  0.15,  0.30,  0.20,  0.05], // ii
-        [0.10,  0.10,  0.15,  0.15,  0.15,  0.25,  0.10], // iii
-        [0.20,  0.05,  0.05,  0.25,  0.20,  0.20,  0.05], // IV
-        [0.35,  0.05,  0.05,  0.10,  0.20,  0.20,  0.05], // V
-        [0.20,  0.10,  0.10,  0.15,  0.15,  0.20,  0.10], // vi
-        [0.25,  0.08,  0.05,  0.15,  0.22,  0.15,  0.10], // vii
+        [0.10,  0.03,  0.08,  0.12,  0.10,  0.35,  0.22], // I   → vi/vii (darkens)
+        [0.05,  0.08,  0.05,  0.12,  0.30,  0.30,  0.10], // ii  → V or vi
+        [0.08,  0.05,  0.05,  0.25,  0.10,  0.30,  0.17], // iii → vi
+        [0.15,  0.05,  0.05,  0.10,  0.15,  0.25,  0.25], // IV  → vi/vii
+        [0.15,  0.05,  0.03,  0.07,  0.10,  0.40,  0.20], // V   → vi (deceptive!)
+        [0.10,  0.05,  0.08,  0.25,  0.12,  0.12,  0.28], // vi  → IV/vii (Andalusian)
+        [0.30,  0.05,  0.05,  0.10,  0.12,  0.28,  0.10], // vii → I or vi
     ],
     rhythmic: [
         //  Rest   Hold   Single Double Accent
-        [0.45,  0.25,  0.20,  0.02,  0.08], // Rest  — mostly stays silent
-        [0.10,  0.55,  0.25,  0.02,  0.08], // Hold  — long sustains
-        [0.30,  0.15,  0.35,  0.05,  0.15], // Single
-        [0.35,  0.10,  0.40,  0.08,  0.07], // Double
-        [0.40,  0.10,  0.35,  0.05,  0.10], // Accent — accents lead to rest
+        [0.50,  0.18,  0.15,  0.03,  0.14], // Rest  — silence, then sudden stab
+        [0.12,  0.55,  0.18,  0.03,  0.12], // Hold  — long drone sustains
+        [0.35,  0.15,  0.25,  0.08,  0.17], // Single → often back to Rest
+        [0.40,  0.10,  0.25,  0.10,  0.15], // Double → Rest (collapses)
+        [0.55,  0.10,  0.20,  0.05,  0.10], // Accent → Rest (jump-scare dies)
     ],
     melodic: [
         //  1      2      3      4      5      6      7
-        [0.30,  0.15,  0.10,  0.08,  0.15,  0.12,  0.10], // 1
-        [0.20,  0.20,  0.15,  0.15,  0.10,  0.10,  0.10], // 2
-        [0.15,  0.20,  0.25,  0.15,  0.10,  0.10,  0.05], // 3 (b3 in minor)
-        [0.08,  0.15,  0.20,  0.20,  0.20,  0.12,  0.05], // 4
-        [0.20,  0.10,  0.10,  0.15,  0.25,  0.10,  0.10], // 5
-        [0.15,  0.10,  0.15,  0.10,  0.15,  0.25,  0.10], // 6 (b6 in minor)
-        [0.35,  0.08,  0.08,  0.05,  0.15,  0.12,  0.17], // 7 → resolve to 1
+        [0.15,  0.10,  0.20,  0.05,  0.12,  0.15,  0.23], // 1 → 3/7 (descending feel)
+        [0.15,  0.10,  0.30,  0.12,  0.08,  0.15,  0.10], // 2 → 3 (minor 3rd)
+        [0.18,  0.15,  0.15,  0.22,  0.12,  0.10,  0.08], // 3 → 4 (descending)
+        [0.05,  0.08,  0.30,  0.12,  0.25,  0.12,  0.08], // 4 → 3/5
+        [0.12,  0.05,  0.10,  0.15,  0.15,  0.25,  0.18], // 5 → 6 (descending)
+        [0.10,  0.05,  0.12,  0.08,  0.25,  0.15,  0.25], // 6 → 5/7 (b6 oscillation)
+        [0.25,  0.05,  0.08,  0.05,  0.10,  0.30,  0.17], // 7 → 6 (descends, not resolves)
     ],
 };
 
-/// Euphoric: fast major resolutions, IV→I lifts, high-energy ascending.
+/// Euphoric — inspired by Pachelbel (Canon), Sigur Rós (Hoppípolla), EDM/trance builds.
+/// Harmonic signature: I→V→vi→IV cycle (Pachelbel/pop). IV→I plagal lift (0.55).
+/// V→I fast joyful resolution (0.55). Low self-loops — harmony always moves forward.
+/// Melodic signature: strongly ascending 1→3→5→6→7→1. Pentatonic feel.
+/// Rhythmic signature: steady energetic pulse, Single dominates, Rest is rare.
 pub const MOOD_EUPHORIC: MoodSet = MoodSet {
     name: "Euphoric",
-    gate_length: 0.30, // short, bright, energetic
+    gate_length: 0.30, // short, bright, bouncy
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
-        [0.20,  0.05,  0.05,  0.35,  0.25,  0.05,  0.05], // I   → IV strong lift
-        [0.10,  0.10,  0.05,  0.20,  0.45,  0.05,  0.05], // ii  → V
-        [0.15,  0.10,  0.08,  0.25,  0.30,  0.07,  0.05], // iii
-        [0.40,  0.05,  0.05,  0.15,  0.25,  0.05,  0.05], // IV  → I (plagal lift)
-        [0.50,  0.05,  0.05,  0.15,  0.15,  0.05,  0.05], // V   → I (strong resolve)
-        [0.20,  0.15,  0.05,  0.25,  0.25,  0.05,  0.05], // vi
-        [0.40,  0.08,  0.05,  0.15,  0.22,  0.05,  0.05], // vii → I
+        [0.08,  0.05,  0.05,  0.25,  0.40,  0.12,  0.05], // I   → V/IV (moves forward)
+        [0.05,  0.05,  0.05,  0.15,  0.50,  0.15,  0.05], // ii  → V
+        [0.08,  0.05,  0.05,  0.45,  0.15,  0.15,  0.07], // iii → IV (Pachelbel)
+        [0.55,  0.03,  0.03,  0.05,  0.25,  0.05,  0.04], // IV  → I (plagal lift!)
+        [0.55,  0.03,  0.03,  0.05,  0.05,  0.25,  0.04], // V   → I or vi
+        [0.08,  0.05,  0.15,  0.45,  0.12,  0.08,  0.07], // vi  → IV (the pop cycle)
+        [0.50,  0.05,  0.05,  0.15,  0.15,  0.05,  0.05], // vii → I
     ],
     rhythmic: [
         //  Rest   Hold   Single Double Accent
-        [0.10,  0.05,  0.45,  0.25,  0.15], // Rest  — rarely stays resting
-        [0.08,  0.15,  0.45,  0.22,  0.10], // Hold
-        [0.10,  0.08,  0.35,  0.32,  0.15], // Single — lots of doubles/accents
-        [0.12,  0.05,  0.38,  0.32,  0.13], // Double
-        [0.15,  0.05,  0.40,  0.28,  0.12], // Accent
+        [0.05,  0.03,  0.50,  0.27,  0.15], // Rest  → Single (immediate pulse)
+        [0.05,  0.08,  0.50,  0.25,  0.12], // Hold  → Single
+        [0.08,  0.05,  0.40,  0.30,  0.17], // Single → Single/Double (steady)
+        [0.10,  0.05,  0.40,  0.28,  0.17], // Double
+        [0.10,  0.05,  0.45,  0.25,  0.15], // Accent
     ],
     melodic: [
         //  1      2      3      4      5      6      7
-        [0.15,  0.15,  0.25,  0.05,  0.25,  0.10,  0.05], // 1 → 3 or 5 (ascending)
-        [0.10,  0.10,  0.35,  0.10,  0.20,  0.10,  0.05], // 2 → 3
-        [0.15,  0.10,  0.15,  0.10,  0.30,  0.15,  0.05], // 3 → 5
-        [0.10,  0.10,  0.20,  0.10,  0.35,  0.10,  0.05], // 4 → 5
-        [0.20,  0.05,  0.15,  0.05,  0.20,  0.25,  0.10], // 5 → 6 (ascending)
-        [0.15,  0.05,  0.10,  0.05,  0.20,  0.20,  0.25], // 6 → 7
-        [0.40,  0.05,  0.10,  0.05,  0.20,  0.10,  0.10], // 7 → 1 (resolve up)
+        [0.10,  0.25,  0.25,  0.05,  0.25,  0.05,  0.05], // 1 → 2/3/5 (ascend)
+        [0.10,  0.08,  0.40,  0.10,  0.20,  0.07,  0.05], // 2 → 3 (ascending)
+        [0.08,  0.08,  0.10,  0.10,  0.45,  0.12,  0.07], // 3 → 5 (leap up)
+        [0.05,  0.05,  0.15,  0.05,  0.50,  0.12,  0.08], // 4 → 5
+        [0.10,  0.03,  0.08,  0.05,  0.12,  0.42,  0.20], // 5 → 6 (ascending)
+        [0.08,  0.03,  0.05,  0.03,  0.10,  0.12,  0.59], // 6 → 7 (climbing)
+        [0.60,  0.05,  0.08,  0.03,  0.12,  0.07,  0.05], // 7 → 1 (triumphant resolve)
     ],
 };
 
-/// Cosmic (Interstellar-inspired): long harmonic cycles, IV↔I plagal motion,
-/// vi as a resting point, very sparse rhythm, slow stepwise melody.
-/// Inspired by Hans Zimmer's organ-driven space feel.
+/// Cosmic — inspired by Zimmer (Interstellar organ), Vangelis (Blade Runner), Tangerine Dream.
+/// Harmonic signature: I↔IV plagal oscillation, harmonic time nearly stops.
+/// I self-loop 0.45 (just sits). V almost never appears. vi is rare Vangelis color.
+/// Melodic signature: near-static drone. 1→1 self-loop, 1↔5 organ 5th oscillation.
+/// Rhythmic signature: extremely sparse — a note event is a rare cosmic occurrence.
 pub const MOOD_COSMIC: MoodSet = MoodSet {
     name: "Cosmic",
     gate_length: 0.95, // near-infinite sustain, drone-like
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
-        [0.20,  0.05,  0.05,  0.30,  0.10,  0.25,  0.05], // I   → IV or vi (plagal)
-        [0.08,  0.12,  0.05,  0.20,  0.30,  0.20,  0.05], // ii
-        [0.10,  0.08,  0.12,  0.20,  0.15,  0.30,  0.05], // iii → vi
-        [0.35,  0.08,  0.05,  0.18,  0.15,  0.14,  0.05], // IV  → I (plagal cadence)
-        [0.25,  0.10,  0.05,  0.25,  0.10,  0.20,  0.05], // V   → IV or I
-        [0.25,  0.10,  0.10,  0.25,  0.12,  0.12,  0.06], // vi  → I or IV
-        [0.30,  0.08,  0.05,  0.20,  0.20,  0.12,  0.05], // vii
+        [0.45,  0.02,  0.03,  0.35,  0.02,  0.10,  0.03], // I   — sits, then → IV
+        [0.15,  0.10,  0.05,  0.30,  0.10,  0.25,  0.05], // ii  → IV/vi
+        [0.10,  0.05,  0.10,  0.30,  0.05,  0.35,  0.05], // iii → IV/vi
+        [0.50,  0.03,  0.03,  0.20,  0.04,  0.15,  0.05], // IV  → I (plagal return)
+        [0.40,  0.05,  0.05,  0.30,  0.05,  0.10,  0.05], // V   → I/IV (V is lost here)
+        [0.20,  0.05,  0.08,  0.40,  0.05,  0.15,  0.07], // vi  → IV
+        [0.35,  0.05,  0.05,  0.25,  0.10,  0.15,  0.05], // vii → I
     ],
     rhythmic: [
         //  Rest   Hold   Single Double Accent
-        [0.55,  0.30,  0.12,  0.02,  0.01], // Rest  — very sparse
-        [0.08,  0.65,  0.22,  0.03,  0.02], // Hold  — long sustained tones
-        [0.35,  0.25,  0.30,  0.06,  0.04], // Single
-        [0.40,  0.15,  0.35,  0.07,  0.03], // Double
-        [0.45,  0.20,  0.28,  0.05,  0.02], // Accent
+        [0.60,  0.25,  0.12,  0.02,  0.01], // Rest  — vast silence
+        [0.05,  0.70,  0.20,  0.03,  0.02], // Hold  — infinite sustain
+        [0.40,  0.25,  0.25,  0.06,  0.04], // Single → back to Rest/Hold
+        [0.50,  0.15,  0.25,  0.07,  0.03], // Double → Rest (transient)
+        [0.50,  0.20,  0.22,  0.05,  0.03], // Accent → Rest (transient)
     ],
     melodic: [
         //  1      2      3      4      5      6      7
-        [0.30,  0.25,  0.12,  0.08,  0.12,  0.08,  0.05], // 1 → stepwise
-        [0.22,  0.22,  0.28,  0.12,  0.08,  0.05,  0.03], // 2 → 3
-        [0.12,  0.22,  0.22,  0.22,  0.12,  0.06,  0.04], // 3
-        [0.08,  0.12,  0.22,  0.22,  0.22,  0.10,  0.04], // 4
-        [0.18,  0.08,  0.10,  0.18,  0.24,  0.16,  0.06], // 5
-        [0.18,  0.06,  0.08,  0.10,  0.18,  0.26,  0.14], // 6
-        [0.32,  0.06,  0.06,  0.08,  0.14,  0.18,  0.16], // 7 → resolve to 1
+        [0.40,  0.20,  0.08,  0.05,  0.20,  0.04,  0.03], // 1 → 1/2/5 (drone + 5th)
+        [0.30,  0.20,  0.22,  0.10,  0.10,  0.05,  0.03], // 2 → 1 (return to drone)
+        [0.12,  0.28,  0.22,  0.18,  0.12,  0.05,  0.03], // 3 → 2 (stepwise)
+        [0.08,  0.10,  0.25,  0.22,  0.25,  0.07,  0.03], // 4 → 3/5
+        [0.30,  0.05,  0.08,  0.12,  0.30,  0.10,  0.05], // 5 → 1/5 (organ 5th)
+        [0.15,  0.05,  0.05,  0.08,  0.30,  0.22,  0.15], // 6 → 5
+        [0.40,  0.05,  0.05,  0.05,  0.18,  0.15,  0.12], // 7 → 1 (resolve)
     ],
 };
 
-/// Gravity (Interstellar docking scene): minor, dense sustained harmonics,
-/// vi–IV–I–V cycle, mechanical rhythm with sudden silences, narrow melodic range.
+/// Gravity — inspired by Philip Glass (Koyaanisqatsi), Zimmer (Interstellar docking),
+/// Michael Nyman (The Piano). Minimalist ostinato, relentless repetition.
+/// Harmonic signature: tight I→V→vi→IV→I loop. V→vi deceptive cadence (0.55)
+/// keeps deflecting resolution. Low self-loops — always moving, but in circles.
+/// Melodic signature: 1↔5↔3 ostinato pendulum, Glass-like arpeggiation.
+/// Rhythmic signature: mechanical Single pulse, clock-like, the machine never stops.
 pub const MOOD_GRAVITY: MoodSet = MoodSet {
     name: "Gravity",
-    gate_length: 0.60, // medium — intentional, deliberate
+    gate_length: 0.55, // medium — deliberate, mechanical
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
-        [0.12,  0.08,  0.05,  0.20,  0.28,  0.22,  0.05], // I
-        [0.08,  0.10,  0.05,  0.18,  0.40,  0.14,  0.05], // ii → V
-        [0.10,  0.10,  0.08,  0.22,  0.22,  0.22,  0.06], // iii
-        [0.28,  0.08,  0.05,  0.12,  0.22,  0.20,  0.05], // IV → I
-        [0.22,  0.10,  0.05,  0.18,  0.12,  0.28,  0.05], // V  → vi (deceptive)
-        [0.20,  0.12,  0.08,  0.30,  0.18,  0.08,  0.04], // vi → IV
-        [0.28,  0.10,  0.05,  0.15,  0.28,  0.10,  0.04], // vii
+        [0.08,  0.05,  0.03,  0.12,  0.50,  0.15,  0.07], // I   → V (pushes forward)
+        [0.05,  0.05,  0.03,  0.10,  0.50,  0.20,  0.07], // ii  → V
+        [0.08,  0.05,  0.05,  0.30,  0.20,  0.25,  0.07], // iii → IV/vi
+        [0.45,  0.05,  0.03,  0.05,  0.20,  0.17,  0.05], // IV  → I (return)
+        [0.15,  0.05,  0.03,  0.05,  0.08,  0.55,  0.09], // V   → vi (deceptive!)
+        [0.08,  0.08,  0.05,  0.50,  0.15,  0.08,  0.06], // vi  → IV (the cycle)
+        [0.20,  0.05,  0.05,  0.15,  0.35,  0.15,  0.05], // vii → V
     ],
     rhythmic: [
         //  Rest   Hold   Single Double Accent
-        [0.30,  0.18,  0.32,  0.12,  0.08], // Rest
-        [0.12,  0.40,  0.32,  0.10,  0.06], // Hold — sustained with occasional attacks
-        [0.18,  0.15,  0.35,  0.20,  0.12], // Single
-        [0.22,  0.08,  0.35,  0.25,  0.10], // Double
-        [0.28,  0.10,  0.35,  0.18,  0.09], // Accent → rest (abrupt)
+        [0.08,  0.10,  0.55,  0.15,  0.12], // Rest  → Single (machine starts)
+        [0.08,  0.15,  0.50,  0.15,  0.12], // Hold  → Single
+        [0.10,  0.12,  0.45,  0.20,  0.13], // Single → Single (steady pulse)
+        [0.12,  0.08,  0.45,  0.22,  0.13], // Double
+        [0.15,  0.08,  0.45,  0.20,  0.12], // Accent
     ],
     melodic: [
         //  1      2      3      4      5      6      7
-        [0.28,  0.20,  0.18,  0.08,  0.12,  0.08,  0.06], // 1 — narrow stepwise
-        [0.22,  0.22,  0.25,  0.14,  0.08,  0.06,  0.03], // 2
-        [0.18,  0.22,  0.22,  0.20,  0.10,  0.05,  0.03], // 3 (b3 in minor)
-        [0.10,  0.15,  0.22,  0.22,  0.18,  0.08,  0.05], // 4
-        [0.22,  0.10,  0.12,  0.18,  0.22,  0.12,  0.04], // 5
-        [0.20,  0.08,  0.10,  0.12,  0.18,  0.24,  0.08], // 6
-        [0.30,  0.08,  0.08,  0.08,  0.18,  0.14,  0.14], // 7
+        [0.15,  0.12,  0.25,  0.05,  0.35,  0.05,  0.03], // 1 → 3/5 (ostinato)
+        [0.25,  0.10,  0.30,  0.10,  0.15,  0.07,  0.03], // 2 → 1/3
+        [0.15,  0.15,  0.12,  0.15,  0.30,  0.08,  0.05], // 3 → 5 (arpeggio up)
+        [0.08,  0.10,  0.25,  0.10,  0.35,  0.08,  0.04], // 4 → 3/5
+        [0.35,  0.08,  0.15,  0.10,  0.15,  0.10,  0.07], // 5 → 1 (arpeggio down)
+        [0.15,  0.05,  0.10,  0.08,  0.30,  0.15,  0.17], // 6 → 5
+        [0.40,  0.08,  0.10,  0.05,  0.20,  0.10,  0.07], // 7 → 1 (resolve)
     ],
 };
 
@@ -900,6 +922,11 @@ pub struct MarkovEngineShared {
     /// 1 = every 16th note, 2 = every 8th note, 4 = every beat, 8 = every 2 beats.
     pub clock_div: Arc<AtomicU8>,
 
+    // ── Phrase epoch (for Timeline synchronization) ────────────────────────
+    /// Monotonically increasing counter, incremented on each phrase boundary
+    /// by the audio thread. The control thread polls this to drive the Timeline.
+    pub phrase_epoch: Arc<AtomicUsize>,
+
     // ── Harmonic sequence ────────────────────────────────────────────────────
     /// Number of active chord slots in the sequence (1–8). 1 = static key (legacy).
     pub seq_len: Arc<AtomicU8>,
@@ -940,6 +967,7 @@ impl MarkovEngineShared {
             dissonance_threshold: Arc::new(AtomicU8::new(1)),
             register_drift:       shared(0.2),
             clock_div:            Arc::new(AtomicU8::new(4)), // one step per beat by default
+            phrase_epoch:         Arc::new(AtomicUsize::new(0)),
             seq_len:              Arc::new(AtomicU8::new(1)),
             seq_roots:   (0..Self::SEQ_MAX).map(|_| Arc::new(AtomicU8::new(60))).collect(),
             seq_scales:  (0..Self::SEQ_MAX).map(|_| Arc::new(AtomicU8::new(0))).collect(),
@@ -1205,6 +1233,9 @@ impl MarkovEngine {
         self.phrase.bars_per_phrase = shared.bars_per_phrase();
 
         if phrase_ev.phrase_boundary {
+            // Signal the control thread that a phrase boundary occurred.
+            shared.phrase_epoch.fetch_add(1, Ordering::Relaxed);
+
             // Advance harmonic sequence slot if sequence length > 1.
             let seq_len = shared.seq_len();
             if seq_len > 1 {
@@ -1251,6 +1282,372 @@ impl MarkovEngine {
     }
 
     pub fn n_voices(&self) -> usize { self.voices.len() }
+}
+
+// ---------------------------------------------------------------------------
+// Timeline — song-level temporal structure (Phase 8.7)
+// ---------------------------------------------------------------------------
+
+use serde::{Deserialize, Serialize};
+
+/// Optional per-section effects overrides.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EffectsTargets {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shimmer_mix: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shimmer_amount: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shimmer_size: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crystal_mix: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crystal_feedback: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crystal_delay_ms: Option<f32>,
+}
+
+/// One section in a Timeline: a target state the engine interpolates toward.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineSection {
+    /// Display name ("Intro", "Build", "Peak", …).
+    pub name: String,
+    /// How many phrases this section lasts before advancing.
+    pub phrases: u32,
+    /// How many phrases to spend crossfading from the previous section (≤ phrases).
+    #[serde(default)]
+    pub transition_phrases: u32,
+
+    // ── Target values (all optional — omitted = carry forward from previous) ──
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mood: Option<Vec<f32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub density: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bars_per_phrase: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_enabled: Option<Vec<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects: Option<EffectsTargets>,
+}
+
+/// Fully resolved parameter snapshot (no Options). Used for interpolation endpoints.
+#[derive(Debug, Clone)]
+pub struct ResolvedState {
+    pub mood: [f32; N_MOODS],
+    pub density: f32,
+    pub root: u8,
+    pub scale: u8,
+    pub bars_per_phrase: u32,
+    pub voice_enabled: [bool; 4],
+    pub shimmer_mix: f32,
+    pub shimmer_amount: f32,
+    pub shimmer_size: f32,
+    pub crystal_mix: f32,
+    pub crystal_feedback: f32,
+    pub crystal_delay_ms: f32,
+}
+
+impl Default for ResolvedState {
+    fn default() -> Self {
+        Self {
+            mood: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0], // 100% Calm
+            density: 0.3,
+            root: 60,
+            scale: 0,
+            bars_per_phrase: 4,
+            voice_enabled: [true; 4],
+            shimmer_mix: 0.5,
+            shimmer_amount: 0.5,
+            shimmer_size: 0.5,
+            crystal_mix: 0.2,
+            crystal_feedback: 0.3,
+            crystal_delay_ms: 400.0,
+        }
+    }
+}
+
+impl ResolvedState {
+    /// Create a resolved state by reading current values from shared atomics.
+    pub fn snapshot_from_shared(shared: &MarkovEngineShared) -> Self {
+        let mut mood = [0.0f32; N_MOODS];
+        for i in 0..N_MOODS {
+            mood[i] = shared.mood.weight(i);
+        }
+        let mut voice_enabled = [true; 4];
+        for i in 0..4.min(shared.voice_enabled.len()) {
+            voice_enabled[i] = shared.voice_enabled[i].load(Ordering::Relaxed);
+        }
+        Self {
+            mood,
+            density: shared.density(),
+            root: shared.root(),
+            scale: shared.scale.load(Ordering::Relaxed),
+            bars_per_phrase: shared.bars_per_phrase(),
+            voice_enabled,
+            // Effects are not in MarkovEngineShared — use defaults, will be overwritten
+            // by the actual scene globals when first resolved.
+            shimmer_mix: 0.5,
+            shimmer_amount: 0.5,
+            shimmer_size: 0.5,
+            crystal_mix: 0.2,
+            crystal_feedback: 0.3,
+            crystal_delay_ms: 400.0,
+        }
+    }
+
+    /// Apply a section's optional fields on top of this state, returning a new resolved state.
+    pub fn with_section(&self, section: &TimelineSection) -> Self {
+        let mut out = self.clone();
+        if let Some(ref mood) = section.mood {
+            for (i, &w) in mood.iter().enumerate().take(N_MOODS) {
+                out.mood[i] = w;
+            }
+        }
+        if let Some(d) = section.density { out.density = d; }
+        if let Some(r) = section.root { out.root = r; }
+        if let Some(s) = section.scale { out.scale = s; }
+        if let Some(b) = section.bars_per_phrase { out.bars_per_phrase = b; }
+        if let Some(ref ve) = section.voice_enabled {
+            for (i, &v) in ve.iter().enumerate().take(4) {
+                out.voice_enabled[i] = v;
+            }
+        }
+        if let Some(ref fx) = section.effects {
+            if let Some(v) = fx.shimmer_mix { out.shimmer_mix = v; }
+            if let Some(v) = fx.shimmer_amount { out.shimmer_amount = v; }
+            if let Some(v) = fx.shimmer_size { out.shimmer_size = v; }
+            if let Some(v) = fx.crystal_mix { out.crystal_mix = v; }
+            if let Some(v) = fx.crystal_feedback { out.crystal_feedback = v; }
+            if let Some(v) = fx.crystal_delay_ms { out.crystal_delay_ms = v; }
+        }
+        out
+    }
+
+    /// Linearly interpolate between two resolved states.
+    /// `t` ranges from 0.0 (= self) to 1.0 (= other).
+    /// Continuous params are lerped. Discrete params (root, scale, voice_enabled) snap at t=0.5.
+    pub fn lerp(&self, other: &Self, t: f32) -> Self {
+        let t = t.clamp(0.0, 1.0);
+        let snap = t >= 0.5;
+
+        let mut mood = [0.0f32; N_MOODS];
+        for i in 0..N_MOODS {
+            mood[i] = self.mood[i] * (1.0 - t) + other.mood[i] * t;
+        }
+
+        Self {
+            mood,
+            density: self.density * (1.0 - t) + other.density * t,
+            root: if snap { other.root } else { self.root },
+            scale: if snap { other.scale } else { self.scale },
+            bars_per_phrase: if snap { other.bars_per_phrase } else { self.bars_per_phrase },
+            voice_enabled: if snap { other.voice_enabled } else { self.voice_enabled },
+            shimmer_mix: self.shimmer_mix * (1.0 - t) + other.shimmer_mix * t,
+            shimmer_amount: self.shimmer_amount * (1.0 - t) + other.shimmer_amount * t,
+            shimmer_size: self.shimmer_size * (1.0 - t) + other.shimmer_size * t,
+            crystal_mix: self.crystal_mix * (1.0 - t) + other.crystal_mix * t,
+            crystal_feedback: self.crystal_feedback * (1.0 - t) + other.crystal_feedback * t,
+            crystal_delay_ms: self.crystal_delay_ms * (1.0 - t) + other.crystal_delay_ms * t,
+        }
+    }
+}
+
+/// Song-level temporal structure that modulates engine parameters over time.
+/// Lives on the control thread. Writes to `MarkovEngineShared` atomics.
+pub struct Timeline {
+    pub sections: Vec<TimelineSection>,
+    pub cursor: usize,
+    pub phrase_in_sect: u32,
+    pub loop_mode: bool,
+    pub active: bool,
+
+    /// Previous section's final state (interpolation start point).
+    pub prev_state: ResolvedState,
+    /// Current section's target state (interpolation end point).
+    pub target_state: ResolvedState,
+}
+
+/// Snapshot of timeline status for UI display.
+#[derive(Debug, Clone)]
+pub struct TimelineStatus {
+    pub active: bool,
+    pub cursor: usize,
+    pub section_count: usize,
+    pub section_name: String,
+    pub phrase_in_sect: u32,
+    pub section_phrases: u32,
+    pub transition_phrases: u32,
+    /// 0.0 = start of section, 1.0 = end of section.
+    pub section_progress: f32,
+    /// true if currently in the crossfade window.
+    pub in_transition: bool,
+    /// The interpolated state currently being applied.
+    pub current_state: ResolvedState,
+}
+
+impl Timeline {
+    /// Create a new Timeline from section definitions.
+    /// `base_state` is the resolved state from the scene's base markov config.
+    pub fn new(sections: Vec<TimelineSection>, loop_mode: bool, base_state: ResolvedState) -> Self {
+        let target_state = if let Some(first) = sections.first() {
+            base_state.with_section(first)
+        } else {
+            base_state.clone()
+        };
+        Self {
+            sections,
+            cursor: 0,
+            phrase_in_sect: 0,
+            loop_mode,
+            active: true,
+            prev_state: base_state,
+            target_state,
+        }
+    }
+
+    /// Create an inactive (empty) timeline.
+    pub fn inactive() -> Self {
+        Self {
+            sections: Vec::new(),
+            cursor: 0,
+            phrase_in_sect: 0,
+            loop_mode: false,
+            active: false,
+            prev_state: ResolvedState::default(),
+            target_state: ResolvedState::default(),
+        }
+    }
+
+    /// Total number of phrases across all sections.
+    pub fn total_phrases(&self) -> u32 {
+        self.sections.iter().map(|s| s.phrases).sum()
+    }
+
+    /// Number of phrases elapsed from the beginning of the timeline.
+    pub fn elapsed_phrases(&self) -> u32 {
+        let prior: u32 = self.sections[..self.cursor].iter().map(|s| s.phrases).sum();
+        prior + self.phrase_in_sect
+    }
+
+    /// Call on each phrase boundary. Returns the interpolated state to apply.
+    pub fn on_phrase_boundary(&mut self) -> ResolvedState {
+        if !self.active || self.sections.is_empty() {
+            return self.target_state.clone();
+        }
+
+        self.phrase_in_sect += 1;
+
+        let current_section = &self.sections[self.cursor];
+
+        // Check if section is exhausted.
+        if self.phrase_in_sect >= current_section.phrases {
+            if self.cursor + 1 < self.sections.len() {
+                // Advance to next section.
+                self.prev_state = self.target_state.clone();
+                self.cursor += 1;
+                self.phrase_in_sect = 0;
+                self.target_state = self.prev_state.with_section(&self.sections[self.cursor]);
+            } else if self.loop_mode {
+                // Loop back to first section.
+                self.prev_state = self.target_state.clone();
+                self.cursor = 0;
+                self.phrase_in_sect = 0;
+                self.target_state = self.prev_state.with_section(&self.sections[0]);
+            }
+            // else: hold on final section indefinitely.
+        }
+
+        self.interpolated_state()
+    }
+
+    /// Get the current interpolated state without advancing.
+    pub fn interpolated_state(&self) -> ResolvedState {
+        if !self.active || self.sections.is_empty() {
+            return self.target_state.clone();
+        }
+
+        let section = &self.sections[self.cursor];
+        let transition = section.transition_phrases.min(section.phrases);
+
+        if transition == 0 || self.phrase_in_sect >= transition {
+            // Past transition window — hold at target.
+            self.target_state.clone()
+        } else {
+            // In transition window — interpolate.
+            let t = self.phrase_in_sect as f32 / transition as f32;
+            self.prev_state.lerp(&self.target_state, t)
+        }
+    }
+
+    /// Write the current interpolated state to the engine's shared atomics.
+    pub fn apply_to_shared(&self, shared: &MarkovEngineShared) {
+        if !self.active || self.sections.is_empty() {
+            return;
+        }
+
+        let state = self.interpolated_state();
+
+        // Mood blend.
+        shared.mood.set(&state.mood);
+
+        // Density.
+        shared.density.set_value(state.density);
+
+        // Root + scale.
+        shared.root.store(state.root, Ordering::Relaxed);
+        shared.scale.store(state.scale, Ordering::Relaxed);
+
+        // Bars per phrase.
+        shared.bars_per_phrase.store(state.bars_per_phrase, Ordering::Relaxed);
+
+        // Voice enabled.
+        for (i, &v) in state.voice_enabled.iter().enumerate() {
+            if i < shared.voice_enabled.len() {
+                shared.voice_enabled[i].store(v, Ordering::Relaxed);
+            }
+        }
+
+        // Effects are written separately by the UI (they live in scene globals,
+        // not in MarkovEngineShared). The UI reads `current_state` from
+        // `TimelineStatus` and applies effects there.
+    }
+
+    /// Get a status snapshot for UI display.
+    pub fn status(&self) -> TimelineStatus {
+        let (section_name, section_phrases, transition_phrases) = if self.sections.is_empty() {
+            ("(none)".to_string(), 0u32, 0u32)
+        } else {
+            let s = &self.sections[self.cursor];
+            (s.name.clone(), s.phrases, s.transition_phrases)
+        };
+
+        let section_progress = if section_phrases > 0 {
+            self.phrase_in_sect as f32 / section_phrases as f32
+        } else {
+            0.0
+        };
+
+        let in_transition = self.phrase_in_sect < transition_phrases;
+
+        TimelineStatus {
+            active: self.active && !self.sections.is_empty(),
+            cursor: self.cursor,
+            section_count: self.sections.len(),
+            section_name,
+            phrase_in_sect: self.phrase_in_sect,
+            section_phrases,
+            transition_phrases,
+            section_progress,
+            in_transition,
+            current_state: self.interpolated_state(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -539,6 +539,13 @@ struct AmbientBoxApp {
     markov_seq_scales_ui: [u8; 8],
     markov_seq_phrases_ui: [u8; 8],
 
+    // Timeline (Phase 8.7)
+    timeline: ambient_engine::Timeline,
+    /// Last observed phrase_epoch from the audio thread.
+    timeline_last_epoch: usize,
+    /// Cached timeline status for UI display (updated each frame).
+    timeline_status: Option<ambient_engine::TimelineStatus>,
+
     // Global shimmer UI state
     shimmer_on:    bool,
     shimmer_mix:   f32,
@@ -730,6 +737,9 @@ impl AmbientBoxApp {
             markov_seq_roots_ui: [60u8; 8],
             markov_seq_scales_ui: [0u8; 8],
             markov_seq_phrases_ui: [4u8; 8],
+            timeline: ambient_engine::Timeline::inactive(),
+            timeline_last_epoch: 0,
+            timeline_status: None,
             shimmer_on:    false,
             shimmer_mix:   0.4,
             shimmer_amt:   0.5,
@@ -1067,6 +1077,17 @@ impl eframe::App for AmbientBoxApp {
                             }
                         }
                     }
+                    // ── Timeline: poll phrase_epoch and advance ──
+                    let epoch = ms.phrase_epoch.load(Ordering::Relaxed);
+                    if self.timeline.active && epoch != self.timeline_last_epoch {
+                        let delta = epoch.wrapping_sub(self.timeline_last_epoch);
+                        for _ in 0..delta {
+                            self.timeline.on_phrase_boundary();
+                        }
+                        self.timeline.apply_to_shared(ms);
+                        self.timeline_last_epoch = epoch;
+                    }
+                    self.timeline_status = Some(self.timeline.status());
                 }
 
                 // Sync generative UI state from engine (euclidean/prob params only — gen_mode_ui is UI-owned)
@@ -1448,6 +1469,137 @@ impl eframe::App for AmbientBoxApp {
                         [egui::pos2(ph_x, rect.top()), egui::pos2(ph_x, rect.bottom())],
                         egui::Stroke::new(1.5, egui::Color32::from_rgba_premultiplied(255, 255, 255, 80)),
                     );
+                }
+            }
+
+            // ── Timeline visualization ────────────────────────────────────────
+            if markov_active {
+                if let Some(ref status) = self.timeline_status {
+                    if status.active {
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Timeline").strong());
+                            ui.label(format!(
+                                "  {}  ({}/{})",
+                                status.section_name,
+                                status.phrase_in_sect,
+                                status.section_phrases,
+                            ));
+                            if status.in_transition {
+                                ui.label(
+                                    egui::RichText::new(" CROSSFADE")
+                                        .small()
+                                        .color(egui::Color32::from_rgb(255, 200, 80)),
+                                );
+                            }
+                            ui.label(format!(
+                                "  [{}/{}]",
+                                status.cursor + 1,
+                                status.section_count,
+                            ));
+                            if self.timeline.loop_mode {
+                                ui.label(
+                                    egui::RichText::new(" ⟳")
+                                        .color(egui::Color32::from_rgb(120, 200, 255)),
+                                );
+                            }
+                        });
+
+                        // Section bar: proportional blocks for each section.
+                        let total_phrases = self.timeline.total_phrases().max(1) as f32;
+                        let bar_width = ui.available_width().min(600.0);
+                        let bar_height = 22.0;
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(bar_width, bar_height),
+                            egui::Sense::hover(),
+                        );
+                        let painter = ui.painter_at(rect);
+                        painter.rect_filled(rect, 3.0, egui::Color32::from_gray(25));
+
+                        let section_colors = [
+                            egui::Color32::from_rgb(60, 100, 160),
+                            egui::Color32::from_rgb(80, 140, 100),
+                            egui::Color32::from_rgb(160, 120, 60),
+                            egui::Color32::from_rgb(140, 70, 100),
+                            egui::Color32::from_rgb(90, 80, 150),
+                            egui::Color32::from_rgb(60, 140, 140),
+                            egui::Color32::from_rgb(150, 100, 70),
+                            egui::Color32::from_rgb(100, 130, 80),
+                        ];
+
+                        let mut x = rect.left();
+                        for (i, section) in self.timeline.sections.iter().enumerate() {
+                            let w = (section.phrases as f32 / total_phrases) * bar_width;
+                            let is_current = i == status.cursor;
+                            let base_color = section_colors[i % section_colors.len()];
+                            let color = if is_current {
+                                // Brighten current section.
+                                egui::Color32::from_rgb(
+                                    (base_color.r() as u16 + 60).min(255) as u8,
+                                    (base_color.g() as u16 + 60).min(255) as u8,
+                                    (base_color.b() as u16 + 60).min(255) as u8,
+                                )
+                            } else {
+                                base_color
+                            };
+
+                            let section_rect = egui::Rect::from_min_size(
+                                egui::pos2(x, rect.top()),
+                                egui::vec2(w, bar_height),
+                            );
+                            painter.rect_filled(section_rect, 2.0, color);
+
+                            // Section name label.
+                            if w > 30.0 {
+                                painter.text(
+                                    section_rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    &section.name,
+                                    egui::FontId::proportional(10.0),
+                                    egui::Color32::WHITE,
+                                );
+                            }
+
+                            // Progress indicator within current section.
+                            if is_current && status.section_phrases > 0 {
+                                let progress_w = w * status.section_progress;
+                                let progress_rect = egui::Rect::from_min_size(
+                                    egui::pos2(x, rect.top()),
+                                    egui::vec2(progress_w, bar_height),
+                                );
+                                painter.rect_filled(
+                                    progress_rect,
+                                    2.0,
+                                    egui::Color32::from_rgba_premultiplied(255, 255, 255, 30),
+                                );
+
+                                // Playhead line.
+                                let ph_x = x + progress_w;
+                                painter.line_segment(
+                                    [egui::pos2(ph_x, rect.top()), egui::pos2(ph_x, rect.bottom())],
+                                    egui::Stroke::new(2.0, egui::Color32::WHITE),
+                                );
+                            }
+
+                            // Transition region indicator.
+                            if is_current && section.transition_phrases > 0 {
+                                let trans_w = (section.transition_phrases as f32
+                                    / section.phrases.max(1) as f32)
+                                    * w;
+                                let trans_rect = egui::Rect::from_min_size(
+                                    egui::pos2(x, rect.bottom() - 3.0),
+                                    egui::vec2(trans_w, 3.0),
+                                );
+                                painter.rect_filled(
+                                    trans_rect,
+                                    1.0,
+                                    egui::Color32::from_rgb(255, 200, 80),
+                                );
+                            }
+
+                            x += w;
+                        }
+                    }
                 }
             }
 
@@ -1955,7 +2107,13 @@ impl eframe::App for AmbientBoxApp {
                     // Include Markov state when in Markov mode
                     let mode = GenerativeMode::from_u8(self.gen_mode_ui[0]);
                     if mode == GenerativeMode::Markov {
-                        scene.markov = Some(eng.capture_markov_scene(GenerativeMode::Markov as u8));
+                        let mut ms = eng.capture_markov_scene(GenerativeMode::Markov as u8);
+                        // Persist timeline sections if timeline is active.
+                        if self.timeline.active && !self.timeline.sections.is_empty() {
+                            ms.timeline = Some(self.timeline.sections.clone());
+                            ms.timeline_loop = self.timeline.loop_mode;
+                        }
+                        scene.markov = Some(ms);
                     }
                     pending_scene_save = Some((req.path, scene, req.name));
                 }
@@ -1998,6 +2156,25 @@ impl eframe::App for AmbientBoxApp {
                             self.markov_scale_ui = seq[0].scale;
                         }
                         for t in 0..TRACK_COUNT { self.gen_mode_ui[t] = ms.generative_mode; }
+
+                        // ── Create Timeline from scene data ──
+                        if let Some(ref sections) = ms.timeline {
+                            if !sections.is_empty() {
+                                // Build base state from scene's markov config.
+                                let base = ambient_engine::ResolvedState::snapshot_from_shared(&eng.markov_shared);
+                                self.timeline = ambient_engine::Timeline::new(
+                                    sections.clone(),
+                                    ms.timeline_loop,
+                                    base,
+                                );
+                                // Reset epoch tracking so we don't process stale phrase events.
+                                self.timeline_last_epoch = eng.markov_shared.phrase_epoch.load(Ordering::Relaxed);
+                            } else {
+                                self.timeline = ambient_engine::Timeline::inactive();
+                            }
+                        } else {
+                            self.timeline = ambient_engine::Timeline::inactive();
+                        }
                     }
                     eng.apply_scene(&scene);
                     // Sync per-voice UI from restored scene values

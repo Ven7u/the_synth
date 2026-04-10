@@ -116,8 +116,18 @@ pub struct MarkovScene {
     #[serde(default = "default_clock_div")]
     pub clock_div: u8,
     /// Harmonic sequence. If empty or length 1, root/scale above is used statically.
+    /// Ignored when `timeline` is present.
     #[serde(default)]
     pub harmonic_seq: Vec<HarmonicSlot>,
+
+    /// Timeline: ordered sections that modulate mood, density, tonality, etc. over time.
+    /// When present, replaces `harmonic_seq` for temporal modulation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<Vec<crate::markov::TimelineSection>>,
+
+    /// Whether the timeline loops back to section 0 after the last section.
+    #[serde(default)]
+    pub timeline_loop: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -455,6 +465,9 @@ impl AmbientEngine {
             generative_mode,
             clock_div: ms.clock_div(),
             harmonic_seq,
+            // Timeline is populated by the caller (it lives on the control thread, not in the engine).
+            timeline: None,
+            timeline_loop: false,
         }
     }
 

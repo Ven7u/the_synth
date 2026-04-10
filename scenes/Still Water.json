@@ -6,19 +6,19 @@
   "macro_set": "AmbientCore",
   "tracks": [
     {
-      "patch_path": "assets/patches/Ambient/Ambient Bass.json",
+      "patch_path": "assets/patches/Eno/Ambient Tape Bass.json",
       "patch": {
-        "name": "Ambient Bass", "category": "Ambient", "synth_model": "theSynth",
-        "osc_wave": [0, 1, 0], "osc_octave": [-1, 0, 0], "osc_detune": [0.0, 3.0, 0.0],
-        "osc_vol": [0.55, 0.45, 0.0], "osc_enabled": [true, true, false],
+        "name": "Ambient Tape Bass", "category": "Eno", "synth_model": "theSynth",
+        "osc_wave": [0, 0, 0], "osc_octave": [-1, 0, 0], "osc_detune": [0.0, 1.5, 0.0],
+        "osc_vol": [0.60, 0.30, 0.0], "osc_enabled": [true, true, false],
         "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [false, false, false],
-        "osc_unison_enabled": [false, true, false], "osc_unison_count": [2, 3, 2],
-        "osc_unison_spread": [10.0, 12.0, 20.0], "hard_sync": false,
+        "osc_unison_enabled": [true, false, false], "osc_unison_count": [3, 2, 2],
+        "osc_unison_spread": [6.0, 5.0, 20.0], "hard_sync": false,
         "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
-        "noise_vol": 0.0, "lfo_enabled": true, "lfo_rate": 0.08, "lfo_depth": 0.04,
-        "lfo_shape": 0, "lfo_dest": 1, "filter_enabled": true, "filter_cutoff": 480.0,
-        "filter_q": 0.12, "filter_env_amount": 0.25, "fenv_adsr": [0.8, 1.2, 0.6, 3.0],
-        "amp_adsr": [0.6, 0.8, 0.75, 4.5], "glide_time": 0.18
+        "noise_vol": 0.003, "lfo_enabled": true, "lfo_rate": 0.015, "lfo_depth": 0.02,
+        "lfo_shape": 0, "lfo_dest": 2, "filter_enabled": true, "filter_cutoff": 380.0,
+        "filter_q": 0.04, "filter_env_amount": 0.06, "fenv_adsr": [8.0, 3.0, 0.85, 14.0],
+        "amp_adsr": [10.0, 2.5, 0.90, 18.0], "glide_time": 0.60
       },
       "volume": 0.40, "cutoff": 300.0, "resonance": 0.07, "shimmer_send": 0.06, "crystal_send": 0.0
     },

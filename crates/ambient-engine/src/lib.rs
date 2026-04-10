@@ -27,6 +27,9 @@ pub use markov::{
     HARMONIC_STATES, RHYTHMIC_STATES, MELODIC_STATES,
     // Launchpad
     LAUNCHPAD_COLS,
+    // Timeline
+    Timeline, TimelineSection, TimelineStatus,
+    ResolvedState, EffectsTargets,
 };
 pub use patch::AmbientPatch;
 pub use engine::{

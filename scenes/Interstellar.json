@@ -6,19 +6,19 @@
   "macro_set": "AmbientCore",
   "tracks": [
     {
-      "patch_path": "assets/patches/Zimmer/Organ Gravity.json",
+      "patch_path": "assets/patches/Zimmer/Interstellar Bass.json",
       "patch": {
-        "name": "Organ Gravity", "category": "Zimmer", "synth_model": "theSynth",
-        "osc_wave": [1, 1, 0], "osc_octave": [-1, 0, 0], "osc_detune": [0.0, 2.0, 0.0],
-        "osc_vol": [0.55, 0.45, 0.0], "osc_enabled": [true, true, false],
+        "name": "Interstellar Bass", "category": "Zimmer", "synth_model": "theSynth",
+        "osc_wave": [1, 1, 0], "osc_octave": [-2, -1, 0], "osc_detune": [0.0, 2.0, 0.0],
+        "osc_vol": [0.60, 0.40, 0.0], "osc_enabled": [true, true, false],
         "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [true, true, false],
-        "osc_unison_enabled": [true, true, false], "osc_unison_count": [4, 3, 2],
-        "osc_unison_spread": [5.0, 4.0, 20.0], "hard_sync": false,
+        "osc_unison_enabled": [true, false, false], "osc_unison_count": [3, 2, 2],
+        "osc_unison_spread": [4.0, 5.0, 20.0], "hard_sync": false,
         "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
-        "noise_vol": 0.0, "lfo_enabled": true, "lfo_rate": 0.04, "lfo_depth": 0.02,
-        "lfo_shape": 0, "lfo_dest": 0, "filter_enabled": true, "filter_cutoff": 900.0,
-        "filter_q": 0.08, "filter_env_amount": 0.20, "fenv_adsr": [4.0, 3.0, 0.85, 8.0],
-        "amp_adsr": [5.0, 2.0, 0.90, 12.0], "glide_time": 0.20
+        "noise_vol": 0.0, "lfo_enabled": true, "lfo_rate": 0.025, "lfo_depth": 0.015,
+        "lfo_shape": 0, "lfo_dest": 0, "filter_enabled": true, "filter_cutoff": 250.0,
+        "filter_q": 0.05, "filter_env_amount": 0.10, "fenv_adsr": [5.0, 3.0, 0.92, 12.0],
+        "amp_adsr": [6.0, 2.0, 0.95, 16.0], "glide_time": 0.35
       },
       "volume": 0.68, "cutoff": 700.0, "resonance": 0.10, "shimmer_send": 0.18, "crystal_send": 0.05
     },
@@ -96,6 +96,50 @@
     "dissonance_resolve": true,
     "dissonance_threshold": 1,
     "register_drift": 0.1,
-    "generative_mode": 4
+    "generative_mode": 4,
+
+    "timeline": [
+      {
+        "name": "Stillness",
+        "phrases": 4,
+        "transition_phrases": 0,
+        "mood": [0.0, 0.0, 0.0, 0.0, 0.85, 0.15],
+        "density": 0.10,
+        "voice_enabled": [true, true, false, false]
+      },
+      {
+        "name": "Awakening",
+        "phrases": 6,
+        "transition_phrases": 3,
+        "mood": [0.0, 0.0, 0.15, 0.0, 0.50, 0.35],
+        "density": 0.30,
+        "voice_enabled": [true, true, true, false]
+      },
+      {
+        "name": "Wormhole",
+        "phrases": 4,
+        "transition_phrases": 2,
+        "mood": [0.0, 0.25, 0.20, 0.0, 0.20, 0.35],
+        "density": 0.55,
+        "root": 50,
+        "scale": 6,
+        "bars_per_phrase": 4,
+        "voice_enabled": [true, true, true, true],
+        "effects": { "shimmer_mix": 0.80, "crystal_mix": 0.40 }
+      },
+      {
+        "name": "Resolution",
+        "phrases": 8,
+        "transition_phrases": 4,
+        "mood": [0.20, 0.0, 0.0, 0.0, 0.60, 0.20],
+        "density": 0.15,
+        "root": 50,
+        "scale": 1,
+        "bars_per_phrase": 8,
+        "voice_enabled": [true, true, false, true],
+        "effects": { "shimmer_mix": 0.55, "crystal_mix": 0.15 }
+      }
+    ],
+    "timeline_loop": true
   }
 }
