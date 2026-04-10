@@ -1,0 +1,105 @@
+{
+  "name": "Morning Light",
+  "bpm": 52,
+  "key": 5,
+  "scale": "major",
+  "macro_set": "AmbientCore",
+  "tracks": [
+    {
+      "patch_path": "assets/patches/Ambient/Ambient Bass.json",
+      "patch": {
+        "name": "Ambient Bass", "category": "Ambient", "synth_model": "theSynth",
+        "osc_wave": [0, 1, 0], "osc_octave": [-1, 0, 0], "osc_detune": [0.0, 3.0, 0.0],
+        "osc_vol": [0.55, 0.45, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [false, false, false],
+        "osc_unison_enabled": [false, true, false], "osc_unison_count": [2, 3, 2],
+        "osc_unison_spread": [10.0, 12.0, 20.0], "hard_sync": false,
+        "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
+        "noise_vol": 0.0, "lfo_enabled": true, "lfo_rate": 0.08, "lfo_depth": 0.04,
+        "lfo_shape": 0, "lfo_dest": 1, "filter_enabled": true, "filter_cutoff": 480.0,
+        "filter_q": 0.12, "filter_env_amount": 0.25, "fenv_adsr": [0.8, 1.2, 0.6, 3.0],
+        "amp_adsr": [0.6, 0.8, 0.75, 4.5], "glide_time": 0.18
+      },
+      "volume": 0.52, "cutoff": 380.0, "resonance": 0.10, "shimmer_send": 0.10, "crystal_send": 0.0
+    },
+    {
+      "patch_path": "assets/patches/Ambient/Breath Pad.json",
+      "patch": {
+        "name": "Breath Pad", "category": "Ambient", "synth_model": "theSynth",
+        "osc_wave": [0, 0, 0], "osc_octave": [0, 1, 0], "osc_detune": [0.0, 5.0, 0.0],
+        "osc_vol": [0.55, 0.45, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [false, false, false],
+        "osc_unison_enabled": [true, true, false], "osc_unison_count": [6, 4, 2],
+        "osc_unison_spread": [18.0, 14.0, 20.0], "hard_sync": false,
+        "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
+        "noise_vol": 0.0, "lfo_enabled": true, "lfo_rate": 0.06, "lfo_depth": 0.06,
+        "lfo_shape": 0, "lfo_dest": 2, "filter_enabled": true, "filter_cutoff": 1600.0,
+        "filter_q": 0.07, "filter_env_amount": 0.18, "fenv_adsr": [5.0, 2.0, 0.75, 8.0],
+        "amp_adsr": [6.0, 1.5, 0.88, 10.0], "glide_time": 0.4
+      },
+      "volume": 0.60, "cutoff": 1800.0, "resonance": 0.08, "shimmer_send": 0.72, "crystal_send": 0.10
+    },
+    {
+      "patch_path": "assets/patches/Ambient/Breath Pad.json",
+      "patch": {
+        "name": "Breath Pad", "category": "Ambient", "synth_model": "theSynth",
+        "osc_wave": [0, 0, 0], "osc_octave": [0, 1, 0], "osc_detune": [0.0, 5.0, 0.0],
+        "osc_vol": [0.55, 0.45, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [false, false, false],
+        "osc_unison_enabled": [true, true, false], "osc_unison_count": [6, 4, 2],
+        "osc_unison_spread": [18.0, 14.0, 20.0], "hard_sync": false,
+        "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
+        "noise_vol": 0.0, "lfo_enabled": true, "lfo_rate": 0.06, "lfo_depth": 0.06,
+        "lfo_shape": 0, "lfo_dest": 2, "filter_enabled": true, "filter_cutoff": 1600.0,
+        "filter_q": 0.07, "filter_env_amount": 0.18, "fenv_adsr": [5.0, 2.0, 0.75, 8.0],
+        "amp_adsr": [6.0, 1.5, 0.88, 10.0], "glide_time": 0.4
+      },
+      "volume": 0.50, "cutoff": 2200.0, "resonance": 0.07, "shimmer_send": 0.65, "crystal_send": 0.08
+    },
+    {
+      "patch_path": "assets/patches/Ambient/Morning Shimmer.json",
+      "patch": {
+        "name": "Morning Shimmer", "category": "Ambient", "synth_model": "theSynth",
+        "osc_wave": [0, 1, 0], "osc_octave": [1, 2, 0], "osc_detune": [0.0, 6.0, 0.0],
+        "osc_vol": [0.45, 0.38, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [false, false, false],
+        "osc_unison_enabled": [true, false, false], "osc_unison_count": [4, 2, 2],
+        "osc_unison_spread": [22.0, 20.0, 20.0], "hard_sync": false,
+        "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
+        "noise_vol": 0.01, "lfo_enabled": true, "lfo_rate": 0.09, "lfo_depth": 0.08,
+        "lfo_shape": 0, "lfo_dest": 2, "filter_enabled": true, "filter_cutoff": 3200.0,
+        "filter_q": 0.08, "filter_env_amount": 0.28, "fenv_adsr": [3.5, 1.5, 0.65, 6.0],
+        "amp_adsr": [4.5, 1.0, 0.80, 8.0], "glide_time": 0.25
+      },
+      "volume": 0.35, "cutoff": 3500.0, "resonance": 0.07, "shimmer_send": 0.85, "crystal_send": 0.22
+    }
+  ],
+  "macros": [],
+  "global": {
+    "master_vol": 0.58,
+    "shimmer_mix": 0.55, "shimmer_amount": 0.68, "shimmer_size": 0.94, "shimmer_damp": 0.18, "shimmer_pitch": 1,
+    "crystal_mix": 0.18, "crystal_grain_ms": 160.0, "crystal_scatter": 0.15, "crystal_feedback": 0.32, "crystal_delay_ms": 520.0, "crystal_pitch": 1
+  },
+  "markov": {
+    "clock_div": 8,
+    "harmonic_seq": [
+      { "root": 53, "scale": 0, "phrases": 2 },
+      { "root": 53, "scale": 0, "phrases": 2 },
+      { "root": 48, "scale": 0, "phrases": 2 }
+    ],
+    "root": 53,
+    "scale": 0,
+    "density": 0.28,
+    "bars_per_phrase": 8,
+    "mood": [0.65, 0.0, 0.0, 0.10, 0.25, 0.0],
+    "voice_roles": [0, 1, 1, 3],
+    "voice_densities": [0.0, 0.0, 0.0, 0.0],
+    "voice_enabled": [true, true, true, true],
+    "chord_attraction": 0.82,
+    "bass_lock": true,
+    "dissonance_resolve": true,
+    "dissonance_threshold": 0,
+    "register_drift": 0.06,
+    "generative_mode": 4
+  }
+}
