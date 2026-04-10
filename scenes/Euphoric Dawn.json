@@ -40,38 +40,38 @@
       "volume": 0.55, "cutoff": 2200.0, "resonance": 0.1, "shimmer_send": 0.58, "crystal_send": 0.12
     },
     {
-      "patch_path": "assets/patches/Ambient/Crystal Cave.json",
+      "patch_path": "assets/patches/Eno/Discreet Music Bell.json",
       "patch": {
-        "name": "Crystal Cave", "category": "Ambient", "synth_model": "theSynth",
-        "osc_wave": [0, 0, 0], "osc_octave": [1, 2, 0], "osc_detune": [0.0, 5.0, 0.0],
-        "osc_vol": [0.5, 0.38, 0.0], "osc_enabled": [true, true, false],
+        "name": "Discreet Music Bell", "category": "Eno", "synth_model": "theSynth",
+        "osc_wave": [0, 0, 0], "osc_octave": [2, 3, 0], "osc_detune": [0.0, 3.0, 0.0],
+        "osc_vol": [0.55, 0.25, 0.0], "osc_enabled": [true, true, false],
         "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [false, false, false],
-        "osc_unison_enabled": [false, true, false], "osc_unison_count": [2, 3, 2],
-        "osc_unison_spread": [15.0, 12.0, 20.0], "hard_sync": false,
-        "fm_enabled": true, "fm_depth": 0.35, "ring_enabled": false, "ring_depth": 0.0,
-        "noise_vol": 0.0, "lfo_enabled": true, "lfo_rate": 0.1, "lfo_depth": 0.08,
+        "osc_unison_enabled": [false, false, false], "osc_unison_count": [2, 2, 2],
+        "osc_unison_spread": [10.0, 10.0, 20.0], "hard_sync": false,
+        "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
+        "noise_vol": 0.0, "lfo_enabled": false, "lfo_rate": 0.05, "lfo_depth": 0.02,
         "lfo_shape": 0, "lfo_dest": 2, "filter_enabled": true, "filter_cutoff": 5000.0,
-        "filter_q": 0.12, "filter_env_amount": 0.35, "fenv_adsr": [0.5, 0.8, 0.3, 2.0],
-        "amp_adsr": [0.8, 0.6, 0.55, 3.0], "glide_time": 0.1
+        "filter_q": 0.08, "filter_env_amount": 0.05, "fenv_adsr": [0.02, 1.5, 0.30, 8.0],
+        "amp_adsr": [0.02, 1.0, 0.20, 12.0], "glide_time": 0.1
       },
-      "volume": 0.48, "cutoff": 5500.0, "resonance": 0.12, "shimmer_send": 0.55, "crystal_send": 0.62
+      "volume": 0.42, "cutoff": 5500.0, "resonance": 0.08, "shimmer_send": 0.65, "crystal_send": 0.55
     },
     {
-      "patch_path": "assets/patches/Ambient/Ambient Pad.json",
+      "patch_path": "assets/patches/Eno/Fourth World Choir.json",
       "patch": {
-        "name": "Ambient Pad", "category": "Ambient", "synth_model": "theSynth",
-        "osc_wave": [0, 1, 0], "osc_octave": [0, 1, 0], "osc_detune": [0.0, 7.0, 0.0],
-        "osc_vol": [0.45, 0.35, 0.0], "osc_enabled": [true, true, false],
+        "name": "Fourth World Choir", "category": "Eno", "synth_model": "theSynth",
+        "osc_wave": [0, 0, 0], "osc_octave": [0, 1, 0], "osc_detune": [0.0, 5.0, 0.0],
+        "osc_vol": [0.4, 0.3, 0.0], "osc_enabled": [true, true, false],
         "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [false, false, false],
-        "osc_unison_enabled": [true, true, false], "osc_unison_count": [7, 5, 2],
-        "osc_unison_spread": [38.0, 28.0, 20.0], "hard_sync": false,
+        "osc_unison_enabled": [true, true, false], "osc_unison_count": [8, 6, 2],
+        "osc_unison_spread": [30.0, 24.0, 20.0], "hard_sync": false,
         "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
-        "noise_vol": 0.04, "lfo_enabled": true, "lfo_rate": 0.1, "lfo_depth": 0.12,
-        "lfo_shape": 0, "lfo_dest": 2, "filter_enabled": true, "filter_cutoff": 1100.0,
-        "filter_q": 0.08, "filter_env_amount": 0.12, "fenv_adsr": [3.5, 1.5, 0.7, 5.0],
-        "amp_adsr": [4.0, 1.0, 0.82, 7.0], "glide_time": 0.25
+        "noise_vol": 0.02, "lfo_enabled": true, "lfo_rate": 0.04, "lfo_depth": 0.05,
+        "lfo_shape": 0, "lfo_dest": 1, "filter_enabled": true, "filter_cutoff": 1800.0,
+        "filter_q": 0.06, "filter_env_amount": 0.15, "fenv_adsr": [9.0, 4.0, 0.75, 16.0],
+        "amp_adsr": [11.0, 3.0, 0.82, 20.0], "glide_time": 0.7
       },
-      "volume": 0.35, "cutoff": 3000.0, "resonance": 0.08, "shimmer_send": 0.72, "crystal_send": 0.18
+      "volume": 0.38, "cutoff": 3000.0, "resonance": 0.07, "shimmer_send": 0.78, "crystal_send": 0.15
     }
   ],
   "macros": [],

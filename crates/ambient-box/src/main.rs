@@ -18,7 +18,10 @@ use ambient_engine::{
     EuclideanGen, GenerativeMode, ProbTableGen,
     MarkovEngine,
     VoiceRole, Scale as MarkovScale, RhythmicState,
+    HarmonicFunction,
     N_MOODS, LAUNCHPAD_COLS,
+    HARMONIC_STATES, RHYTHMIC_STATES, MELODIC_STATES,
+    MOOD_CALM, MOOD_TENSE, MOOD_DARK, MOOD_EUPHORIC, MOOD_COSMIC, MOOD_GRAVITY,
 };
 use synth_engine::arp::{ArpMode, ArpState, ClockDiv, Scale, ScaleWalker};
 use synth_control::{ControlEvent, ControlSender, make_control_channel};
@@ -61,7 +64,11 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Ambient Box",
         options,
-        Box::new(move |_cc| Ok(Box::new(AmbientBoxApp::new(engine, tx, _stream, beat_clock_shared)))),
+        Box::new(move |cc| {
+            let last_scene = cc.storage
+                .and_then(|s| s.get_string("last_scene"));
+            Ok(Box::new(AmbientBoxApp::new(engine, tx, _stream, beat_clock_shared, last_scene)))
+        }),
     )
 }
 
@@ -522,6 +529,10 @@ struct AmbientBoxApp {
     markov_dissonance_threshold_ui: u8,
     markov_register_drift_ui: f32,
     markov_clock_div_ui: u8,
+    // Matrix heatmap tab: 0=Harmonic, 1=Rhythmic, 2=Melodic
+    markov_heatmap_tab: usize,
+    // Cached clone of markov_shared for heatmap rendering (updated each frame when lock is held)
+    markov_shared_cache: Option<ambient_engine::MarkovEngineShared>,
     // Harmonic sequence — up to SEQ_MAX slots
     markov_seq_len_ui: usize,
     markov_seq_roots_ui: [u8; 8],
@@ -647,6 +658,7 @@ impl AmbientBoxApp {
         control: ControlSender,
         stream: Stream,
         beat_clock_shared: BeatClockShared,
+        last_scene: Option<String>,
     ) -> Self {
         let mut midi = MidiEngine::new();
         midi.list_ports();
@@ -712,6 +724,8 @@ impl AmbientBoxApp {
             markov_dissonance_threshold_ui: 1,
             markov_register_drift_ui: 0.2,
             markov_clock_div_ui: 4,
+            markov_heatmap_tab: 0,
+            markov_shared_cache: None,
             markov_seq_len_ui: 1,
             markov_seq_roots_ui: [60u8; 8],
             markov_seq_scales_ui: [0u8; 8],
@@ -751,7 +765,7 @@ impl AmbientBoxApp {
             track_patch_last_synced_path: std::array::from_fn(|_| String::new()),
             pending_patch_load: std::collections::VecDeque::new(),
             pending_scene_save: None,
-            pending_scene_load_path: None,
+            pending_scene_load_path: last_scene.map(|name| format!("scenes/{name}.json")),
             pending_scene_load: None,
         }
     }
@@ -838,6 +852,98 @@ impl AmbientBoxApp {
 }
 
 // ---------------------------------------------------------------------------
+// Probability matrix heatmap
+// ---------------------------------------------------------------------------
+
+/// Draw an N×N probability matrix as a heatmap with row/col labels.
+/// `mat` is a slice of rows, each a slice of N probabilities.
+/// `accent` is the tint color used at maximum probability.
+fn draw_heatmap(
+    ui: &mut egui::Ui,
+    mat: &[Vec<f32>],
+    row_labels: &[&str],
+    col_labels: &[&str],
+    n: usize,
+    accent: egui::Color32,
+) {
+    let cell = 28.0f32;
+    let label_w = 52.0f32;
+    let label_h = 16.0f32;
+    let gap = 2.0f32;
+    let total_w = label_w + n as f32 * (cell + gap) - gap;
+    let total_h = label_h + n as f32 * (cell + gap) - gap;
+
+    let (resp, painter) = ui.allocate_painter(
+        egui::vec2(total_w, total_h),
+        egui::Sense::hover(),
+    );
+    let origin = resp.rect.min;
+
+    // Column labels across the top
+    for j in 0..n {
+        let x = origin.x + label_w + j as f32 * (cell + gap) + cell * 0.5;
+        let y = origin.y + label_h * 0.5;
+        painter.text(
+            egui::pos2(x, y),
+            egui::Align2::CENTER_CENTER,
+            col_labels[j],
+            egui::FontId::proportional(10.0),
+            egui::Color32::from_gray(160),
+        );
+    }
+
+    // Rows
+    for i in 0..n {
+        let row_y = origin.y + label_h + i as f32 * (cell + gap);
+
+        // Row label
+        painter.text(
+            egui::pos2(origin.x + label_w - 4.0, row_y + cell * 0.5),
+            egui::Align2::RIGHT_CENTER,
+            row_labels[i],
+            egui::FontId::proportional(10.0),
+            egui::Color32::from_gray(180),
+        );
+
+        for j in 0..n {
+            let p = mat[i][j].clamp(0.0, 1.0);
+            // Color: lerp from dark background to accent
+            let bg = egui::Color32::from_gray(18);
+            let r = (bg.r() as f32 + (accent.r() as f32 - bg.r() as f32) * p) as u8;
+            let g = (bg.g() as f32 + (accent.g() as f32 - bg.g() as f32) * p) as u8;
+            let b = (bg.b() as f32 + (accent.b() as f32 - bg.b() as f32) * p) as u8;
+            let color = egui::Color32::from_rgb(r, g, b);
+
+            let x = origin.x + label_w + j as f32 * (cell + gap);
+            let rect = egui::Rect::from_min_size(egui::pos2(x, row_y), egui::vec2(cell, cell));
+            painter.rect_filled(rect, 3.0, color);
+
+            // Value text for cells above ~8% (smaller ones are too cluttered)
+            if p > 0.07 {
+                let luma = 0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32;
+                let txt_color = if luma > 100.0 { egui::Color32::BLACK } else { egui::Color32::from_gray(200) };
+                painter.text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    format!("{:.0}", p * 100.0),
+                    egui::FontId::proportional(9.0),
+                    txt_color,
+                );
+            }
+
+            // Tooltip on hover
+            if let Some(pos) = ui.ctx().pointer_hover_pos() {
+                if rect.contains(pos) {
+                    egui::show_tooltip_at_pointer(ui.ctx(), ui.layer_id(), egui::Id::new("hm_tip").with(i).with(j), |ui| {
+                        ui.label(format!("{} → {}: {:.1}%", row_labels[i], col_labels[j], p * 100.0));
+                    });
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Launchpad helpers
 // ---------------------------------------------------------------------------
 
@@ -887,6 +993,12 @@ const KEY_MAP: &[(egui::Key, i32)] = &[
 ];
 
 impl eframe::App for AmbientBoxApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        if !self.scene_name.is_empty() {
+            storage.set_string("last_scene", self.scene_name.clone());
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.tick_midi();
         self.tick_transport_sync();
@@ -965,13 +1077,17 @@ impl eframe::App for AmbientBoxApp {
                 self.euclidean_rotation_ui[ti] = ecfg.rotation.load(Ordering::Relaxed);
                 self.prob_table_tension_ui[ti] = eng.prob_table_configs[ti].tension.value();
 
-                let engine_patch_path = &eng.track_patch_paths[ti];
-                if self.track_patch_last_synced_path[ti] != *engine_patch_path {
-                    if let Some(idx) = self.patch_library.iter().position(|p| p.path == *engine_patch_path) {
-                        self.track_patch_choice[ti] = idx;
+                for i in 0..TRACK_COUNT {
+                    let engine_patch_path = eng.track_patch_paths[i].clone();
+                    if self.track_patch_last_synced_path[i] != engine_patch_path {
+                        if let Some(idx) = self.patch_library.iter().position(|p| p.path == engine_patch_path) {
+                            self.track_patch_choice[i] = idx;
+                        }
+                        self.track_patch_last_synced_path[i] = engine_patch_path;
                     }
-                    self.track_patch_last_synced_path[ti] = engine_patch_path.clone();
                 }
+                // Cache a clone of markov_shared for heatmap rendering outside the lock
+                self.markov_shared_cache = Some(eng.markov_shared.clone());
             }
 
             let ti = self.active_track;
@@ -1332,6 +1448,49 @@ impl eframe::App for AmbientBoxApp {
                         [egui::pos2(ph_x, rect.top()), egui::pos2(ph_x, rect.bottom())],
                         egui::Stroke::new(1.5, egui::Color32::from_rgba_premultiplied(255, 255, 255, 80)),
                     );
+                }
+            }
+
+            // ── Probability matrix heatmaps ───────────────────────────────────
+            if markov_active {
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Matrices:").strong());
+                    for (i, lbl) in ["Harmonic", "Rhythmic", "Melodic"].iter().enumerate() {
+                        let sel = self.markov_heatmap_tab == i;
+                        let color = if sel { egui::Color32::from_rgb(0, 200, 140) } else { egui::Color32::GRAY };
+                        if ui.button(egui::RichText::new(*lbl).color(color)).clicked() {
+                            self.markov_heatmap_tab = i;
+                        }
+                    }
+                    ui.label(egui::RichText::new("(from→to)").small().weak());
+                });
+                if let Some(ms) = &self.markov_shared_cache {
+                    let moods = [&MOOD_CALM, &MOOD_TENSE, &MOOD_DARK, &MOOD_EUPHORIC, &MOOD_COSMIC, &MOOD_GRAVITY];
+                    match self.markov_heatmap_tab {
+                        0 => {
+                            // Harmonic: 7×7
+                            let raw = ms.mood.blend_harmonic(&moods);
+                            let mat: Vec<Vec<f32>> = raw.iter().map(|r| r[..HARMONIC_STATES].to_vec()).collect();
+                            draw_heatmap(ui, &mat, HarmonicFunction::LABELS, HarmonicFunction::LABELS,
+                                         HARMONIC_STATES, egui::Color32::from_rgb(60, 120, 220));
+                        }
+                        1 => {
+                            // Rhythmic: 5×5
+                            let raw = ms.mood.blend_rhythmic(&moods);
+                            let mat: Vec<Vec<f32>> = raw.iter().map(|r| r[..RHYTHMIC_STATES].to_vec()).collect();
+                            draw_heatmap(ui, &mat, RhythmicState::LABELS, RhythmicState::LABELS,
+                                         RHYTHMIC_STATES, egui::Color32::from_rgb(220, 140, 40));
+                        }
+                        _ => {
+                            // Melodic: 7×7
+                            let raw = ms.mood.blend_melodic(&moods);
+                            let mat: Vec<Vec<f32>> = raw.iter().map(|r| r[..MELODIC_STATES].to_vec()).collect();
+                            let deg_labels: &[&str] = &["1", "2", "3", "4", "5", "6", "7"];
+                            draw_heatmap(ui, &mat, deg_labels, deg_labels,
+                                         MELODIC_STATES, egui::Color32::from_rgb(160, 60, 220));
+                        }
+                    }
                 }
             }
 

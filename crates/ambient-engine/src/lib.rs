@@ -20,7 +20,7 @@ pub use markov::{
     // Mood
     MoodBlend, MoodSet,
     ALL_MOODS, N_MOODS,
-    MOOD_CALM, MOOD_TENSE, MOOD_DARK, MOOD_EUPHORIC,
+    MOOD_CALM, MOOD_TENSE, MOOD_DARK, MOOD_EUPHORIC, MOOD_COSMIC, MOOD_GRAVITY,
     PHRASE_BOUNDARY_HARMONIC,
     // Matrix types
     HarmonicMatrix, RhythmicMatrix, MelodicMatrix,

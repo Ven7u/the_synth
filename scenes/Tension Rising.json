@@ -23,55 +23,55 @@
       "volume": 0.72, "cutoff": 400.0, "resonance": 0.22, "shimmer_send": 0.05, "crystal_send": 0.0
     },
     {
-      "patch_path": "assets/patches/Pad/Dark Pad.json",
+      "patch_path": "assets/patches/Zimmer/String Cluster.json",
       "patch": {
-        "name": "Dark Pad", "category": "Pad", "synth_model": "theSynth",
-        "osc_wave": [1, 1, 0], "osc_octave": [-1, 0, 0], "osc_detune": [0.0, 8.0, 0.0],
-        "osc_vol": [0.5, 0.45, 0.0], "osc_enabled": [true, true, false],
-        "osc_pulse_width": [0.55, 0.5, 0.5], "osc_pw_enabled": [true, false, false],
-        "osc_unison_enabled": [true, false, false], "osc_unison_count": [4, 2, 2],
-        "osc_unison_spread": [25.0, 20.0, 20.0], "hard_sync": false,
+        "name": "String Cluster", "category": "Zimmer", "synth_model": "theSynth",
+        "osc_wave": [1, 1, 0], "osc_octave": [0, 1, 0], "osc_detune": [0.0, 12.0, 0.0],
+        "osc_vol": [0.50, 0.50, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [false, false, false],
+        "osc_unison_enabled": [true, true, false], "osc_unison_count": [6, 5, 2],
+        "osc_unison_spread": [35.0, 28.0, 20.0], "hard_sync": false,
         "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
-        "noise_vol": 0.05, "lfo_enabled": true, "lfo_rate": 0.2, "lfo_depth": 0.1,
-        "lfo_shape": 0, "lfo_dest": 1, "filter_enabled": true, "filter_cutoff": 700.0,
-        "filter_q": 0.15, "filter_env_amount": 0.3, "fenv_adsr": [1.5, 1.0, 0.6, 3.0],
-        "amp_adsr": [2.0, 0.8, 0.75, 4.0], "glide_time": 0.1
+        "noise_vol": 0.01, "lfo_enabled": true, "lfo_rate": 0.07, "lfo_depth": 0.05,
+        "lfo_shape": 0, "lfo_dest": 2, "filter_enabled": true, "filter_cutoff": 2000.0,
+        "filter_q": 0.18, "filter_env_amount": 0.30, "fenv_adsr": [5.0, 2.5, 0.72, 9.0],
+        "amp_adsr": [6.0, 2.0, 0.78, 12.0], "glide_time": 0.35
       },
-      "volume": 0.58, "cutoff": 800.0, "resonance": 0.15, "shimmer_send": 0.35, "crystal_send": 0.1
+      "volume": 0.58, "cutoff": 1400.0, "resonance": 0.18, "shimmer_send": 0.30, "crystal_send": 0.08
     },
     {
-      "patch_path": "assets/patches/Pad/Neon Drift.json",
+      "patch_path": "assets/patches/PinkFloyd/Echoes Underwater.json",
       "patch": {
-        "name": "Neon Drift", "category": "Pad", "synth_model": "theSynth",
-        "osc_wave": [1, 1, 0], "osc_octave": [0, 1, 0], "osc_detune": [0.0, 9.0, 0.0],
-        "osc_vol": [0.45, 0.4, 0.0], "osc_enabled": [true, true, false],
-        "osc_pulse_width": [0.6, 0.5, 0.5], "osc_pw_enabled": [true, false, false],
-        "osc_unison_enabled": [true, true, false], "osc_unison_count": [5, 3, 2],
-        "osc_unison_spread": [28.0, 18.0, 20.0], "hard_sync": false,
+        "name": "Echoes Underwater", "category": "PinkFloyd", "synth_model": "theSynth",
+        "osc_wave": [0, 0, 0], "osc_octave": [0, 1, 0], "osc_detune": [0.0, 6.0, 0.0],
+        "osc_vol": [0.50, 0.40, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [false, false, false],
+        "osc_unison_enabled": [true, true, false], "osc_unison_count": [5, 4, 2],
+        "osc_unison_spread": [24.0, 20.0, 20.0], "hard_sync": false,
         "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
-        "noise_vol": 0.03, "lfo_enabled": true, "lfo_rate": 0.18, "lfo_depth": 0.14,
-        "lfo_shape": 0, "lfo_dest": 1, "filter_enabled": true, "filter_cutoff": 1200.0,
-        "filter_q": 0.12, "filter_env_amount": 0.25, "fenv_adsr": [1.5, 0.8, 0.6, 3.0],
-        "amp_adsr": [2.0, 0.6, 0.72, 4.0], "glide_time": 0.15
+        "noise_vol": 0.012, "lfo_enabled": true, "lfo_rate": 0.08, "lfo_depth": 0.12,
+        "lfo_shape": 0, "lfo_dest": 2, "filter_enabled": true, "filter_cutoff": 600.0,
+        "filter_q": 0.25, "filter_env_amount": 0.45, "fenv_adsr": [4.0, 3.0, 0.55, 8.0],
+        "amp_adsr": [5.0, 2.5, 0.62, 11.0], "glide_time": 0.45
       },
-      "volume": 0.50, "cutoff": 1400.0, "resonance": 0.12, "shimmer_send": 0.38, "crystal_send": 0.2
+      "volume": 0.50, "cutoff": 700.0, "resonance": 0.22, "shimmer_send": 0.42, "crystal_send": 0.18
     },
     {
-      "patch_path": "assets/patches/Ambient/Ambient Texture.json",
+      "patch_path": "assets/patches/Zimmer/Wormhole Texture.json",
       "patch": {
-        "name": "Ambient Texture", "category": "Ambient", "synth_model": "theSynth",
-        "osc_wave": [1, 0, 0], "osc_octave": [1, 2, 0], "osc_detune": [0.0, 11.0, 0.0],
-        "osc_vol": [0.3, 0.25, 0.0], "osc_enabled": [true, true, false],
-        "osc_pulse_width": [0.62, 0.5, 0.5], "osc_pw_enabled": [true, false, false],
-        "osc_unison_enabled": [true, true, false], "osc_unison_count": [8, 6, 2],
-        "osc_unison_spread": [45.0, 32.0, 20.0], "hard_sync": false,
+        "name": "Wormhole Texture", "category": "Zimmer", "synth_model": "theSynth",
+        "osc_wave": [0, 1, 0], "osc_octave": [0, 1, 0], "osc_detune": [0.0, 9.0, 0.0],
+        "osc_vol": [0.40, 0.40, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [false, true, false],
+        "osc_unison_enabled": [true, true, false], "osc_unison_count": [6, 4, 2],
+        "osc_unison_spread": [40.0, 32.0, 20.0], "hard_sync": false,
         "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
-        "noise_vol": 0.12, "lfo_enabled": true, "lfo_rate": 0.06, "lfo_depth": 0.18,
-        "lfo_shape": 0, "lfo_dest": 2, "filter_enabled": true, "filter_cutoff": 2200.0,
-        "filter_q": 0.06, "filter_env_amount": 0.08, "fenv_adsr": [5.0, 2.0, 0.65, 6.0],
-        "amp_adsr": [6.0, 1.5, 0.7, 9.0], "glide_time": 0.35
+        "noise_vol": 0.025, "lfo_enabled": true, "lfo_rate": 0.06, "lfo_depth": 0.10,
+        "lfo_shape": 0, "lfo_dest": 2, "filter_enabled": true, "filter_cutoff": 2400.0,
+        "filter_q": 0.22, "filter_env_amount": 0.35, "fenv_adsr": [7.0, 4.0, 0.60, 10.0],
+        "amp_adsr": [8.0, 3.0, 0.68, 14.0], "glide_time": 0.50
       },
-      "volume": 0.35, "cutoff": 2800.0, "resonance": 0.08, "shimmer_send": 0.45, "crystal_send": 0.22
+      "volume": 0.38, "cutoff": 2800.0, "resonance": 0.12, "shimmer_send": 0.50, "crystal_send": 0.25
     }
   ],
   "macros": [],
