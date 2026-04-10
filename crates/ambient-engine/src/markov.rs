@@ -568,6 +568,10 @@ pub enum VoiceRole {
     Pad     = 1,
     Melody  = 2,
     Texture = 3,
+    /// Rhythmic pulse voice — fast, root-locked, designed for percussive/sequencer patches.
+    /// Use with short-envelope patches (saw stabs, FM hits, noise bursts) to add
+    /// rhythmic drive to a scene without breaking the ambient harmonic framework.
+    Pulse   = 4,
 }
 
 impl VoiceRole {
@@ -578,6 +582,7 @@ impl VoiceRole {
             Self::Pad     => (48, 71),
             Self::Melody  => (60, 83),
             Self::Texture => (72, 95),
+            Self::Pulse   => (36, 60), // low-mid: rhythmic stabs and bass hits
         }
     }
 
@@ -589,6 +594,7 @@ impl VoiceRole {
             Self::Pad     => 2.5, // chord tones strongly preferred
             Self::Melody  => 1.6, // mild pull; passing tones still happen
             Self::Texture => 1.2, // mostly free, slight harmonic gravity
+            Self::Pulse   => 4.0, // very chord-locked — rhythmic parts need harmonic clarity
         }
     }
 
@@ -600,6 +606,7 @@ impl VoiceRole {
             Self::Pad     => [2.0, 0.5, 2.0, 0.3, 2.0, 0.5, 0.3],
             Self::Melody  => [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
             Self::Texture => [0.2, 1.5, 1.2, 0.5, 0.5, 2.0, 1.8],
+            Self::Pulse   => [4.0, 0.3, 0.0, 0.0, 3.0, 0.0, 0.3], // root + fifth only
         }
     }
 
@@ -610,14 +617,15 @@ impl VoiceRole {
             Self::Pad     => 2,
             Self::Melody  => 1,
             Self::Texture => 4,
+            Self::Pulse   => 1, // fastest — mood rhythmic_speed controls actual rate
         }
     }
 
-    pub const ALL: &'static [Self] = &[Self::Bass, Self::Pad, Self::Melody, Self::Texture];
-    pub const LABELS: &'static [&'static str] = &["Bass", "Pad", "Melody", "Texture"];
+    pub const ALL: &'static [Self] = &[Self::Bass, Self::Pad, Self::Melody, Self::Texture, Self::Pulse];
+    pub const LABELS: &'static [&'static str] = &["Bass", "Pad", "Melody", "Texture", "Pulse"];
 
     pub fn from_u8(v: u8) -> Self {
-        match v { 1 => Self::Pad, 2 => Self::Melody, 3 => Self::Texture, _ => Self::Bass }
+        match v { 1 => Self::Pad, 2 => Self::Melody, 3 => Self::Texture, 4 => Self::Pulse, _ => Self::Bass }
     }
 }
 
@@ -1351,22 +1359,24 @@ impl MarkovEngine {
             // else: chord holds — harmonic chain stays on current state.
         }
 
-        // Flag Bass voices to snap to root on their next attack (if bass_lock enabled).
+        // Flag Bass and Pulse voices to snap to root on their next attack (if bass_lock enabled).
         if shared.bass_lock() {
             for (i, voice) in self.voices.iter_mut().enumerate() {
-                if shared.role(i) == VoiceRole::Bass {
+                let role = shared.role(i);
+                if role == VoiceRole::Bass || role == VoiceRole::Pulse {
                     voice.pending_root_snap = true;
                 }
             }
         }
 
         // ── Per-phrase register drift ─────────────────────────────────────────
-        // Bass excluded. Probability = register_drift knob (0=off, 1=always).
+        // Bass and Pulse excluded. Probability = register_drift knob (0=off, 1=always).
         if phrase_ev.phrase_boundary {
             let drift_prob = shared.register_drift();
             if drift_prob > 0.0 {
                 for (i, voice) in self.voices.iter_mut().enumerate() {
-                    if shared.role(i) == VoiceRole::Bass { continue; }
+                    let role = shared.role(i);
+                    if role == VoiceRole::Bass || role == VoiceRole::Pulse { continue; }
                     let r = (self.phrase_rng.next_u32() as f32) / (u32::MAX as f32);
                     if r < drift_prob {
                         let dir: i8 = if self.phrase_rng.next_u32() & 1 == 0 { 1 } else { -1 };

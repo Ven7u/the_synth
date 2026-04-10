@@ -1,0 +1,141 @@
+{
+  "name": "Ghost Machine",
+  "bpm": 100,
+  "key": 7,
+  "scale": "minor",
+  "macro_set": "AmbientCore",
+  "tracks": [
+    {
+      "patch_path": "assets/patches/Glass/Ostinato Bass.json",
+      "patch": {
+        "name": "Ostinato Bass", "category": "Glass", "synth_model": "theSynth",
+        "osc_wave": [0, 1, 0], "osc_octave": [-1, 0, 0], "osc_detune": [0.0, 0.5, 0.0],
+        "osc_vol": [0.60, 0.30, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.5, 0.45, 0.5], "osc_pw_enabled": [false, true, false],
+        "osc_unison_enabled": [false, false, false], "osc_unison_count": [2, 2, 2],
+        "osc_unison_spread": [5.0, 5.0, 20.0], "hard_sync": false,
+        "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
+        "noise_vol": 0.0, "lfo_enabled": false, "lfo_rate": 0.1, "lfo_depth": 0.0,
+        "lfo_shape": 0, "lfo_dest": 0, "filter_enabled": true, "filter_cutoff": 700.0,
+        "filter_q": 0.10, "filter_env_amount": 0.40, "fenv_adsr": [0.005, 0.3, 0.30, 0.8],
+        "amp_adsr": [0.005, 0.4, 0.45, 1.2], "glide_time": 0.0
+      },
+      "volume": 0.55, "cutoff": 650.0, "resonance": 0.10, "shimmer_send": 0.08, "crystal_send": 0.0
+    },
+    {
+      "patch_path": "assets/patches/Eno/Oblique Pad.json",
+      "patch": {
+        "name": "Oblique Pad", "category": "Eno", "synth_model": "theSynth",
+        "osc_wave": [0, 0, 0], "osc_octave": [0, 0, 0], "osc_detune": [0.0, 7.0, 0.0],
+        "osc_vol": [0.5, 0.5, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [false, false, false],
+        "osc_unison_enabled": [true, true, false], "osc_unison_count": [5, 4, 2],
+        "osc_unison_spread": [22.0, 18.0, 20.0], "hard_sync": false,
+        "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
+        "noise_vol": 0.008, "lfo_enabled": true, "lfo_rate": 0.05, "lfo_depth": 0.07,
+        "lfo_shape": 0, "lfo_dest": 2, "filter_enabled": true, "filter_cutoff": 1400.0,
+        "filter_q": 0.10, "filter_env_amount": 0.20, "fenv_adsr": [6.0, 3.0, 0.70, 10.0],
+        "amp_adsr": [8.0, 2.0, 0.78, 14.0], "glide_time": 0.55
+      },
+      "volume": 0.40, "cutoff": 1600.0, "resonance": 0.06, "shimmer_send": 0.55, "crystal_send": 0.08
+    },
+    {
+      "patch_path": "assets/patches/Pulse/FM Bell Hit.json",
+      "patch": {
+        "name": "FM Bell Hit", "category": "Pulse", "synth_model": "theSynth",
+        "osc_wave": [0, 0, 0], "osc_octave": [0, 1, 0], "osc_detune": [0.0, 0.0, 0.0],
+        "osc_vol": [0.60, 0.40, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [false, false, false],
+        "osc_unison_enabled": [false, false, false], "osc_unison_count": [2, 2, 2],
+        "osc_unison_spread": [5.0, 5.0, 20.0], "hard_sync": false,
+        "fm_enabled": true, "fm_depth": 0.35, "ring_enabled": false, "ring_depth": 0.0,
+        "noise_vol": 0.0, "lfo_enabled": false, "lfo_rate": 0.1, "lfo_depth": 0.0,
+        "lfo_shape": 0, "lfo_dest": 0, "filter_enabled": true, "filter_cutoff": 3000.0,
+        "filter_q": 0.08, "filter_env_amount": 0.40, "fenv_adsr": [0.001, 0.30, 0.0, 0.20],
+        "amp_adsr": [0.001, 0.40, 0.0, 0.30], "glide_time": 0.0
+      },
+      "volume": 0.30, "cutoff": 2800.0, "resonance": 0.08, "shimmer_send": 0.25, "crystal_send": 0.35
+    },
+    {
+      "patch_path": "assets/patches/Pulse/Sync Pluck.json",
+      "patch": {
+        "name": "Sync Pluck", "category": "Pulse", "synth_model": "theSynth",
+        "osc_wave": [1, 1, 0], "osc_octave": [0, 0, 0], "osc_detune": [0.0, 7.0, 0.0],
+        "osc_vol": [0.50, 0.50, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [false, false, false],
+        "osc_unison_enabled": [false, false, false], "osc_unison_count": [2, 2, 2],
+        "osc_unison_spread": [5.0, 5.0, 20.0], "hard_sync": true,
+        "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
+        "noise_vol": 0.0, "lfo_enabled": false, "lfo_rate": 0.1, "lfo_depth": 0.0,
+        "lfo_shape": 0, "lfo_dest": 0, "filter_enabled": true, "filter_cutoff": 2000.0,
+        "filter_q": 0.25, "filter_env_amount": 0.55, "fenv_adsr": [0.001, 0.12, 0.0, 0.08],
+        "amp_adsr": [0.001, 0.18, 0.0, 0.12], "glide_time": 0.0
+      },
+      "volume": 0.38, "cutoff": 1800.0, "resonance": 0.12, "shimmer_send": 0.15, "crystal_send": 0.25
+    }
+  ],
+  "macros": [],
+  "global": {
+    "master_vol": 0.58,
+    "shimmer_mix": 0.40, "shimmer_amount": 0.55, "shimmer_size": 0.80, "shimmer_damp": 0.25, "shimmer_pitch": 1,
+    "crystal_mix": 0.25, "crystal_grain_ms": 100.0, "crystal_scatter": 0.20, "crystal_feedback": 0.40, "crystal_delay_ms": 300.0, "crystal_pitch": 1
+  },
+  "markov": {
+    "clock_div": 2,
+    "harmonic_seq": [],
+    "root": 55,
+    "scale": 1,
+    "density": 0.50,
+    "bars_per_phrase": 4,
+    "mood": [0.0, 0.10, 0.15, 0.0, 0.0, 0.75],
+    "voice_roles": [0, 1, 4, 4],
+    "voice_densities": [0.0, 0.0, 0.50, 0.65],
+    "voice_enabled": [true, true, true, true],
+    "chord_attraction": 0.80,
+    "bass_lock": true,
+    "dissonance_resolve": true,
+    "dissonance_threshold": 1,
+    "register_drift": 0.08,
+    "generative_mode": 4,
+
+    "timeline": [
+      {
+        "name": "Assembly",
+        "phrases": 4,
+        "transition_phrases": 0,
+        "mood": [0.0, 0.05, 0.10, 0.0, 0.05, 0.80],
+        "density": 0.35,
+        "voice_enabled": [true, true, false, true]
+      },
+      {
+        "name": "Mechanism",
+        "phrases": 5,
+        "transition_phrases": 2,
+        "mood": [0.0, 0.10, 0.15, 0.0, 0.0, 0.75],
+        "density": 0.55,
+        "voice_enabled": [true, true, true, true]
+      },
+      {
+        "name": "Overload",
+        "phrases": 3,
+        "transition_phrases": 1,
+        "mood": [0.0, 0.25, 0.20, 0.0, 0.0, 0.55],
+        "density": 0.72,
+        "bars_per_phrase": 2,
+        "voice_enabled": [true, true, true, true],
+        "effects": { "shimmer_mix": 0.20, "crystal_mix": 0.45 }
+      },
+      {
+        "name": "Decay",
+        "phrases": 5,
+        "transition_phrases": 3,
+        "mood": [0.0, 0.05, 0.25, 0.0, 0.20, 0.50],
+        "density": 0.30,
+        "bars_per_phrase": 4,
+        "voice_enabled": [true, true, false, true],
+        "effects": { "shimmer_mix": 0.50, "crystal_mix": 0.20 }
+      }
+    ],
+    "timeline_loop": true
+  }
+}

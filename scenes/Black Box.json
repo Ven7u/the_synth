@@ -1,0 +1,141 @@
+{
+  "name": "Black Box",
+  "bpm": 126,
+  "key": 1,
+  "scale": "minor",
+  "macro_set": "AmbientCore",
+  "tracks": [
+    {
+      "patch_path": "assets/patches/Pulse/Sub Throb.json",
+      "patch": {
+        "name": "Sub Throb", "category": "Pulse", "synth_model": "theSynth",
+        "osc_wave": [0, 0, 0], "osc_octave": [-1, -2, 0], "osc_detune": [0.0, 0.5, 0.0],
+        "osc_vol": [0.55, 0.45, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [false, false, false],
+        "osc_unison_enabled": [false, false, false], "osc_unison_count": [2, 2, 2],
+        "osc_unison_spread": [5.0, 5.0, 20.0], "hard_sync": false,
+        "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
+        "noise_vol": 0.0, "lfo_enabled": false, "lfo_rate": 0.1, "lfo_depth": 0.0,
+        "lfo_shape": 0, "lfo_dest": 0, "filter_enabled": true, "filter_cutoff": 200.0,
+        "filter_q": 0.12, "filter_env_amount": 0.25, "fenv_adsr": [0.005, 0.25, 0.10, 0.20],
+        "amp_adsr": [0.005, 0.30, 0.15, 0.25], "glide_time": 0.0
+      },
+      "volume": 0.65, "cutoff": 180.0, "resonance": 0.10, "shimmer_send": 0.0, "crystal_send": 0.0
+    },
+    {
+      "patch_path": "assets/patches/PinkFloyd/Echoes Underwater.json",
+      "patch": {
+        "name": "Echoes Underwater", "category": "PinkFloyd", "synth_model": "theSynth",
+        "osc_wave": [0, 0, 0], "osc_octave": [0, 1, 0], "osc_detune": [0.0, 5.0, 0.0],
+        "osc_vol": [0.50, 0.50, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [false, false, false],
+        "osc_unison_enabled": [true, true, false], "osc_unison_count": [5, 4, 2],
+        "osc_unison_spread": [25.0, 20.0, 20.0], "hard_sync": false,
+        "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
+        "noise_vol": 0.012, "lfo_enabled": true, "lfo_rate": 0.04, "lfo_depth": 0.06,
+        "lfo_shape": 0, "lfo_dest": 2, "filter_enabled": true, "filter_cutoff": 1200.0,
+        "filter_q": 0.12, "filter_env_amount": 0.18, "fenv_adsr": [8.0, 3.0, 0.72, 12.0],
+        "amp_adsr": [10.0, 2.0, 0.80, 16.0], "glide_time": 0.50
+      },
+      "volume": 0.35, "cutoff": 1100.0, "resonance": 0.08, "shimmer_send": 0.40, "crystal_send": 0.05
+    },
+    {
+      "patch_path": "assets/patches/Pulse/Noise Click.json",
+      "patch": {
+        "name": "Noise Click", "category": "Pulse", "synth_model": "theSynth",
+        "osc_wave": [0, 0, 0], "osc_octave": [0, 1, 0], "osc_detune": [0.0, 0.0, 0.0],
+        "osc_vol": [0.20, 0.0, 0.0], "osc_enabled": [true, false, false],
+        "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [false, false, false],
+        "osc_unison_enabled": [false, false, false], "osc_unison_count": [2, 2, 2],
+        "osc_unison_spread": [5.0, 5.0, 20.0], "hard_sync": false,
+        "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
+        "noise_vol": 0.80, "lfo_enabled": false, "lfo_rate": 0.1, "lfo_depth": 0.0,
+        "lfo_shape": 0, "lfo_dest": 0, "filter_enabled": true, "filter_cutoff": 4000.0,
+        "filter_q": 0.15, "filter_env_amount": 0.60, "fenv_adsr": [0.001, 0.05, 0.0, 0.03],
+        "amp_adsr": [0.001, 0.08, 0.0, 0.05], "glide_time": 0.0
+      },
+      "volume": 0.30, "cutoff": 5000.0, "resonance": 0.12, "shimmer_send": 0.05, "crystal_send": 0.10
+    },
+    {
+      "patch_path": "assets/patches/Pulse/Minimal Click.json",
+      "patch": {
+        "name": "Minimal Click", "category": "Pulse", "synth_model": "theSynth",
+        "osc_wave": [2, 0, 0], "osc_octave": [0, 0, 0], "osc_detune": [0.0, 0.0, 0.0],
+        "osc_vol": [0.50, 0.30, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.15, 0.5, 0.5], "osc_pw_enabled": [true, false, false],
+        "osc_unison_enabled": [false, false, false], "osc_unison_count": [2, 2, 2],
+        "osc_unison_spread": [5.0, 5.0, 20.0], "hard_sync": false,
+        "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": true, "ring_depth": 0.15,
+        "noise_vol": 0.10, "lfo_enabled": false, "lfo_rate": 0.1, "lfo_depth": 0.0,
+        "lfo_shape": 0, "lfo_dest": 0, "filter_enabled": true, "filter_cutoff": 2500.0,
+        "filter_q": 0.30, "filter_env_amount": 0.55, "fenv_adsr": [0.001, 0.06, 0.0, 0.04],
+        "amp_adsr": [0.001, 0.10, 0.0, 0.06], "glide_time": 0.0
+      },
+      "volume": 0.35, "cutoff": 2200.0, "resonance": 0.18, "shimmer_send": 0.0, "crystal_send": 0.18
+    }
+  ],
+  "macros": [],
+  "global": {
+    "master_vol": 0.58,
+    "shimmer_mix": 0.20, "shimmer_amount": 0.40, "shimmer_size": 0.65, "shimmer_damp": 0.40, "shimmer_pitch": 1,
+    "crystal_mix": 0.15, "crystal_grain_ms": 80.0, "crystal_scatter": 0.25, "crystal_feedback": 0.35, "crystal_delay_ms": 188.0, "crystal_pitch": 1
+  },
+  "markov": {
+    "clock_div": 2,
+    "harmonic_seq": [],
+    "root": 37,
+    "scale": 1,
+    "density": 0.50,
+    "bars_per_phrase": 4,
+    "mood": [0.0, 0.20, 0.45, 0.0, 0.0, 0.35],
+    "voice_roles": [0, 1, 4, 4],
+    "voice_densities": [0.0, 0.0, 0.55, 0.50],
+    "voice_enabled": [true, true, true, true],
+    "chord_attraction": 0.85,
+    "bass_lock": true,
+    "dissonance_resolve": true,
+    "dissonance_threshold": 1,
+    "register_drift": 0.05,
+    "generative_mode": 4,
+
+    "timeline": [
+      {
+        "name": "Void",
+        "phrases": 4,
+        "transition_phrases": 0,
+        "mood": [0.0, 0.10, 0.55, 0.0, 0.05, 0.30],
+        "density": 0.30,
+        "voice_enabled": [true, true, false, true]
+      },
+      {
+        "name": "Pulse",
+        "phrases": 5,
+        "transition_phrases": 2,
+        "mood": [0.0, 0.15, 0.40, 0.0, 0.0, 0.45],
+        "density": 0.55,
+        "voice_enabled": [true, true, true, true]
+      },
+      {
+        "name": "Pressure",
+        "phrases": 4,
+        "transition_phrases": 1,
+        "mood": [0.0, 0.35, 0.35, 0.0, 0.0, 0.30],
+        "density": 0.72,
+        "bars_per_phrase": 2,
+        "voice_enabled": [true, true, true, true],
+        "effects": { "shimmer_mix": 0.08, "crystal_mix": 0.30 }
+      },
+      {
+        "name": "Release",
+        "phrases": 4,
+        "transition_phrases": 2,
+        "mood": [0.0, 0.10, 0.50, 0.0, 0.10, 0.30],
+        "density": 0.35,
+        "bars_per_phrase": 4,
+        "voice_enabled": [true, true, false, true],
+        "effects": { "shimmer_mix": 0.25, "crystal_mix": 0.12 }
+      }
+    ],
+    "timeline_loop": true
+  }
+}

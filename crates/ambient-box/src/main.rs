@@ -963,6 +963,7 @@ fn voice_role_color(role: VoiceRole) -> egui::Color32 {
         VoiceRole::Pad     => egui::Color32::from_rgb(80, 160, 255),
         VoiceRole::Melody  => egui::Color32::from_rgb(60, 220, 120),
         VoiceRole::Texture => egui::Color32::from_rgb(200, 100, 255),
+        VoiceRole::Pulse   => egui::Color32::from_rgb(255, 80, 80),
     }
 }
 
