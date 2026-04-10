@@ -100,6 +100,49 @@
     "dissonance_resolve": true,
     "dissonance_threshold": 0,
     "register_drift": 0.06,
-    "generative_mode": 4
+    "generative_mode": 4,
+
+    "timeline": [
+      {
+        "name": "Pre-Dawn",
+        "phrases": 4,
+        "transition_phrases": 0,
+        "mood": [0.50, 0.0, 0.0, 0.0, 0.50, 0.0],
+        "density": 0.10,
+        "root": 53,
+        "voice_enabled": [true, true, false, false]
+      },
+      {
+        "name": "Dawn Chorus",
+        "phrases": 6,
+        "transition_phrases": 3,
+        "mood": [0.60, 0.0, 0.0, 0.20, 0.20, 0.0],
+        "density": 0.30,
+        "root": 53,
+        "voice_enabled": [true, true, true, false],
+        "effects": { "shimmer_mix": 0.60 }
+      },
+      {
+        "name": "Golden Hour",
+        "phrases": 5,
+        "transition_phrases": 2,
+        "mood": [0.70, 0.0, 0.0, 0.15, 0.15, 0.0],
+        "density": 0.28,
+        "root": 48,
+        "voice_enabled": [true, true, true, true],
+        "effects": { "shimmer_mix": 0.70, "crystal_mix": 0.22 }
+      },
+      {
+        "name": "Settle",
+        "phrases": 5,
+        "transition_phrases": 3,
+        "mood": [0.75, 0.0, 0.0, 0.0, 0.25, 0.0],
+        "density": 0.12,
+        "root": 53,
+        "voice_enabled": [true, true, false, true],
+        "effects": { "shimmer_mix": 0.55, "crystal_mix": 0.15 }
+      }
+    ],
+    "timeline_loop": true
   }
 }

@@ -96,6 +96,46 @@
     "dissonance_resolve": true,
     "dissonance_threshold": 1,
     "register_drift": 0.05,
-    "generative_mode": 4
+    "generative_mode": 4,
+
+    "timeline": [
+      {
+        "name": "Orbit",
+        "phrases": 4,
+        "transition_phrases": 0,
+        "mood": [0.0, 0.0, 0.0, 0.0, 0.35, 0.65],
+        "density": 0.20,
+        "voice_enabled": [true, true, false, false]
+      },
+      {
+        "name": "Descent",
+        "phrases": 5,
+        "transition_phrases": 2,
+        "mood": [0.0, 0.10, 0.10, 0.0, 0.15, 0.65],
+        "density": 0.40,
+        "voice_enabled": [true, true, true, false]
+      },
+      {
+        "name": "Singularity",
+        "phrases": 4,
+        "transition_phrases": 2,
+        "mood": [0.0, 0.20, 0.15, 0.0, 0.05, 0.60],
+        "density": 0.55,
+        "bars_per_phrase": 4,
+        "voice_enabled": [true, true, true, true],
+        "effects": { "shimmer_mix": 0.80, "crystal_mix": 0.45 }
+      },
+      {
+        "name": "Event Horizon",
+        "phrases": 6,
+        "transition_phrases": 3,
+        "mood": [0.0, 0.05, 0.05, 0.0, 0.40, 0.50],
+        "density": 0.18,
+        "bars_per_phrase": 8,
+        "voice_enabled": [true, true, false, true],
+        "effects": { "shimmer_mix": 0.70, "crystal_mix": 0.25 }
+      }
+    ],
+    "timeline_loop": true
   }
 }

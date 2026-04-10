@@ -96,6 +96,50 @@
     "dissonance_resolve": true,
     "dissonance_threshold": 1,
     "register_drift": 0.35,
-    "generative_mode": 4
+    "generative_mode": 4,
+
+    "timeline": [
+      {
+        "name": "Unease",
+        "phrases": 4,
+        "transition_phrases": 0,
+        "mood": [0.0, 0.30, 0.40, 0.0, 0.0, 0.30],
+        "density": 0.25,
+        "voice_enabled": [true, true, false, true]
+      },
+      {
+        "name": "Escalation",
+        "phrases": 4,
+        "transition_phrases": 2,
+        "mood": [0.0, 0.50, 0.25, 0.0, 0.0, 0.25],
+        "density": 0.50,
+        "voice_enabled": [true, true, true, true]
+      },
+      {
+        "name": "Breaking Point",
+        "phrases": 3,
+        "transition_phrases": 1,
+        "mood": [0.0, 0.75, 0.15, 0.0, 0.0, 0.10],
+        "density": 0.75,
+        "root": 53,
+        "scale": 6,
+        "bars_per_phrase": 2,
+        "voice_enabled": [true, true, true, true],
+        "effects": { "shimmer_mix": 0.15, "crystal_mix": 0.45 }
+      },
+      {
+        "name": "Aftermath",
+        "phrases": 5,
+        "transition_phrases": 3,
+        "mood": [0.0, 0.15, 0.50, 0.0, 0.10, 0.25],
+        "density": 0.20,
+        "root": 52,
+        "scale": 1,
+        "bars_per_phrase": 4,
+        "voice_enabled": [true, true, false, true],
+        "effects": { "shimmer_mix": 0.40, "crystal_mix": 0.20 }
+      }
+    ],
+    "timeline_loop": true
   }
 }

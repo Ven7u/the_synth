@@ -1085,6 +1085,26 @@ impl eframe::App for AmbientBoxApp {
                             self.timeline.on_phrase_boundary();
                         }
                         self.timeline.apply_to_shared(ms);
+                        // Apply effects targets to UI fields so the existing
+                        // UI→engine write path picks them up.
+                        let state = self.timeline.interpolated_state();
+                        self.shimmer_mix = state.shimmer_mix;
+                        self.shimmer_amt = state.shimmer_amount;
+                        self.shimmer_size = state.shimmer_size;
+                        self.crystal_mix = state.crystal_mix;
+                        self.crystal_feedback = state.crystal_feedback;
+                        self.crystal_delay_ms = state.crystal_delay_ms;
+                        // Also sync the markov UI fields so knobs reflect timeline.
+                        for i in 0..N_MOODS {
+                            self.markov_mood_ui[i] = state.mood[i];
+                        }
+                        self.markov_density_ui = state.density;
+                        self.markov_root_ui = state.root;
+                        self.markov_scale_ui = state.scale;
+                        self.markov_bars_per_phrase_ui = state.bars_per_phrase;
+                        for i in 0..TRACK_COUNT.min(4) {
+                            self.markov_voice_enabled_ui[i] = state.voice_enabled[i];
+                        }
                         self.timeline_last_epoch = epoch;
                     }
                     self.timeline_status = Some(self.timeline.status());
@@ -1474,38 +1494,55 @@ impl eframe::App for AmbientBoxApp {
 
             // ── Timeline visualization ────────────────────────────────────────
             if markov_active {
-                if let Some(ref status) = self.timeline_status {
-                    if status.active {
+                // Show timeline UI if the scene has timeline sections (even if disabled).
+                if !self.timeline.sections.is_empty() {
+                    {
                         ui.separator();
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Timeline").strong());
-                            ui.label(format!(
-                                "  {}  ({}/{})",
-                                status.section_name,
-                                status.phrase_in_sect,
-                                status.section_phrases,
-                            ));
-                            if status.in_transition {
-                                ui.label(
-                                    egui::RichText::new(" CROSSFADE")
-                                        .small()
-                                        .color(egui::Color32::from_rgb(255, 200, 80)),
-                                );
+                            // On/Off toggle.
+                            let label = if self.timeline.active { "Timeline ON" } else { "Timeline OFF" };
+                            let color = if self.timeline.active {
+                                egui::Color32::from_rgb(0, 200, 140)
+                            } else {
+                                egui::Color32::GRAY
+                            };
+                            if ui.button(egui::RichText::new(label).strong().color(color)).clicked() {
+                                self.timeline.active = !self.timeline.active;
                             }
-                            ui.label(format!(
-                                "  [{}/{}]",
-                                status.cursor + 1,
-                                status.section_count,
-                            ));
-                            if self.timeline.loop_mode {
-                                ui.label(
-                                    egui::RichText::new(" ⟳")
-                                        .color(egui::Color32::from_rgb(120, 200, 255)),
-                                );
+
+                            if self.timeline.active {
+                                if let Some(ref status) = self.timeline_status {
+                                    ui.label(format!(
+                                        "  {}  ({}/{})",
+                                        status.section_name,
+                                        status.phrase_in_sect,
+                                        status.section_phrases,
+                                    ));
+                                    if status.in_transition {
+                                        ui.label(
+                                            egui::RichText::new(" CROSSFADE")
+                                                .small()
+                                                .color(egui::Color32::from_rgb(255, 200, 80)),
+                                        );
+                                    }
+                                    ui.label(format!(
+                                        "  [{}/{}]",
+                                        status.cursor + 1,
+                                        status.section_count,
+                                    ));
+                                }
+                                if self.timeline.loop_mode {
+                                    ui.label(
+                                        egui::RichText::new(" ⟳")
+                                            .color(egui::Color32::from_rgb(120, 200, 255)),
+                                    );
+                                }
                             }
                         });
 
                         // Section bar: proportional blocks for each section.
+                        let status_ref = self.timeline_status.as_ref();
+                        let tl_active = self.timeline.active;
                         let total_phrases = self.timeline.total_phrases().max(1) as f32;
                         let bar_width = ui.available_width().min(600.0);
                         let bar_height = 22.0;
@@ -1514,7 +1551,8 @@ impl eframe::App for AmbientBoxApp {
                             egui::Sense::hover(),
                         );
                         let painter = ui.painter_at(rect);
-                        painter.rect_filled(rect, 3.0, egui::Color32::from_gray(25));
+                        let bg = if tl_active { egui::Color32::from_gray(25) } else { egui::Color32::from_gray(15) };
+                        painter.rect_filled(rect, 3.0, bg);
 
                         let section_colors = [
                             egui::Color32::from_rgb(60, 100, 160),
@@ -1530,10 +1568,19 @@ impl eframe::App for AmbientBoxApp {
                         let mut x = rect.left();
                         for (i, section) in self.timeline.sections.iter().enumerate() {
                             let w = (section.phrases as f32 / total_phrases) * bar_width;
-                            let is_current = i == status.cursor;
+                            let is_current = tl_active && status_ref.map_or(false, |s| i == s.cursor);
                             let base_color = section_colors[i % section_colors.len()];
+                            // Dim sections when timeline is off.
+                            let base_color = if !tl_active {
+                                egui::Color32::from_rgb(
+                                    base_color.r() / 2,
+                                    base_color.g() / 2,
+                                    base_color.b() / 2,
+                                )
+                            } else {
+                                base_color
+                            };
                             let color = if is_current {
-                                // Brighten current section.
                                 egui::Color32::from_rgb(
                                     (base_color.r() as u16 + 60).min(255) as u8,
                                     (base_color.g() as u16 + 60).min(255) as u8,
@@ -1551,50 +1598,51 @@ impl eframe::App for AmbientBoxApp {
 
                             // Section name label.
                             if w > 30.0 {
+                                let text_color = if tl_active { egui::Color32::WHITE } else { egui::Color32::from_gray(120) };
                                 painter.text(
                                     section_rect.center(),
                                     egui::Align2::CENTER_CENTER,
                                     &section.name,
                                     egui::FontId::proportional(10.0),
-                                    egui::Color32::WHITE,
+                                    text_color,
                                 );
                             }
 
-                            // Progress indicator within current section.
-                            if is_current && status.section_phrases > 0 {
-                                let progress_w = w * status.section_progress;
-                                let progress_rect = egui::Rect::from_min_size(
-                                    egui::pos2(x, rect.top()),
-                                    egui::vec2(progress_w, bar_height),
-                                );
-                                painter.rect_filled(
-                                    progress_rect,
-                                    2.0,
-                                    egui::Color32::from_rgba_premultiplied(255, 255, 255, 30),
-                                );
+                            // Progress + playhead (only when active).
+                            if let Some(ref status) = status_ref {
+                                if is_current && status.section_phrases > 0 {
+                                    let progress_w = w * status.section_progress;
+                                    let progress_rect = egui::Rect::from_min_size(
+                                        egui::pos2(x, rect.top()),
+                                        egui::vec2(progress_w, bar_height),
+                                    );
+                                    painter.rect_filled(
+                                        progress_rect,
+                                        2.0,
+                                        egui::Color32::from_rgba_premultiplied(255, 255, 255, 30),
+                                    );
+                                    let ph_x = x + progress_w;
+                                    painter.line_segment(
+                                        [egui::pos2(ph_x, rect.top()), egui::pos2(ph_x, rect.bottom())],
+                                        egui::Stroke::new(2.0, egui::Color32::WHITE),
+                                    );
+                                }
 
-                                // Playhead line.
-                                let ph_x = x + progress_w;
-                                painter.line_segment(
-                                    [egui::pos2(ph_x, rect.top()), egui::pos2(ph_x, rect.bottom())],
-                                    egui::Stroke::new(2.0, egui::Color32::WHITE),
-                                );
-                            }
-
-                            // Transition region indicator.
-                            if is_current && section.transition_phrases > 0 {
-                                let trans_w = (section.transition_phrases as f32
-                                    / section.phrases.max(1) as f32)
-                                    * w;
-                                let trans_rect = egui::Rect::from_min_size(
-                                    egui::pos2(x, rect.bottom() - 3.0),
-                                    egui::vec2(trans_w, 3.0),
-                                );
-                                painter.rect_filled(
-                                    trans_rect,
-                                    1.0,
-                                    egui::Color32::from_rgb(255, 200, 80),
-                                );
+                                // Transition region indicator.
+                                if is_current && section.transition_phrases > 0 {
+                                    let trans_w = (section.transition_phrases as f32
+                                        / section.phrases.max(1) as f32)
+                                        * w;
+                                    let trans_rect = egui::Rect::from_min_size(
+                                        egui::pos2(x, rect.bottom() - 3.0),
+                                        egui::vec2(trans_w, 3.0),
+                                    );
+                                    painter.rect_filled(
+                                        trans_rect,
+                                        1.0,
+                                        egui::Color32::from_rgb(255, 200, 80),
+                                    );
+                                }
                             }
 
                             x += w;
@@ -2160,8 +2208,14 @@ impl eframe::App for AmbientBoxApp {
                         // ── Create Timeline from scene data ──
                         if let Some(ref sections) = ms.timeline {
                             if !sections.is_empty() {
-                                // Build base state from scene's markov config.
-                                let base = ambient_engine::ResolvedState::snapshot_from_shared(&eng.markov_shared);
+                                // Build base state from scene's markov config + scene globals for effects.
+                                let mut base = ambient_engine::ResolvedState::snapshot_from_shared(&eng.markov_shared);
+                                base.shimmer_mix = scene.global.shimmer_mix;
+                                base.shimmer_amount = scene.global.shimmer_amount;
+                                base.shimmer_size = scene.global.shimmer_size;
+                                base.crystal_mix = scene.global.crystal_mix;
+                                base.crystal_feedback = scene.global.crystal_feedback;
+                                base.crystal_delay_ms = scene.global.crystal_delay_ms;
                                 self.timeline = ambient_engine::Timeline::new(
                                     sections.clone(),
                                     ms.timeline_loop,

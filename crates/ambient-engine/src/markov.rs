@@ -277,6 +277,10 @@ pub struct MoodSet {
     /// At 0.3, the chord holds ~3 bars on average before changing.
     /// Blended across moods, then rolled per bar in on_bar().
     pub chord_change_prob: f32,
+    /// Random variation applied to gate_length on each note-on (±variance).
+    /// 0.0 = perfectly consistent gate (mechanical). High values = unpredictable articulation.
+    /// Blended across moods, then sampled per note-on in MarkovEngine::on_subdivision.
+    pub gate_length_variance: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +297,7 @@ pub const MOOD_CALM: MoodSet = MoodSet {
     gate_length: 0.85, // long, breathing sustains
     rhythmic_speed: 0.7, // slower pulse — Satie's unhurried tempo
     chord_change_prob: 0.4, // chords linger — I↔IV pendulum is slow
+    gate_length_variance: 0.05, // very consistent — meditative, predictable sustains
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
         [0.40,  0.05,  0.02,  0.35,  0.05,  0.10,  0.03], // I   — sits, then → IV
@@ -333,6 +338,7 @@ pub const MOOD_TENSE: MoodSet = MoodSet {
     gate_length: 0.20, // short, stabby, agitated
     rhythmic_speed: 1.5, // frantic pace — Herrmann's relentless tension
     chord_change_prob: 0.9, // harmony shifts restlessly — unresolved Wagner chromaticism
+    gate_length_variance: 0.30, // wildly unpredictable — the uncertainty IS the tension
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
         [0.05,  0.15,  0.05,  0.10,  0.40,  0.10,  0.15], // I   — destabilizes to V/vii
@@ -373,6 +379,7 @@ pub const MOOD_DARK: MoodSet = MoodSet {
     gate_length: 0.90, // heavy, drone-like sustains when notes appear
     rhythmic_speed: 0.6, // slow, brooding — Radiohead's sparse pacing
     chord_change_prob: 0.35, // chords hang in darkness — Aeolian cadence is unhurried
+    gate_length_variance: 0.20, // moderate variance — sparse notes with unpredictable decay
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
         [0.10,  0.03,  0.08,  0.12,  0.10,  0.35,  0.22], // I   → vi/vii (darkens)
@@ -413,6 +420,7 @@ pub const MOOD_EUPHORIC: MoodSet = MoodSet {
     gate_length: 0.30, // short, bright, bouncy
     rhythmic_speed: 1.8, // fast energetic pulse — EDM build energy
     chord_change_prob: 1.0, // harmony always moves forward — Pachelbel never stops
+    gate_length_variance: 0.10, // slight bounce — energetic but not chaotic
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
         [0.08,  0.05,  0.05,  0.25,  0.40,  0.12,  0.05], // I   → V/IV (moves forward)
@@ -453,6 +461,7 @@ pub const MOOD_COSMIC: MoodSet = MoodSet {
     gate_length: 0.95, // near-infinite sustain, drone-like
     rhythmic_speed: 0.4, // glacial — Vangelis/Tangerine Dream timelessness
     chord_change_prob: 0.15, // chords barely change — Interstellar organ sits for minutes
+    gate_length_variance: 0.03, // near-zero — drone-like, unchanging sustain
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
         [0.45,  0.02,  0.03,  0.35,  0.02,  0.10,  0.03], // I   — sits, then → IV
@@ -494,6 +503,7 @@ pub const MOOD_GRAVITY: MoodSet = MoodSet {
     gate_length: 0.55, // medium — deliberate, mechanical
     rhythmic_speed: 1.4, // mechanical clock-pulse — Glass's relentless arpeggiation
     chord_change_prob: 0.85, // tight chord cycles — minimalist loops advance steadily
+    gate_length_variance: 0.04, // very consistent — mechanical precision, Glass-like
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
         [0.08,  0.05,  0.03,  0.12,  0.50,  0.15,  0.07], // I   → V (pushes forward)
@@ -882,6 +892,14 @@ impl MoodBlend {
             .clamp(0.0, 1.0)
     }
 
+    /// Blend gate_length_variance from mood weights. Returns value >= 0.
+    pub fn blend_gate_length_variance(&self, moods: &[&MoodSet; N_MOODS]) -> f32 {
+        moods.iter().enumerate()
+            .map(|(i, m)| self.weight(i) * m.gate_length_variance)
+            .sum::<f32>()
+            .max(0.0)
+    }
+
     pub fn blend_melodic(&self, moods: &[&MoodSet; N_MOODS]) -> MelodicMatrix {
         let w0 = self.weight(0);
         let mut out = scale_melodic(&moods[0].melodic, w0);
@@ -1203,8 +1221,10 @@ pub struct MarkovEngine {
     pub harmonic: HarmonicChain,
     pub phrase:   PhraseCounter,
     moods:        [&'static MoodSet; N_MOODS],
-    /// RNG used for phrase-level decisions (register drift).
+    /// RNG used for phrase-level decisions (register drift, chord change).
     phrase_rng:   Lcg,
+    /// RNG used for per-note gate length variance.
+    gate_rng:     Lcg,
     /// Current slot index in the harmonic sequence.
     pub seq_slot: usize,
     /// Number of phrases elapsed in the current sequence slot.
@@ -1219,6 +1239,7 @@ impl MarkovEngine {
             phrase:      PhraseCounter::new(4),
             moods:       [&MOOD_CALM, &MOOD_TENSE, &MOOD_DARK, &MOOD_EUPHORIC, &MOOD_COSMIC, &MOOD_GRAVITY],
             phrase_rng:  Lcg::new(seed ^ 0xA5A5_B6B6),
+            gate_rng:    Lcg::new(seed ^ 0x7777_CAFE),
             seq_slot: 0,
             phrases_in_slot: 0,
         }
@@ -1232,15 +1253,29 @@ impl MarkovEngine {
 
         // Blend gate length from moods: 0.0 → 1 step, 1.0 → 16 steps.
         let gate_blend = shared.mood.blend_gate_length(&self.moods).clamp(0.0, 1.0);
-        let gate_subdivs = ((gate_blend * 15.0) as u32 + 1).max(1);
+        let gate_variance = shared.mood.blend_gate_length_variance(&self.moods);
 
         // Blend rhythmic speed from moods.
         let rhythmic_speed = shared.mood.blend_rhythmic_speed(&self.moods);
 
+        // Pre-compute per-voice gate_subdivs with random variance.
+        let n = self.voices.len();
+        let mut gate_per_voice = Vec::with_capacity(n);
+        for _ in 0..n {
+            let offset = if gate_variance > 0.0 {
+                let r = (self.gate_rng.next_u32() as f32 / u32::MAX as f32) * 2.0 - 1.0;
+                r * gate_variance
+            } else {
+                0.0
+            };
+            let effective_gate = (gate_blend + offset).clamp(0.0, 1.0);
+            gate_per_voice.push(((effective_gate * 15.0) as u32 + 1).max(1));
+        }
+
         let mut events: Vec<VoiceEvent> = self.voices
             .iter_mut()
             .enumerate()
-            .map(|(i, v)| v.on_subdivision(&rhythmic, &melodic, &self.harmonic, shared, i, gate_subdivs, rhythmic_speed))
+            .map(|(i, v)| v.on_subdivision(&rhythmic, &melodic, &self.harmonic, shared, i, gate_per_voice[i], rhythmic_speed))
             .collect();
 
         // ── Dissonance resolution post-pass ──────────────────────────────────

@@ -96,6 +96,46 @@
     "dissonance_resolve": true,
     "dissonance_threshold": 0,
     "register_drift": 0.25,
-    "generative_mode": 4
+    "generative_mode": 4,
+
+    "timeline": [
+      {
+        "name": "Canopy",
+        "phrases": 4,
+        "transition_phrases": 0,
+        "mood": [0.65, 0.0, 0.30, 0.05, 0.0, 0.0],
+        "density": 0.25,
+        "voice_enabled": [true, true, false, true]
+      },
+      {
+        "name": "Undergrowth",
+        "phrases": 5,
+        "transition_phrases": 2,
+        "mood": [0.35, 0.0, 0.55, 0.0, 0.10, 0.0],
+        "density": 0.45,
+        "root": 55,
+        "voice_enabled": [true, true, true, true]
+      },
+      {
+        "name": "Clearing",
+        "phrases": 4,
+        "transition_phrases": 2,
+        "mood": [0.50, 0.0, 0.15, 0.15, 0.20, 0.0],
+        "density": 0.35,
+        "root": 57,
+        "voice_enabled": [true, true, true, false],
+        "effects": { "shimmer_mix": 0.60, "crystal_mix": 0.10 }
+      },
+      {
+        "name": "Dusk",
+        "phrases": 5,
+        "transition_phrases": 3,
+        "mood": [0.40, 0.0, 0.50, 0.0, 0.10, 0.0],
+        "density": 0.20,
+        "voice_enabled": [true, true, false, true],
+        "effects": { "shimmer_mix": 0.42, "crystal_mix": 0.22 }
+      }
+    ],
+    "timeline_loop": true
   }
 }

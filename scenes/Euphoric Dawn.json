@@ -96,6 +96,44 @@
     "dissonance_resolve": true,
     "dissonance_threshold": 0,
     "register_drift": 0.42,
-    "generative_mode": 4
+    "generative_mode": 4,
+
+    "timeline": [
+      {
+        "name": "First Light",
+        "phrases": 3,
+        "transition_phrases": 0,
+        "mood": [0.40, 0.0, 0.0, 0.30, 0.30, 0.0],
+        "density": 0.20,
+        "voice_enabled": [true, true, false, false]
+      },
+      {
+        "name": "Horizon",
+        "phrases": 5,
+        "transition_phrases": 2,
+        "mood": [0.15, 0.0, 0.0, 0.60, 0.25, 0.0],
+        "density": 0.45,
+        "voice_enabled": [true, true, true, false]
+      },
+      {
+        "name": "Sunrise",
+        "phrases": 4,
+        "transition_phrases": 2,
+        "mood": [0.05, 0.0, 0.0, 0.85, 0.10, 0.0],
+        "density": 0.70,
+        "voice_enabled": [true, true, true, true],
+        "effects": { "shimmer_mix": 0.65, "crystal_mix": 0.30 }
+      },
+      {
+        "name": "Afterglow",
+        "phrases": 5,
+        "transition_phrases": 3,
+        "mood": [0.30, 0.0, 0.0, 0.40, 0.30, 0.0],
+        "density": 0.30,
+        "voice_enabled": [true, true, false, true],
+        "effects": { "shimmer_mix": 0.55, "crystal_mix": 0.15 }
+      }
+    ],
+    "timeline_loop": true
   }
 }
