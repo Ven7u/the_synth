@@ -1900,4 +1900,59 @@ mod tests {
         assert!((blend.weight(0) - 0.5).abs() < 0.001);
         assert!((blend.weight(1) - 0.5).abs() < 0.001);
     }
+
+    #[test]
+    fn markov_voice_event_sequence_is_consistent() {
+        let mut voice = MarkovVoice::new(0);
+        let shared = MarkovEngineShared::new(1);
+        let harmonic = HarmonicChain::new(0);
+        let mut prev_note = voice.current_note;
+
+        for _ in 0..256 {
+            let ev = voice.on_subdivision(
+                &MOOD_CALM.rhythmic,
+                &MOOD_CALM.melodic,
+                &harmonic,
+                &shared,
+                0,
+                8,
+                1.0,
+            );
+            if let Some(off) = ev.note_off {
+                assert_eq!(prev_note, Some(off));
+            }
+            if let Some(on) = ev.note_on {
+                assert_eq!(voice.current_note, Some(on));
+                assert_eq!(voice.note_age_subdivs, 0);
+            }
+            prev_note = voice.current_note;
+        }
+    }
+
+    #[test]
+    fn markov_engine_long_running_generates_note_events() {
+        let (mut eng, shared) = make_engine(4);
+        shared.clock_div.store(1, Ordering::Relaxed);
+
+        let mut total_note_ons = 0;
+        let mut total_note_offs = 0;
+
+        for _ in 0..512 {
+            let events = eng.on_subdivision(&shared);
+            assert_eq!(events.len(), 4);
+            for (i, ev) in events.into_iter().enumerate() {
+                if let Some(off) = ev.note_off {
+                    total_note_offs += 1;
+                    assert!(off < 128);
+                }
+                if let Some(on) = ev.note_on {
+                    total_note_ons += 1;
+                    assert_eq!(eng.voices[i].current_note, Some(on));
+                }
+            }
+        }
+
+        assert!(total_note_ons > 0, "expected some note_on events");
+        assert!(total_note_offs > 0, "expected some note_off events");
+    }
 }

@@ -113,6 +113,30 @@ fn build_stream(
     Ok((shared, stream))
 }
 
+fn fill_buffer_with_silence<T>(
+    data: &mut [T],
+    channels: usize,
+    last_out_l: &mut f32,
+    last_out_r: &mut f32,
+)
+where
+    T: SizedSample + FromSample<f32>,
+{
+    let mut l = *last_out_l;
+    let mut r = *last_out_r;
+    for frame in data.chunks_mut(channels) {
+        let left = T::from_sample(l);
+        let right = T::from_sample(r);
+        for (i, smp) in frame.iter_mut().enumerate() {
+            *smp = if i & 1 == 0 { left } else { right };
+        }
+        l *= 0.9995;
+        r *= 0.9995;
+    }
+    *last_out_l = l;
+    *last_out_r = r;
+}
+
 fn make_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -182,21 +206,7 @@ where
             }
 
             let Some(mut eng) = eng_guard else {
-                // If UI briefly holds the engine lock, avoid hard mute jumps (clicks).
-                // Hold and gently decay the last valid sample for this callback.
-                let mut l = last_out_l;
-                let mut r = last_out_r;
-                for frame in data.chunks_mut(channels) {
-                    let left = T::from_sample(l);
-                    let right = T::from_sample(r);
-                    for (i, smp) in frame.iter_mut().enumerate() {
-                        *smp = if i & 1 == 0 { left } else { right };
-                    }
-                    l *= 0.9995;
-                    r *= 0.9995;
-                }
-                last_out_l = l;
-                last_out_r = r;
+                fill_buffer_with_silence(data, channels, &mut last_out_l, &mut last_out_r);
                 return;
             };
 
@@ -2436,5 +2446,49 @@ impl eframe::App for AmbientBoxApp {
         });
 
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cpal::Sample;
+
+    #[test]
+    fn fallback_buffer_decays_silence_f32() {
+        let mut data = vec![0.0f32; 4];
+        let mut last_out_l = 1.0f32;
+        let mut last_out_r = -1.0f32;
+
+        fill_buffer_with_silence(&mut data, 2, &mut last_out_l, &mut last_out_r);
+
+        assert_eq!(data[0], 1.0);
+        assert_eq!(data[1], -1.0);
+        assert!((data[2] - 0.9995).abs() < 1e-6);
+        assert!((data[3] + 0.9995).abs() < 1e-6);
+        assert!(data[2].abs() < data[0].abs());
+        assert!(data[3].abs() < data[1].abs());
+        let expected = 1.0f32 * 0.9995 * 0.9995;
+        assert!((last_out_l - expected).abs() < 1e-6);
+        assert!((last_out_r + expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fallback_buffer_writes_stereo_i16() {
+        let mut data = vec![0i16; 4];
+        let mut last_out_l = 0.5f32;
+        let mut last_out_r = -0.5f32;
+
+        fill_buffer_with_silence(&mut data, 2, &mut last_out_l, &mut last_out_r);
+
+        let left = i16::from_sample(0.5);
+        let right = i16::from_sample(-0.5);
+        assert_eq!(data[0], left);
+        assert_eq!(data[1], right);
+        assert!(data[2].abs() < data[0].abs());
+        assert!(data[3].abs() < data[1].abs());
+        let expected = 0.5f32 * 0.9995 * 0.9995;
+        assert!((last_out_l - expected).abs() < 1e-6);
+        assert!((last_out_r + expected).abs() < 1e-6);
     }
 }

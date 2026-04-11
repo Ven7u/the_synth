@@ -427,3 +427,38 @@ impl MultiTrackEngine {
         (out, out)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn multitrack_engine_output_is_finite() {
+        let mut engine = MultiTrackEngine::new(44100.0);
+        engine.master_vol.set(0.8);
+        engine.tracks[0].track_vol.set(1.0);
+        engine.tracks[0].voice_gates[0].set(1.0);
+        engine.tracks[0].voice_freq_targets[0].set(440.0);
+        engine.tick_glide(64);
+        for ti in 0..TRACK_COUNT {
+            engine.tick_lfo_sample(ti, 0.125);
+        }
+        let (l, r) = engine.get_stereo();
+        assert!(l.is_finite() && r.is_finite());
+    }
+
+    #[test]
+    fn multitrack_engine_repeated_output_stays_finite() {
+        let mut engine = MultiTrackEngine::new(44100.0);
+        engine.master_vol.set(0.75);
+        engine.tracks[0].track_vol.set(0.85);
+        engine.tracks[0].voice_gates[0].set(1.0);
+        engine.tracks[0].voice_freq_targets[0].set(880.0);
+        engine.tick_glide(64);
+        for i in 0..128 {
+            engine.tick_lfo_sample(0, i as f32 / 128.0);
+            let (l, r) = engine.get_stereo();
+            assert!(l.is_finite() && r.is_finite());
+        }
+    }
+}
