@@ -150,3 +150,85 @@ impl AudioNode for LiveAdsr {
         [self.level].into()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fundsp::prelude32::shared;
+
+    fn make_adsr(a: f32, d: f32, s: f32, r: f32) -> LiveAdsr {
+        LiveAdsr::new(shared(a), shared(d), shared(s), shared(r), None, 44100.0)
+    }
+
+    fn tick_gate(adsr: &mut LiveAdsr, gate: f32) -> f32 {
+        adsr.tick(&[gate].into())[0]
+    }
+
+    fn run_gate(adsr: &mut LiveAdsr, gate: f32, samples: usize) -> f32 {
+        let mut last = 0.0;
+        for _ in 0..samples { last = tick_gate(adsr, gate); }
+        last
+    }
+
+    /// Full cycle: gate on → sustain → gate off → full release → level must be ~0.
+    #[test]
+    fn full_cycle_returns_to_zero() {
+        let mut adsr = make_adsr(0.01, 0.1, 0.7, 0.5);
+        // Attack + decay
+        run_gate(&mut adsr, 1.0, (44100.0 * 0.5) as usize);
+        // Sustain
+        let sus = run_gate(&mut adsr, 1.0, (44100.0 * 0.2) as usize);
+        assert!((sus - 0.7).abs() < 0.02, "expected sustain ~0.7, got {sus}");
+        // Release
+        run_gate(&mut adsr, 0.0, (44100.0 * 1.0) as usize);
+        let level = tick_gate(&mut adsr, 0.0);
+        assert!(level < 0.01, "expected near zero after release, got {level}");
+    }
+
+    /// Retrigger mid-sustain: attack must restart from current level (no click jump to 0).
+    #[test]
+    fn retrigger_from_sustain_starts_from_current_level() {
+        let mut adsr = make_adsr(0.01, 0.1, 0.75, 0.5);
+        // Reach sustain
+        run_gate(&mut adsr, 1.0, (44100.0 * 0.5) as usize);
+        let level_before = adsr.level;
+        assert!((level_before - 0.75).abs() < 0.02);
+
+        // Gate off then on in same "buffer" boundary (simulates steal-retrigger)
+        tick_gate(&mut adsr, 0.0); // falling edge
+        let after_fall = tick_gate(&mut adsr, 1.0); // rising edge: attack starts from start_level
+        // start_level was captured at the falling edge, so attack begins from ~sustain level
+        assert!(after_fall > 0.5, "retrigger should start from current level, not zero, got {after_fall}");
+    }
+
+    /// Retrigger mid-release: must start attack from release level, not from 0.
+    #[test]
+    fn retrigger_mid_release_starts_from_release_level() {
+        let mut adsr = make_adsr(0.01, 0.05, 0.8, 2.0);
+        // Reach sustain
+        run_gate(&mut adsr, 1.0, (44100.0 * 0.3) as usize);
+        // Gate off, run 300ms into 2s release
+        run_gate(&mut adsr, 0.0, (44100.0 * 0.3) as usize);
+        let release_level = adsr.level;
+        assert!(release_level > 0.2, "should still be audible mid-release, got {release_level}");
+
+        // Retrigger
+        let after_retrigger = tick_gate(&mut adsr, 1.0);
+        // First sample of attack should be close to the release level (not a hard jump to 0)
+        assert!(after_retrigger > release_level * 0.9,
+            "retrigger should start smoothly from release level {release_level}, got {after_retrigger}");
+    }
+
+    /// Envelope output must always be in [0.0, 1.0].
+    #[test]
+    fn level_stays_in_unit_range() {
+        let mut adsr = make_adsr(0.005, 0.05, 0.6, 0.3);
+        // Rapid gate toggling
+        for i in 0..88200 {
+            let gate = if (i / 4410) % 2 == 0 { 1.0 } else { 0.0 };
+            let level = tick_gate(&mut adsr, gate);
+            assert!(level >= -0.001 && level <= 1.001,
+                "level {level} out of [0,1] at sample {i}");
+        }
+    }
+}

@@ -211,11 +211,15 @@ where
             };
 
             // --- Release cleanup ---
+            // Free a slot as soon as its gate drops (not when fully silent).
+            // LiveAdsr handles retrigger-from-current-level cleanly, so releasing
+            // voices can be reused immediately. Waiting for amp_cursor to reach
+            // near-zero (old behaviour) caused all 6 slots to stay occupied during
+            // long pad releases, forcing steals on sustaining voices → clicks.
             for ti in 0..TRACK_COUNT {
                 for (slot, note) in voice_notes[ti].iter_mut().enumerate() {
                     if note.is_some()
                         && eng.tracks[ti].voice_gates[slot].value() < 0.5
-                        && eng.tracks[ti].amp_cursors[slot].value() < 0.5
                     {
                         *note = None;
                     }
@@ -237,6 +241,8 @@ where
                             }
                             let slot = voice_notes[ti].iter().position(|&n| n == Some(pitch))
                                 .or_else(|| voice_notes[ti].iter().position(|n| n.is_none()))
+                                // Prefer a releasing slot over a hard steal on a sustaining voice
+                                .or_else(|| (0..VOICE_COUNT).find(|&s| eng.tracks[ti].voice_gates[s].value() < 0.5))
                                 .unwrap_or_else(|| {
                                     let s = steal_idx[ti] % VOICE_COUNT;
                                     steal_idx[ti] += 1;
@@ -311,6 +317,8 @@ where
                         }) {
                             let slot = voice_notes[ti].iter().position(|&n| n == Some(pitch))
                                 .or_else(|| voice_notes[ti].iter().position(|n| n.is_none()))
+                                // Prefer a releasing slot over a hard steal on a sustaining voice
+                                .or_else(|| (0..VOICE_COUNT).find(|&s| eng.tracks[ti].voice_gates[s].value() < 0.5))
                                 .unwrap_or_else(|| {
                                     let s = steal_idx[ti] % VOICE_COUNT;
                                     steal_idx[ti] += 1;

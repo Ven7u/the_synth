@@ -463,33 +463,158 @@ impl MultiTrackEngine {
 mod tests {
     use super::*;
 
+    const SR: f64 = 44100.0;
+
+    fn run_samples(engine: &mut MultiTrackEngine, n: usize) {
+        let buf = 64usize;
+        let mut done = 0;
+        while done < n {
+            let chunk = std::cmp::min(buf, n - done);
+            engine.tick_glide(chunk);
+            for s in 0..chunk {
+                for ti in 0..TRACK_COUNT {
+                    engine.tick_lfo_sample(ti, s as f32 / chunk as f32);
+                }
+                let (l, r) = engine.get_stereo();
+                assert!(l.is_finite(), "NaN/Inf on L at sample {}", done + s);
+                assert!(r.is_finite(), "NaN/Inf on R at sample {}", done + s);
+                assert!(l.abs() < 4.0,  "output clipped on L at sample {}", done + s);
+                assert!(r.abs() < 4.0,  "output clipped on R at sample {}", done + s);
+            }
+            done += chunk;
+        }
+    }
+
     #[test]
     fn multitrack_engine_output_is_finite() {
-        let mut engine = MultiTrackEngine::new(44100.0);
+        let mut engine = MultiTrackEngine::new(SR);
         engine.master_vol.set(0.8);
         engine.tracks[0].track_vol.set(1.0);
         engine.tracks[0].voice_gates[0].set(1.0);
         engine.tracks[0].voice_freq_targets[0].set(440.0);
-        engine.tick_glide(64);
-        for ti in 0..TRACK_COUNT {
-            engine.tick_lfo_sample(ti, 0.125);
-        }
-        let (l, r) = engine.get_stereo();
-        assert!(l.is_finite() && r.is_finite());
+        run_samples(&mut engine, 64);
     }
 
     #[test]
     fn multitrack_engine_repeated_output_stays_finite() {
-        let mut engine = MultiTrackEngine::new(44100.0);
+        let mut engine = MultiTrackEngine::new(SR);
         engine.master_vol.set(0.75);
         engine.tracks[0].track_vol.set(0.85);
         engine.tracks[0].voice_gates[0].set(1.0);
         engine.tracks[0].voice_freq_targets[0].set(880.0);
-        engine.tick_glide(64);
-        for i in 0..128 {
-            engine.tick_lfo_sample(0, i as f32 / 128.0);
-            let (l, r) = engine.get_stereo();
-            assert!(l.is_finite() && r.is_finite());
+        run_samples(&mut engine, 128);
+    }
+
+    /// Simulate 30 seconds of audio with realistic pad settings (long release).
+    /// Output must stay finite and below clip threshold throughout.
+    #[test]
+    fn long_run_stays_finite() {
+        let mut engine = MultiTrackEngine::new(SR);
+        engine.master_vol.set(0.6);
+        let t = &engine.tracks[0];
+        t.track_vol.set(0.5);
+        t.adsr_attack.set(8.0);
+        t.adsr_decay.set(3.0);
+        t.adsr_sustain.set(0.8);
+        t.adsr_release.set(22.0); // Echoes String Cluster release
+        t.cutoff.set(1800.0);
+        t.effective_cutoff.set(1800.0);
+        t.voice_freq_targets[0].set(261.63);
+        t.voice_gates[0].set(1.0);
+
+        let thirty_sec = (SR as usize) * 30;
+        run_samples(&mut engine, thirty_sec);
+    }
+
+    /// Steal mid-release: voice 0 is fired, then gated off while still in sustain/release.
+    /// Before the release is complete, the same slot is retriggered (simulating a steal).
+    /// Output must stay finite and bounded — no clicks or runaway.
+    #[test]
+    fn steal_mid_release_stays_bounded() {
+        let mut engine = MultiTrackEngine::new(SR);
+        engine.master_vol.set(0.7);
+        let t = &engine.tracks[0];
+        t.track_vol.set(0.6);
+        t.adsr_attack.set(0.01);
+        t.adsr_decay.set(0.1);
+        t.adsr_sustain.set(0.75);
+        t.adsr_release.set(5.0);
+        t.cutoff.set(1200.0);
+        t.effective_cutoff.set(1200.0);
+        t.voice_freq_targets[0].set(220.0);
+        t.voice_gates[0].set(1.0);
+
+        // Run to sustain (0.5 s)
+        run_samples(&mut engine, (SR * 0.5) as usize);
+
+        // Gate off → release starts
+        engine.tracks[0].voice_gates[0].set(0.0);
+        run_samples(&mut engine, (SR * 0.3) as usize); // 300ms into 5s release
+
+        // Steal: retrigger while still audibly releasing
+        engine.tracks[0].voice_freq_targets[0].set(440.0);
+        engine.tracks[0].voice_gates[0].set(0.75);
+
+        // Continue for 2 more seconds — should be clean attack from prior release level
+        run_samples(&mut engine, (SR * 2.0) as usize);
+    }
+
+    /// All 6 voice slots are filled and gated simultaneously, then note-off'd one by one.
+    /// Verifies the voice pool drains correctly and output returns toward silence.
+    #[test]
+    fn voice_pool_drain_returns_to_silence() {
+        let mut engine = MultiTrackEngine::new(SR);
+        engine.master_vol.set(0.7);
+        let freqs = [130.81, 164.81, 196.00, 220.00, 261.63, 329.63];
+        let t = &engine.tracks[0];
+        t.track_vol.set(0.5);
+        t.adsr_attack.set(0.01);
+        t.adsr_decay.set(0.05);
+        t.adsr_sustain.set(0.7);
+        t.adsr_release.set(0.5);
+        t.cutoff.set(2000.0);
+        t.effective_cutoff.set(2000.0);
+
+        for (vi, &f) in freqs.iter().enumerate() {
+            engine.tracks[0].voice_freq_targets[vi].set(f);
+            engine.tracks[0].voice_gates[vi].set(0.75);
         }
+        run_samples(&mut engine, (SR * 0.2) as usize);
+
+        // Gate all off
+        for vi in 0..VOICE_COUNT {
+            engine.tracks[0].voice_gates[vi].set(0.0);
+        }
+        // Let releases decay (release = 0.5s, run 1.5s to be sure)
+        run_samples(&mut engine, (SR * 1.5) as usize);
+
+        // Output should be near silence
+        engine.tick_glide(64);
+        for ti in 0..TRACK_COUNT {
+            engine.tick_lfo_sample(ti, 0.0);
+        }
+        let (l, _r) = engine.get_stereo();
+        assert!(l.abs() < 0.01, "expected near silence after all releases, got {l}");
+    }
+
+    /// LFO amp dest (dest=2): tremolo must modulate output level without blowing up.
+    #[test]
+    fn lfo_amp_dest_stays_bounded() {
+        let mut engine = MultiTrackEngine::new(SR);
+        engine.master_vol.set(0.7);
+        let t = &engine.tracks[0];
+        t.track_vol.set(0.5);
+        t.adsr_attack.set(0.01);
+        t.adsr_sustain.set(0.8);
+        t.adsr_release.set(0.5);
+        t.cutoff.set(1000.0);
+        t.effective_cutoff.set(1000.0);
+        t.lfo_rate.set(4.0);   // 4 Hz tremolo
+        t.lfo_depth.set(0.8);
+        t.lfo_dest.store(2, std::sync::atomic::Ordering::Relaxed);
+        t.voice_freq_targets[0].set(440.0);
+        t.voice_gates[0].set(1.0);
+
+        run_samples(&mut engine, (SR * 2.0) as usize);
     }
 }
