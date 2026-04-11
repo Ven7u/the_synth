@@ -1,0 +1,753 @@
+{
+  "name": "ambient_01",
+  "bpm": 120,
+  "key": 0,
+  "scale": "major",
+  "macro_set": "AmbientCore",
+  "tracks": [
+    {
+      "patch_path": "assets/patches/Ambient/Ambient Bass.json",
+      "patch": {
+        "name": "Ambient Bass",
+        "category": "Ambient",
+        "synth_model": "theSynth",
+        "osc_wave": [
+          0,
+          1,
+          0
+        ],
+        "osc_octave": [
+          -1,
+          0,
+          0
+        ],
+        "osc_detune": [
+          0.0,
+          3.0,
+          0.0
+        ],
+        "osc_vol": [
+          0.55,
+          0.45,
+          0.0
+        ],
+        "osc_enabled": [
+          true,
+          true,
+          false
+        ],
+        "osc_pulse_width": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "osc_pw_enabled": [
+          false,
+          false,
+          false
+        ],
+        "osc_unison_enabled": [
+          false,
+          true,
+          false
+        ],
+        "osc_unison_count": [
+          2,
+          3,
+          2
+        ],
+        "osc_unison_spread": [
+          10.0,
+          12.0,
+          20.0
+        ],
+        "hard_sync": false,
+        "fm_enabled": false,
+        "fm_depth": 0.0,
+        "ring_enabled": false,
+        "ring_depth": 0.0,
+        "noise_vol": 0.0,
+        "lfo_enabled": true,
+        "lfo_rate": 0.08,
+        "lfo_depth": 0.04,
+        "lfo_shape": 0,
+        "lfo_dest": 1,
+        "lfo_sync": false,
+        "lfo_division": 2,
+        "filter_enabled": true,
+        "filter_cutoff": 480.0,
+        "filter_q": 0.14,
+        "filter_env_amount": 0.25,
+        "fenv_adsr": [
+          0.8,
+          1.2,
+          0.6,
+          3.0
+        ],
+        "amp_adsr": [
+          0.6,
+          0.8,
+          0.75,
+          4.5
+        ],
+        "glide_time": 0.18
+      },
+      "volume": 1.0,
+      "cutoff": 900.0,
+      "resonance": 0.25,
+      "shimmer_send": 0.05,
+      "crystal_send": 0.0
+    },
+    {
+      "patch_path": "assets/patches/Ambient/Ambient Pad.json",
+      "patch": {
+        "name": "Ambient Pad",
+        "category": "Ambient",
+        "synth_model": "theSynth",
+        "osc_wave": [
+          0,
+          1,
+          0
+        ],
+        "osc_octave": [
+          0,
+          1,
+          0
+        ],
+        "osc_detune": [
+          0.0,
+          7.0,
+          0.0
+        ],
+        "osc_vol": [
+          0.45,
+          0.35,
+          0.0
+        ],
+        "osc_enabled": [
+          true,
+          true,
+          false
+        ],
+        "osc_pulse_width": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "osc_pw_enabled": [
+          false,
+          false,
+          false
+        ],
+        "osc_unison_enabled": [
+          true,
+          true,
+          false
+        ],
+        "osc_unison_count": [
+          7,
+          5,
+          2
+        ],
+        "osc_unison_spread": [
+          38.0,
+          28.0,
+          20.0
+        ],
+        "hard_sync": false,
+        "fm_enabled": false,
+        "fm_depth": 0.0,
+        "ring_enabled": false,
+        "ring_depth": 0.0,
+        "noise_vol": 0.04,
+        "lfo_enabled": true,
+        "lfo_rate": 0.1,
+        "lfo_depth": 0.12,
+        "lfo_shape": 0,
+        "lfo_dest": 2,
+        "lfo_sync": false,
+        "lfo_division": 2,
+        "filter_enabled": true,
+        "filter_cutoff": 1100.0,
+        "filter_q": 0.08,
+        "filter_env_amount": 0.12,
+        "fenv_adsr": [
+          3.5,
+          1.5,
+          0.7,
+          5.0
+        ],
+        "amp_adsr": [
+          4.0,
+          1.0,
+          0.82,
+          7.0
+        ],
+        "glide_time": 0.25
+      },
+      "volume": 1.0,
+      "cutoff": 900.0,
+      "resonance": 0.25,
+      "shimmer_send": 0.0,
+      "crystal_send": 0.0
+    },
+    {
+      "patch_path": "assets/patches/Ambient/Eno Space.json",
+      "patch": {
+        "name": "Eno Space",
+        "category": "Ambient",
+        "synth_model": "theSynth",
+        "osc_wave": [
+          0,
+          1,
+          0
+        ],
+        "osc_octave": [
+          0,
+          1,
+          0
+        ],
+        "osc_detune": [
+          0.0,
+          4.0,
+          0.0
+        ],
+        "osc_vol": [
+          0.55,
+          0.4,
+          0.0
+        ],
+        "osc_enabled": [
+          true,
+          true,
+          false
+        ],
+        "osc_pulse_width": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "osc_pw_enabled": [
+          false,
+          false,
+          false
+        ],
+        "osc_unison_enabled": [
+          false,
+          false,
+          false
+        ],
+        "osc_unison_count": [
+          2,
+          2,
+          2
+        ],
+        "osc_unison_spread": [
+          20.0,
+          20.0,
+          20.0
+        ],
+        "hard_sync": false,
+        "fm_enabled": false,
+        "fm_depth": 0.0,
+        "ring_enabled": false,
+        "ring_depth": 0.0,
+        "noise_vol": 0.0,
+        "lfo_enabled": true,
+        "lfo_rate": 0.12,
+        "lfo_depth": 0.07,
+        "lfo_shape": 0,
+        "lfo_dest": 2,
+        "lfo_sync": false,
+        "lfo_division": 2,
+        "filter_enabled": true,
+        "filter_cutoff": 1400.0,
+        "filter_q": 0.08,
+        "filter_env_amount": 0.15,
+        "fenv_adsr": [
+          2.5,
+          1.0,
+          0.6,
+          4.0
+        ],
+        "amp_adsr": [
+          3.0,
+          0.5,
+          0.85,
+          5.0
+        ],
+        "glide_time": 0.12
+      },
+      "volume": 1.0,
+      "cutoff": 900.0,
+      "resonance": 0.25,
+      "shimmer_send": 0.0,
+      "crystal_send": 0.0
+    },
+    {
+      "patch_path": "assets/patches/Ambient/Ambient Texture.json",
+      "patch": {
+        "name": "Ambient Texture",
+        "category": "Ambient",
+        "synth_model": "theSynth",
+        "osc_wave": [
+          1,
+          0,
+          0
+        ],
+        "osc_octave": [
+          1,
+          2,
+          0
+        ],
+        "osc_detune": [
+          0.0,
+          11.0,
+          0.0
+        ],
+        "osc_vol": [
+          0.3,
+          0.25,
+          0.0
+        ],
+        "osc_enabled": [
+          true,
+          true,
+          false
+        ],
+        "osc_pulse_width": [
+          0.62,
+          0.5,
+          0.5
+        ],
+        "osc_pw_enabled": [
+          true,
+          false,
+          false
+        ],
+        "osc_unison_enabled": [
+          true,
+          true,
+          false
+        ],
+        "osc_unison_count": [
+          8,
+          6,
+          2
+        ],
+        "osc_unison_spread": [
+          45.0,
+          32.0,
+          20.0
+        ],
+        "hard_sync": false,
+        "fm_enabled": false,
+        "fm_depth": 0.0,
+        "ring_enabled": false,
+        "ring_depth": 0.0,
+        "noise_vol": 0.12,
+        "lfo_enabled": true,
+        "lfo_rate": 0.06,
+        "lfo_depth": 0.18,
+        "lfo_shape": 0,
+        "lfo_dest": 2,
+        "lfo_sync": false,
+        "lfo_division": 2,
+        "filter_enabled": true,
+        "filter_cutoff": 2200.0,
+        "filter_q": 0.06,
+        "filter_env_amount": 0.08,
+        "fenv_adsr": [
+          5.0,
+          2.0,
+          0.65,
+          6.0
+        ],
+        "amp_adsr": [
+          6.0,
+          1.5,
+          0.7,
+          9.0
+        ],
+        "glide_time": 0.35
+      },
+      "volume": 1.0,
+      "cutoff": 900.0,
+      "resonance": 0.25,
+      "shimmer_send": 0.0,
+      "crystal_send": 0.0
+    }
+  ],
+  "macros": [
+    {
+      "name": "Space",
+      "value": 0.0,
+      "targets": [
+        {
+          "track": 0,
+          "param": "TrackShimmerSend",
+          "min": 0.05,
+          "max": 0.85
+        },
+        {
+          "track": 0,
+          "param": "TrackCrystalSend",
+          "min": 0.0,
+          "max": 0.45
+        },
+        {
+          "track": 1,
+          "param": "TrackShimmerSend",
+          "min": 0.05,
+          "max": 0.85
+        },
+        {
+          "track": 1,
+          "param": "TrackCrystalSend",
+          "min": 0.0,
+          "max": 0.45
+        },
+        {
+          "track": 2,
+          "param": "TrackShimmerSend",
+          "min": 0.05,
+          "max": 0.85
+        },
+        {
+          "track": 2,
+          "param": "TrackCrystalSend",
+          "min": 0.0,
+          "max": 0.45
+        },
+        {
+          "track": 3,
+          "param": "TrackShimmerSend",
+          "min": 0.05,
+          "max": 0.85
+        },
+        {
+          "track": 3,
+          "param": "TrackCrystalSend",
+          "min": 0.0,
+          "max": 0.45
+        },
+        {
+          "track": null,
+          "param": "ShimmerMix",
+          "min": 0.12,
+          "max": 0.75
+        },
+        {
+          "track": null,
+          "param": "ShimmerSize",
+          "min": 0.45,
+          "max": 1.0
+        }
+      ]
+    },
+    {
+      "name": "Tone",
+      "value": 0.0,
+      "targets": [
+        {
+          "track": 0,
+          "param": "TrackCutoff",
+          "min": 900.0,
+          "max": 9000.0
+        },
+        {
+          "track": 0,
+          "param": "TrackResonance",
+          "min": 0.2,
+          "max": 1.2
+        },
+        {
+          "track": 1,
+          "param": "TrackCutoff",
+          "min": 900.0,
+          "max": 9000.0
+        },
+        {
+          "track": 1,
+          "param": "TrackResonance",
+          "min": 0.2,
+          "max": 1.2
+        },
+        {
+          "track": 2,
+          "param": "TrackCutoff",
+          "min": 900.0,
+          "max": 9000.0
+        },
+        {
+          "track": 2,
+          "param": "TrackResonance",
+          "min": 0.2,
+          "max": 1.2
+        },
+        {
+          "track": 3,
+          "param": "TrackCutoff",
+          "min": 900.0,
+          "max": 9000.0
+        },
+        {
+          "track": 3,
+          "param": "TrackResonance",
+          "min": 0.2,
+          "max": 1.2
+        },
+        {
+          "track": null,
+          "param": "ShimmerDamp",
+          "min": 0.75,
+          "max": 0.25
+        }
+      ]
+    },
+    {
+      "name": "Motion",
+      "value": 0.0,
+      "targets": [
+        {
+          "track": 0,
+          "param": "ArpGate",
+          "min": 0.35,
+          "max": 0.85
+        },
+        {
+          "track": 0,
+          "param": "WalkerGate",
+          "min": 0.3,
+          "max": 0.85
+        },
+        {
+          "track": 0,
+          "param": "WalkerBpm",
+          "min": 90.0,
+          "max": 162.0
+        },
+        {
+          "track": 1,
+          "param": "ArpGate",
+          "min": 0.35,
+          "max": 0.85
+        },
+        {
+          "track": 1,
+          "param": "WalkerGate",
+          "min": 0.3,
+          "max": 0.85
+        },
+        {
+          "track": 1,
+          "param": "WalkerBpm",
+          "min": 90.0,
+          "max": 162.0
+        },
+        {
+          "track": 2,
+          "param": "ArpGate",
+          "min": 0.35,
+          "max": 0.85
+        },
+        {
+          "track": 2,
+          "param": "WalkerGate",
+          "min": 0.3,
+          "max": 0.85
+        },
+        {
+          "track": 2,
+          "param": "WalkerBpm",
+          "min": 90.0,
+          "max": 162.0
+        },
+        {
+          "track": 3,
+          "param": "ArpGate",
+          "min": 0.35,
+          "max": 0.85
+        },
+        {
+          "track": 3,
+          "param": "WalkerGate",
+          "min": 0.3,
+          "max": 0.85
+        },
+        {
+          "track": 3,
+          "param": "WalkerBpm",
+          "min": 90.0,
+          "max": 162.0
+        },
+        {
+          "track": null,
+          "param": "CrystalScatter",
+          "min": 0.1,
+          "max": 0.7
+        }
+      ]
+    },
+    {
+      "name": "Density",
+      "value": 0.0,
+      "targets": [
+        {
+          "track": null,
+          "param": "CrystalMix",
+          "min": 0.0,
+          "max": 0.35
+        },
+        {
+          "track": null,
+          "param": "CrystalFeedback",
+          "min": 0.2,
+          "max": 0.6
+        }
+      ]
+    },
+    {
+      "name": "Tension",
+      "value": 0.0,
+      "targets": [
+        {
+          "track": 0,
+          "param": "TrackResonance",
+          "min": 0.25,
+          "max": 1.6
+        },
+        {
+          "track": 1,
+          "param": "TrackResonance",
+          "min": 0.25,
+          "max": 1.6
+        },
+        {
+          "track": 2,
+          "param": "TrackResonance",
+          "min": 0.25,
+          "max": 1.6
+        },
+        {
+          "track": 3,
+          "param": "TrackResonance",
+          "min": 0.25,
+          "max": 1.6
+        },
+        {
+          "track": null,
+          "param": "ShimmerAmount",
+          "min": 0.25,
+          "max": 0.9
+        }
+      ]
+    },
+    {
+      "name": "Texture",
+      "value": 0.0,
+      "targets": [
+        {
+          "track": null,
+          "param": "CrystalGrainMs",
+          "min": 220.0,
+          "max": 70.0
+        },
+        {
+          "track": null,
+          "param": "CrystalDelayMs",
+          "min": 420.0,
+          "max": 140.0
+        },
+        {
+          "track": null,
+          "param": "CrystalScatter",
+          "min": 0.05,
+          "max": 0.85
+        },
+        {
+          "track": null,
+          "param": "CrystalMix",
+          "min": 0.05,
+          "max": 0.45
+        }
+      ]
+    },
+    {
+      "name": "Macro 7",
+      "value": 0.0,
+      "targets": []
+    },
+    {
+      "name": "Macro 8",
+      "value": 0.0,
+      "targets": []
+    }
+  ],
+  "global": {
+    "master_vol": 0.7,
+    "shimmer_mix": 0.0,
+    "shimmer_amount": 0.5,
+    "shimmer_size": 0.6,
+    "shimmer_damp": 0.5,
+    "shimmer_pitch": 1,
+    "crystal_mix": 0.0,
+    "crystal_grain_ms": 120.0,
+    "crystal_scatter": 0.25,
+    "crystal_feedback": 0.35,
+    "crystal_delay_ms": 260.0,
+    "crystal_pitch": 2
+  },
+  "markov": {
+    "root": 57,
+    "scale": 1,
+    "density": 0.5,
+    "bars_per_phrase": 4,
+    "mood": [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "voice_roles": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "voice_densities": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "voice_enabled": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "chord_attraction": 0.5,
+    "bass_lock": true,
+    "dissonance_resolve": true,
+    "dissonance_threshold": 1,
+    "register_drift": 0.2,
+    "generative_mode": 4,
+    "clock_div": 8,
+    "harmonic_seq": [
+      {
+        "root": 60,
+        "scale": 0,
+        "phrases": 4
+      },
+      {
+        "root": 57,
+        "scale": 1,
+        "phrases": 4
+      }
+    ],
+    "timeline_loop": false
+  }
+}

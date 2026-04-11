@@ -5883,6 +5883,7 @@ name = "synth-engine"
 version = "0.1.0"
 dependencies = [
  "fundsp",
+ "synth-common",
  "synth-dsp",
 ]
 

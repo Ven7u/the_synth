@@ -29,7 +29,7 @@ use ambient_engine::{
 use synth_engine::arp::{ArpMode, ArpState, ClockDiv, Scale, ScaleWalker};
 use synth_control::{ControlEvent, ControlSender, make_control_channel};
 use synth_control::midi::{MidiEngine, MidiEvent};
-use synth_common::{RestartBatch, SyncTransport};
+use synth_common::{ClockDivision, RestartBatch, SyncTransport};
 use std::sync::atomic::Ordering;
 
 #[derive(Clone)]
@@ -453,6 +453,28 @@ where
                 }
             }
 
+            // --- BPM-sync: update delay synced-time and LFO synced-rate each buffer ---
+            {
+                let bpm = beat_clock_shared.bpm();
+                for ti in 0..TRACK_COUNT {
+                    // Delay sync
+                    let track = &eng.tracks[ti];
+                    if track.fx_delay_sync.load(std::sync::atomic::Ordering::Relaxed) != 0 {
+                        let div = ClockDivision::from_u8(
+                            track.fx_delay_division.load(std::sync::atomic::Ordering::Relaxed)
+                        );
+                        track.fx_delay_synced_time.set(div.seconds(bpm));
+                    }
+                    // LFO sync
+                    if track.lfo_sync.load(std::sync::atomic::Ordering::Relaxed) != 0 {
+                        let div = ClockDivision::from_u8(
+                            track.lfo_division.load(std::sync::atomic::Ordering::Relaxed)
+                        );
+                        track.lfo_rate.set(div.hz(bpm));
+                    }
+                }
+            }
+
             // --- Glide ---
             eng.tick_glide(frames);
 
@@ -635,6 +657,26 @@ struct AmbientBoxApp {
     pending_scene_save: Option<PendingSceneSave>,
     pending_scene_load_path: Option<String>,
     pending_scene_load: Option<(String, Scene)>,
+
+    // Transport extras
+    swing_ui: f32, // 0–50 (maps to 0.0–0.5 in BeatClockShared)
+
+    // LFO per-voice UI state
+    lfo_enabled_ui:  [bool; TRACK_COUNT],
+    lfo_depth_ui:    [f32;  TRACK_COUNT],
+    lfo_dest_ui:     [u8;   TRACK_COUNT],  // 0=Pitch 1=Filter 2=Amp
+    lfo_shape_ui:    [u8;   TRACK_COUNT],  // 0=Sin 1=Tri 2=Saw
+    lfo_sync_ui:     [bool; TRACK_COUNT],
+    lfo_division_ui: [u8;   TRACK_COUNT],  // ClockDivision index
+    lfo_rate_ui:     [f32;  TRACK_COUNT],  // Hz when free
+
+    // Motif lock per-voice UI state
+    motif_lock_ui:   [bool; TRACK_COUNT],
+    motif_length_ui: [u8;   TRACK_COUNT],  // 4/8/16/32
+
+    // Crystal BPM-sync
+    crystal_delay_sync_ui:     bool,
+    crystal_delay_division_ui: u8, // ClockDivision index
 
     // WAV recording
     recorder_sink: RecorderSink,
@@ -834,6 +876,18 @@ impl AmbientBoxApp {
             pending_scene_save: None,
             pending_scene_load_path: last_scene.map(|name| format!("scenes/{name}.json")),
             pending_scene_load: None,
+            swing_ui: 0.0,
+            lfo_enabled_ui:  [false; TRACK_COUNT],
+            lfo_depth_ui:    [0.0;   TRACK_COUNT],
+            lfo_dest_ui:     [1;     TRACK_COUNT], // Filter
+            lfo_shape_ui:    [0;     TRACK_COUNT], // Sin
+            lfo_sync_ui:     [false; TRACK_COUNT],
+            lfo_division_ui: [3;     TRACK_COUNT], // Eighth
+            lfo_rate_ui:     [2.0;   TRACK_COUNT],
+            motif_lock_ui:   [false; TRACK_COUNT],
+            motif_length_ui: [16;    TRACK_COUNT],
+            crystal_delay_sync_ui:     false,
+            crystal_delay_division_ui: 8, // DottedEighth
             recorder_sink,
             rec_status: String::new(),
             midi_sink_shared,
@@ -1218,6 +1272,8 @@ impl eframe::App for AmbientBoxApp {
                 }
                 ui.label("BPM:");
                 ui.add(egui::Slider::new(&mut self.transport_sync.bpm, 40..=300));
+                ui.label("Swing:").on_hover_text("Swing amount: 0 = straight, 50 = full triplet swing. Delays every even subdivision.");
+                ui.add(egui::Slider::new(&mut self.swing_ui, 0.0f32..=50.0).suffix("%"));
                 if ui.checkbox(&mut self.transport_sync.clock_sync_enabled, "Clock Sync").changed() {
                     self.transport_sync.set_clock_sync(self.transport_sync.clock_sync_enabled);
                     if self.transport_sync.clock_sync_enabled { self.sync_transport_now(); }
@@ -1434,7 +1490,83 @@ impl eframe::App for AmbientBoxApp {
                         let _ = synth_ui::knob(ui, "Vol", &mut self.track_vol_ui[i], 0.0, 1.0);
                         let _ = synth_ui::knob(ui, "Shim", &mut self.track_shimmer_send_ui[i], 0.0, 1.0);
                         let _ = synth_ui::knob(ui, "Crys", &mut self.track_crystal_send_ui[i], 0.0, 1.0);
-                        ui.label("ℹ").on_hover_text("Vol: output volume  |  Shim: send to Shimmer reverb (diffuse tail)  |  Crys: send to Crystal granular delay (pitched echoes)");
+
+                        ui.separator();
+
+                        // ── LFO ──────────────────────────────────────────────
+                        ui.label(egui::RichText::new("LFO").strong()).on_hover_text("Low-frequency oscillator. Modulates pitch, filter, or amplitude at the chosen rate.");
+                        ui.checkbox(&mut self.lfo_enabled_ui[i], "").on_hover_text("Enable LFO for this voice.");
+                        ui.add_enabled_ui(self.lfo_enabled_ui[i], |ui| {
+                            egui::ComboBox::from_id_salt(format!("lfo_dest_{i}"))
+                                .selected_text(["Pitch","Filter","Amp"][self.lfo_dest_ui[i] as usize % 3])
+                                .width(54.0)
+                                .show_ui(ui, |ui| {
+                                    for (j, lbl) in ["Pitch","Filter","Amp"].iter().enumerate() {
+                                        ui.selectable_value(&mut self.lfo_dest_ui[i], j as u8, *lbl);
+                                    }
+                                });
+                            egui::ComboBox::from_id_salt(format!("lfo_shape_{i}"))
+                                .selected_text(["Sin","Tri","Saw"][self.lfo_shape_ui[i] as usize % 3])
+                                .width(44.0)
+                                .show_ui(ui, |ui| {
+                                    for (j, lbl) in ["Sin","Tri","Saw"].iter().enumerate() {
+                                        ui.selectable_value(&mut self.lfo_shape_ui[i], j as u8, *lbl);
+                                    }
+                                });
+                            let _ = synth_ui::knob(ui, "Depth", &mut self.lfo_depth_ui[i], 0.0, 1.0);
+                            // Sync toggle
+                            let sync_lbl = if self.lfo_sync_ui[i] { "SYNC" } else { "FREE" };
+                            if ui.small_button(sync_lbl).on_hover_text("Toggle between free Hz rate and BPM-synced division.").clicked() {
+                                self.lfo_sync_ui[i] = !self.lfo_sync_ui[i];
+                            }
+                            if self.lfo_sync_ui[i] {
+                                egui::ComboBox::from_id_salt(format!("lfo_div_{i}"))
+                                    .selected_text(synth_common::ClockDivision::from_u8(self.lfo_division_ui[i]).label())
+                                    .width(52.0)
+                                    .show_ui(ui, |ui| {
+                                        for div in synth_common::ClockDivision::ALL {
+                                            ui.selectable_value(&mut self.lfo_division_ui[i], div.to_u8(), div.label());
+                                        }
+                                    });
+                            } else {
+                                ui.add(egui::Slider::new(&mut self.lfo_rate_ui[i], 0.1f32..=20.0)
+                                    .suffix(" Hz").step_by(0.1));
+                            }
+                        });
+
+                        ui.separator();
+
+                        // ── Motif lock ────────────────────────────────────────
+                        ui.label(egui::RichText::new("MOTIF").strong())
+                            .on_hover_text("Records this voice's rhythmic pattern for N steps then loops it. Melodic chain stays generative.");
+                        let motif_active = if let Ok(eng_r) = self.engine.try_lock() {
+                            eng_r.markov_shared.motif_active[i].load(Ordering::Relaxed)
+                        } else { false };
+                        let lock_col = if motif_active {
+                            egui::Color32::from_rgb(80, 220, 80)   // green = replaying
+                        } else if self.motif_lock_ui[i] {
+                            egui::Color32::from_rgb(220, 180, 60)  // yellow = capturing
+                        } else {
+                            egui::Color32::GRAY
+                        };
+                        let lock_lbl = egui::RichText::new(
+                            if self.motif_lock_ui[i] { "LOCK" } else { "FREE" }
+                        ).color(lock_col).strong();
+                        if ui.button(lock_lbl)
+                            .on_hover_text("Enable: engine records pattern then loops it. Disable: back to Markov.")
+                            .clicked()
+                        {
+                            self.motif_lock_ui[i] = !self.motif_lock_ui[i];
+                        }
+                        ui.label("Len:").on_hover_text("Steps to capture before looping (4/8/16/32).");
+                        egui::ComboBox::from_id_salt(format!("motif_len_{i}"))
+                            .selected_text(format!("{}", self.motif_length_ui[i]))
+                            .width(42.0)
+                            .show_ui(ui, |ui| {
+                                for &len in &[4u8, 8, 16, 32] {
+                                    ui.selectable_value(&mut self.motif_length_ui[i], len, format!("{len}"));
+                                }
+                            });
                     });
                 }
                 // Launchpad grid — rendered from UI-owned cache, no lock needed
@@ -1965,7 +2097,23 @@ impl eframe::App for AmbientBoxApp {
                 if synth_ui::knob(ui, "Mix", &mut self.crystal_mix, 0.0, 1.0) {}
                 if synth_ui::knob(ui, "Grain", &mut self.crystal_grain_ms, 10.0, 400.0) {}
                 if synth_ui::knob(ui, "Scatter", &mut self.crystal_scatter, 0.0, 1.0) {}
-                if synth_ui::knob(ui, "Delay", &mut self.crystal_delay_ms, 20.0, 1200.0) {}
+                // Delay — free knob or BPM-synced division
+                let sync_lbl = if self.crystal_delay_sync_ui { "SYNC" } else { "FREE" };
+                if ui.small_button(sync_lbl).on_hover_text("Toggle between free delay time and BPM-synced note division.").clicked() {
+                    self.crystal_delay_sync_ui = !self.crystal_delay_sync_ui;
+                }
+                if self.crystal_delay_sync_ui {
+                    egui::ComboBox::from_id_salt("crystal_delay_div")
+                        .selected_text(synth_common::ClockDivision::from_u8(self.crystal_delay_division_ui).label())
+                        .width(56.0)
+                        .show_ui(ui, |ui| {
+                            for div in synth_common::ClockDivision::ALL {
+                                ui.selectable_value(&mut self.crystal_delay_division_ui, div.to_u8(), div.label());
+                            }
+                        });
+                } else {
+                    if synth_ui::knob(ui, "Delay", &mut self.crystal_delay_ms, 20.0, 1200.0) {}
+                }
                 if synth_ui::knob(ui, "Feedback", &mut self.crystal_feedback, 0.0, 0.95) {}
                 ui.label("Pitch:");
                 for (i, lbl) in ["0.5x", "1x", "2x", "4x"].iter().enumerate() {
@@ -2220,6 +2368,7 @@ impl eframe::App for AmbientBoxApp {
                     }
                     self.beat_clock_shared.set_bpm(bpm);
                 }
+                self.beat_clock_shared.set_swing(self.swing_ui / 100.0);
 
                 // Write generative config back to engine (Markov is global — propagate to all tracks)
                 for t in 0..TRACK_COUNT {
@@ -2237,6 +2386,20 @@ impl eframe::App for AmbientBoxApp {
                         ms.voice_density[i].set(self.markov_voice_density_ui[i]);
                         ms.roles[i].store(self.markov_voice_role_ui[i], Ordering::Relaxed);
                         ms.voice_enabled[i].store(self.markov_voice_enabled_ui[i], Ordering::Relaxed);
+                        // LFO
+                        let track = &eng.tracks[i];
+                        let depth = if self.lfo_enabled_ui[i] { self.lfo_depth_ui[i] } else { 0.0 };
+                        track.lfo_depth.set(depth);
+                        track.lfo_dest.store(self.lfo_dest_ui[i], Ordering::Relaxed);
+                        track.lfo_shape.store(self.lfo_shape_ui[i], Ordering::Relaxed);
+                        track.lfo_sync.store(self.lfo_sync_ui[i] as u8, Ordering::Relaxed);
+                        track.lfo_division.store(self.lfo_division_ui[i], Ordering::Relaxed);
+                        if !self.lfo_sync_ui[i] {
+                            track.lfo_rate.set(self.lfo_rate_ui[i]);
+                        }
+                        // Motif lock
+                        ms.motif_lock[i].store(self.motif_lock_ui[i], Ordering::Relaxed);
+                        ms.motif_length[i].store(self.motif_length_ui[i], Ordering::Relaxed);
                     }
                     // Normalize and write mood blend
                     let total: f32 = self.markov_mood_ui.iter().sum();
@@ -2286,7 +2449,14 @@ impl eframe::App for AmbientBoxApp {
 
                 eng.crystal.grain_ms.set(self.crystal_grain_ms);
                 eng.crystal.scatter.set(self.crystal_scatter);
-                eng.crystal.delay_ms.set(self.crystal_delay_ms);
+                // Delay: BPM-synced or free
+                if self.crystal_delay_sync_ui {
+                    let bpm = self.beat_clock_shared.bpm();
+                    let div = synth_common::ClockDivision::from_u8(self.crystal_delay_division_ui);
+                    eng.crystal.delay_ms.set(div.seconds(bpm) * 1000.0);
+                } else {
+                    eng.crystal.delay_ms.set(self.crystal_delay_ms);
+                }
                 eng.crystal.feedback.set(self.crystal_feedback);
                 eng.crystal.pitch.store(self.crystal_pitch, Ordering::Relaxed);
                 eng.crystal.mix.set(if self.crystal_on {
@@ -2388,12 +2558,31 @@ impl eframe::App for AmbientBoxApp {
                         }
                     }
                     eng.apply_scene(&scene);
-                    // Sync per-voice UI from restored scene values
+                    // Sync per-voice UI from restored scene values so the
+                    // UI→engine write path doesn't overwrite them each frame.
                     for i in 0..TRACK_COUNT {
-                        self.track_vol_ui[i] = eng.tracks[i].track_vol.value();
+                        self.track_vol_ui[i]          = eng.tracks[i].track_vol.value();
                         self.track_shimmer_send_ui[i] = eng.tracks[i].shimmer_send.value();
                         self.track_crystal_send_ui[i] = eng.tracks[i].crystal_send.value();
+                        // LFO — read back from TrackState so knobs match the patch
+                        let lfo_depth = eng.tracks[i].lfo_depth.value();
+                        self.lfo_depth_ui[i]    = lfo_depth;
+                        self.lfo_enabled_ui[i]  = lfo_depth > 0.0;
+                        self.lfo_dest_ui[i]     = eng.tracks[i].lfo_dest.load(Ordering::Relaxed);
+                        self.lfo_shape_ui[i]    = eng.tracks[i].lfo_shape.load(Ordering::Relaxed);
+                        self.lfo_rate_ui[i]     = eng.tracks[i].lfo_rate.value();
+                        self.lfo_sync_ui[i]     = eng.tracks[i].lfo_sync.load(Ordering::Relaxed) != 0;
+                        self.lfo_division_ui[i] = eng.tracks[i].lfo_division.load(Ordering::Relaxed);
                     }
+                    // Auto-enable effect buses when the scene uses them
+                    if scene.global.shimmer_mix > 0.0 { self.shimmer_on = true; }
+                    if scene.global.crystal_mix > 0.0 { self.crystal_on = true; }
+                    self.shimmer_mix         = scene.global.shimmer_mix;
+                    self.shimmer_amt         = scene.global.shimmer_amount;
+                    self.shimmer_size        = scene.global.shimmer_size;
+                    self.crystal_mix         = scene.global.crystal_mix;
+                    self.crystal_feedback    = scene.global.crystal_feedback;
+                    self.crystal_delay_ms    = scene.global.crystal_delay_ms;
                     self.scene_status = format!("Loaded {path}");
                 }
             }

@@ -60,7 +60,14 @@ pub struct TrackState {
     pub lfo_depth: Shared,
     pub lfo_shape: Arc<AtomicU8>,
     pub lfo_dest: Arc<AtomicU8>,
+    /// 0 = free (Hz), 1 = BPM-synced. When synced the callback overwrites lfo_rate.
+    pub lfo_sync: Arc<AtomicU8>,
+    /// ClockDivision::to_u8() — active when lfo_sync == 1.
+    pub lfo_division: Arc<AtomicU8>,
     pub lfo_pitch_mult: Shared,
+    /// Amplitude multiplier written by tick_lfo_sample when lfo_dest == 2.
+    /// Initialised to 1.0 (no effect). Range roughly 0.0 .. 2.0.
+    pub lfo_amp_mult: Shared,
 
     // Voice freq/gate
     pub voice_freq_targets: Vec<Shared>,
@@ -83,6 +90,14 @@ pub struct TrackState {
     // Effect send levels (0.0 = dry, 1.0 = fully sent)
     pub shimmer_send: Shared,
     pub crystal_send: Shared,
+
+    // Delay sync (per-track; wired to FX chain when a per-track delay exists)
+    /// 0 = free (use delay_time seconds), 1 = BPM-synced.
+    pub fx_delay_sync:        Arc<AtomicU8>,
+    /// ClockDivision::to_u8() — active when fx_delay_sync == 1.
+    pub fx_delay_division:    Arc<AtomicU8>,
+    /// Written by the audio callback each buffer when sync is active. Units: seconds.
+    pub fx_delay_synced_time: Shared,
 }
 
 impl TrackState {
@@ -124,7 +139,10 @@ impl TrackState {
             lfo_depth: shared(0.0),
             lfo_shape: Arc::new(AtomicU8::new(0)),
             lfo_dest: Arc::new(AtomicU8::new(1)),
+            lfo_sync: Arc::new(AtomicU8::new(0)),
+            lfo_division: Arc::new(AtomicU8::new(2)), // ClockDivision::Quarter
             lfo_pitch_mult: shared(1.0),
+            lfo_amp_mult: shared(1.0),
             voice_freq_targets: (0..VOICE_COUNT).map(|_| shared(440.0)).collect(),
             voice_freqs: (0..VOICE_COUNT).map(|_| shared(440.0)).collect(),
             voice_gates: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
@@ -139,6 +157,9 @@ impl TrackState {
             track_vol: shared(1.0),
             shimmer_send: shared(0.0),
             crystal_send: shared(0.0),
+            fx_delay_sync:        Arc::new(AtomicU8::new(0)),
+            fx_delay_division:    Arc::new(AtomicU8::new(8)), // ClockDivision::DottedEighth
+            fx_delay_synced_time: shared(0.375), // dotted 8th at 120 BPM
         }
     }
 }
@@ -258,7 +279,7 @@ fn build_track_graph(state: &TrackState, sr: f64) -> Box<dyn AudioUnit + Send> {
     let v5 = make_voice(5);
 
     let voice_mix = v0 + v1 + v2 + v3 + v4 + v5;
-    let track_out = voice_mix * var(&state.track_vol);
+    let track_out = voice_mix * var(&state.lfo_amp_mult) * var(&state.track_vol);
     let mut g: Box<dyn AudioUnit + Send> = Box::new(track_out);
     g.set_sample_rate(sr);
     g.allocate();
@@ -363,13 +384,23 @@ impl MultiTrackEngine {
 
         match lfo_dest {
             0 => {
+                // Pitch modulation
                 track.lfo_pitch_mult.set(2_f32.powf(lfo_out * 2.0 / 12.0));
                 track.effective_cutoff.set(base_cutoff);
+                track.lfo_amp_mult.set(1.0);
+            }
+            2 => {
+                // Amplitude modulation — tremolo
+                track.lfo_pitch_mult.set(1.0);
+                track.effective_cutoff.set(base_cutoff);
+                track.lfo_amp_mult.set((1.0 + lfo_out).max(0.0));
             }
             _ => {
+                // Filter (dest == 1) and any future dest
                 track.lfo_pitch_mult.set(1.0);
                 track.effective_cutoff.set(
                     (base_cutoff + lfo_out * base_cutoff * 0.5).clamp(80.0, 18000.0));
+                track.lfo_amp_mult.set(1.0);
             }
         }
     }

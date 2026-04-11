@@ -34,6 +34,10 @@ pub struct AmbientPatch {
     pub lfo_depth: f32,
     pub lfo_shape: usize,
     pub lfo_dest: usize,
+    #[serde(default)]
+    pub lfo_sync: bool,
+    #[serde(default = "default_lfo_division")]
+    pub lfo_division: u8, // ClockDivision::to_u8()
 
     pub filter_enabled: bool,
     pub filter_cutoff: f32,
@@ -49,6 +53,11 @@ pub struct AmbientPatch {
 
 fn default_category() -> String {
     "User".to_string()
+}
+
+fn default_lfo_division() -> u8 {
+    // ClockDivision::Quarter = 2
+    2
 }
 
 impl Default for AmbientPatch {
@@ -78,6 +87,8 @@ impl Default for AmbientPatch {
             lfo_depth: 0.0,
             lfo_shape: 0,
             lfo_dest: 1,
+            lfo_sync: false,
+            lfo_division: default_lfo_division(),
             filter_enabled: true,
             filter_cutoff: 3000.0,
             filter_q: 0.3,
@@ -114,6 +125,8 @@ impl AmbientPatch {
         track.lfo_depth.set(if self.lfo_enabled { self.lfo_depth.clamp(0.0, 1.0) } else { 0.0 });
         track.lfo_shape.store(self.lfo_shape as u8, Ordering::Relaxed);
         track.lfo_dest.store(self.lfo_dest as u8, Ordering::Relaxed);
+        track.lfo_sync.store(self.lfo_sync as u8, Ordering::Relaxed);
+        track.lfo_division.store(self.lfo_division, Ordering::Relaxed);
 
         track.cutoff.set(if self.filter_enabled {
             self.filter_cutoff.clamp(80.0, 18_000.0)
