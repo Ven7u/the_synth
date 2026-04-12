@@ -241,6 +241,7 @@ fn build_bubble_scene(stage: usize, pad: &AmbientPatch, bell: &AmbientPatch) -> 
         key: 9,
         scale: "minor".to_string(),
         macro_set: MacroSetKind::AmbientCore,
+        markov: None,
         tracks: std::array::from_fn(|ti| match ti {
             0 => SceneTrack {
                 patch_path: "assets/patches/Ambient/Night Drift.json".to_string(),

@@ -1009,6 +1009,14 @@ pub struct MarkovEngineShared {
     /// Monotonically increasing counter, incremented on each phrase boundary
     /// by the audio thread. The control thread polls this to drive the Timeline.
     pub phrase_epoch: Arc<AtomicUsize>,
+    /// Incremented by the audio thread on each bar boundary.
+    pub bar_epoch: Arc<AtomicUsize>,
+    /// Incremented by the audio thread on each 16th-note subdivision.
+    pub subdivision_epoch: Arc<AtomicUsize>,
+    /// Set to true by the control thread to request an immediate timeline
+    /// section advance (hard cut, ignores remaining phrase count).
+    /// Cleared by the control thread after processing.
+    pub force_timeline_advance: Arc<AtomicBool>,
 
     // ── Harmonic sequence ────────────────────────────────────────────────────
     /// Number of active chord slots in the sequence (1–8). 1 = static key (legacy).
@@ -1053,7 +1061,10 @@ impl MarkovEngineShared {
             motif_length: (0..n_voices).map(|_| Arc::new(AtomicU8::new(16))).collect(),
             motif_active: (0..n_voices).map(|_| Arc::new(AtomicBool::new(false))).collect(),
             clock_div:            Arc::new(AtomicU8::new(4)), // one step per beat by default
-            phrase_epoch:         Arc::new(AtomicUsize::new(0)),
+            phrase_epoch:             Arc::new(AtomicUsize::new(0)),
+            bar_epoch:                Arc::new(AtomicUsize::new(0)),
+            subdivision_epoch:        Arc::new(AtomicUsize::new(0)),
+            force_timeline_advance:   Arc::new(AtomicBool::new(false)),
             seq_len:              Arc::new(AtomicU8::new(1)),
             seq_roots:   (0..Self::SEQ_MAX).map(|_| Arc::new(AtomicU8::new(60))).collect(),
             seq_scales:  (0..Self::SEQ_MAX).map(|_| Arc::new(AtomicU8::new(0))).collect(),
@@ -1797,6 +1808,19 @@ impl Timeline {
             let t = self.phrase_in_sect as f32 / transition as f32;
             self.prev_state.lerp(&self.target_state, t)
         }
+    }
+
+    /// Force-advance to the next section immediately, ignoring remaining phrase count.
+    /// Use for Bevy-controlled or visual-driven transitions.
+    /// Returns the new section name (empty string if already on last section and not looping).
+    pub fn force_advance(&mut self) -> String {
+        if !self.active || self.sections.is_empty() {
+            return String::new();
+        }
+        // Jump phrase_in_sect to the section boundary to trigger advance logic.
+        self.phrase_in_sect = self.sections[self.cursor].phrases.saturating_sub(1);
+        self.on_phrase_boundary();
+        self.sections.get(self.cursor).map(|s| s.name.clone()).unwrap_or_default()
     }
 
     /// Write the current interpolated state to the engine's shared atomics.
