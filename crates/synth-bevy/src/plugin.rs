@@ -189,7 +189,7 @@ pub struct SynthTempo {
     pub bpm: f32,
 }
 
-#[derive(Event, Debug, Clone)]
+#[derive(Message, Debug, Clone)]
 pub enum SynthEvent {
     NoteOn { track: u8, pitch: u8, velocity: u8 },
     NoteOff { track: u8, pitch: u8 },
@@ -213,7 +213,7 @@ impl Plugin for SynthPlugin {
         app.init_resource::<SynthBevyConfig>()
             .init_resource::<SynthTempo>()
             .init_resource::<PendingEngineActions>()
-            .add_event::<SynthEvent>()
+            .add_message::<SynthEvent>()
             .add_systems(Startup, setup_synth_runtime)
             .add_systems(PostUpdate, (bevy_bridge_system, process_pending_engine_actions).chain());
 
@@ -309,7 +309,7 @@ fn setup_synth_runtime(world: &mut World) {
 }
 
 fn bevy_bridge_system(
-    mut events: EventReader<SynthEvent>,
+    mut events: MessageReader<SynthEvent>,
     cfg: Res<SynthBevyConfig>,
     runtime: Option<Res<SynthBevyRuntime>>,
     params: Option<Res<SynthParam>>,

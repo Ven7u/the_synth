@@ -22,9 +22,9 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 use std::sync::atomic::Ordering;
 
 use bevy::{
-    core_pipeline::bloom::Bloom,
+    post_process::bloom::{Bloom, BloomCompositeMode},
     prelude::*,
-    sprite::{ColorMaterial, MeshMaterial2d},
+    window::WindowResolution,
 };
 use synth_bevy::{SceneTransitionMode, SynthBackendKind, SynthBevyConfig, SynthEvent,
     SynthParam, SynthPlugin};
@@ -267,7 +267,7 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Space Tunnel — Inception".to_string(),
-                resolution: (1200.0, 750.0).into(),
+                resolution: WindowResolution::new(1200, 750),
                 ..Default::default()
             }),
             ..Default::default()
@@ -295,11 +295,10 @@ fn setup(
     mut meshes:    ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     palette_fade:  Res<PaletteFade>,
-    mut synth:     EventWriter<SynthEvent>,
+    mut synth:     MessageWriter<SynthEvent>,
 ) {
     commands.spawn((
         Camera2d,
-        Camera { hdr: true, ..default() },
         Bloom {
             intensity: 0.40,
             low_frequency_boost: 0.65,
@@ -376,7 +375,7 @@ fn setup(
         ));
     }
 
-    synth.send(SynthEvent::SceneLoad { name: SCENE_NAME.to_string() });
+    synth.write(SynthEvent::SceneLoad { name: SCENE_NAME.to_string() });
 }
 
 fn star_screen_pos(angle: f32, z: f32, rotation: f32) -> (f32, f32) {
@@ -604,7 +603,7 @@ fn timeline_conductor_system(
     mut commands:  Commands,
     mut meshes:    ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mut synth:     EventWriter<SynthEvent>,
+    mut synth:     MessageWriter<SynthEvent>,
 ) {
     let dt = time.delta_secs();
     let Some(params) = params else { return; };
@@ -631,7 +630,7 @@ fn timeline_conductor_system(
             info!("[tunnel] {} → {}", tl.section_names[tunnel.section],
                   tl.section_names.get(next).map(|s| s.as_str()).unwrap_or("end"));
 
-            synth.send(SynthEvent::TimelineAdvance);
+            synth.write(SynthEvent::TimelineAdvance);
             fade.start(section_palette(next), 8.0);
             spawn_flash(&mut commands, &mut meshes, &mut materials);
 
