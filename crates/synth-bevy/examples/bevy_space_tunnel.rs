@@ -305,6 +305,7 @@ fn setup(
             low_frequency_boost: 0.65,
             low_frequency_boost_curvature: 0.55,
             high_pass_frequency: 0.85,
+            composite_mode: BloomCompositeMode::EnergyConserving,
             ..default()
         },
     ));
