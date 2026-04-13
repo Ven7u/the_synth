@@ -32,3 +32,8 @@ required-features = ["bevy"]
 name = "bevy_space_tunnel"
 path = "examples/bevy_space_tunnel.rs"
 required-features = ["bevy"]
+
+[[example]]
+name = "bevy_wipeout_track"
+path = "examples/bevy_wipeout_track.rs"
+required-features = ["bevy"]
