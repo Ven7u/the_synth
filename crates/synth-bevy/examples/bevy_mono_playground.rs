@@ -18,7 +18,7 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Bevy Mono Playground".to_string(),
-                resolution: (980.0, 620.0).into(),
+                resolution: (980u32, 620u32).into(),
                 ..Default::default()
             }),
             ..Default::default()
@@ -44,8 +44,8 @@ fn move_player(
     windows: Query<&Window>,
     mut q: Query<&mut Transform, With<Player>>,
 ) {
-    let Ok(window) = windows.get_single() else { return; };
-    let Ok(mut tf) = q.get_single_mut() else { return; };
+    let Ok(window) = windows.single() else { return; };
+    let Ok(mut tf) = q.single_mut() else { return; };
 
     let mut dir = Vec2::ZERO;
     if keys.pressed(KeyCode::ArrowLeft) || keys.pressed(KeyCode::KeyA) {
@@ -74,10 +74,10 @@ fn move_player(
 fn map_player_to_synth(
     windows: Query<&Window>,
     q: Query<&Transform, With<Player>>,
-    mut synth: EventWriter<SynthEvent>,
+    mut synth: MessageWriter<SynthEvent>,
 ) {
-    let Ok(window) = windows.get_single() else { return; };
-    let Ok(tf) = q.get_single() else { return; };
+    let Ok(window) = windows.single() else { return; };
+    let Ok(tf) = q.single() else { return; };
     let x_norm = ((tf.translation.x / (window.width() * 0.5)) * 0.5 + 0.5).clamp(0.0, 1.0);
     let y_norm = ((tf.translation.y / (window.height() * 0.5)) * 0.5 + 0.5).clamp(0.0, 1.0);
 
@@ -85,24 +85,24 @@ fn map_player_to_synth(
     let resonance = 0.1 + y_norm * (1.2 - 0.1);
     let lfo_depth = (1.0 - y_norm) * 0.5;
 
-    synth.send(SynthEvent::SetParam {
+    synth.write(SynthEvent::SetParam {
         track: 0,
         param: ParamId::FilterCutoff,
         value: cutoff,
     });
-    synth.send(SynthEvent::SetParam {
+    synth.write(SynthEvent::SetParam {
         track: 0,
         param: ParamId::FilterResonance,
         value: resonance,
     });
-    synth.send(SynthEvent::SetParam {
+    synth.write(SynthEvent::SetParam {
         track: 0,
         param: ParamId::LfoDepth,
         value: lfo_depth,
     });
 }
 
-fn keyboard_notes(keys: Res<ButtonInput<KeyCode>>, mut synth: EventWriter<SynthEvent>) {
+fn keyboard_notes(keys: Res<ButtonInput<KeyCode>>, mut synth: MessageWriter<SynthEvent>) {
     // One-octave row: Z S X D C V G B H N J M
     let key_map: &[(KeyCode, u8)] = &[
         (KeyCode::KeyZ, 48),
@@ -121,14 +121,14 @@ fn keyboard_notes(keys: Res<ButtonInput<KeyCode>>, mut synth: EventWriter<SynthE
 
     for (k, pitch) in key_map {
         if keys.just_pressed(*k) {
-            synth.send(SynthEvent::NoteOn {
+            synth.write(SynthEvent::NoteOn {
                 track: 0,
                 pitch: *pitch,
                 velocity: 110,
             });
         }
         if keys.just_released(*k) {
-            synth.send(SynthEvent::NoteOff {
+            synth.write(SynthEvent::NoteOff {
                 track: 0,
                 pitch: *pitch,
             });

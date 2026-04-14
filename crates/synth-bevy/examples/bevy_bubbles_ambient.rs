@@ -1,8 +1,7 @@
 use ambient_engine::{save_scene_json, AmbientPatch, MacroSetKind, Scene, SceneGlobal, SceneTrack};
 use bevy::{
-    core_pipeline::bloom::Bloom,
     prelude::*,
-    sprite::{ColorMaterial, MeshMaterial2d},
+    post_process::bloom::Bloom,
 };
 use synth_bevy::{SceneTransitionMode, SynthBackendKind, SynthBevyConfig, SynthEvent, SynthPlugin};
 use synth_control::midi_note;
@@ -321,7 +320,7 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Bevy Bubbles Ambient".to_string(),
-                resolution: (1100.0, 700.0).into(),
+                resolution: (1100u32, 700u32).into(),
                 ..Default::default()
             }),
             ..Default::default()
@@ -350,14 +349,10 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     palette: Res<PaletteState>,
-    mut synth: EventWriter<SynthEvent>,
+    mut synth: MessageWriter<SynthEvent>,
 ) {
     commands.spawn((
         Camera2d,
-        Camera {
-            hdr: true,
-            ..default()
-        },
         Bloom {
             intensity: 0.28,
             low_frequency_boost: 0.50,
@@ -429,11 +424,11 @@ fn setup(
         Vec2::new(50.0, 32.0),
     );
 
-    synth.send(SynthEvent::SceneLoad {
+    synth.write(SynthEvent::SceneLoad {
         name: scene_names[0].clone(),
     });
     for &pitch in &[midi_note!(A, 2), midi_note!(E, 3), midi_note!(A, 3)] {
-        synth.send(SynthEvent::NoteOn {
+        synth.write(SynthEvent::NoteOn {
             track: 0,
             pitch,
             velocity: 78,
@@ -542,9 +537,9 @@ fn bubble_motion_system(
     mut bubbles: Query<(&mut Transform, &mut Velocity, &Bubble), Without<Obstacle>>,
     mut stage: ResMut<StageState>,
     mut pending_offs: ResMut<PendingNoteOffs>,
-    mut synth: EventWriter<SynthEvent>,
+    mut synth: MessageWriter<SynthEvent>,
 ) {
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
     let half_w = window.width() * 0.5;
@@ -596,7 +591,7 @@ fn bubble_motion_system(
             stage.collisions += 1;
             let idx = (bubble.id * 3 + stage.collisions as usize) % AM_PENTA.len();
             let pitch = AM_PENTA[idx];
-            synth.send(SynthEvent::NoteOn {
+            synth.write(SynthEvent::NoteOn {
                 track: 1,
                 pitch,
                 velocity: 95,
@@ -609,7 +604,7 @@ fn bubble_motion_system(
             let tension = (stage.collisions as f32
                 / (COLLISIONS_PER_STAGE as f32 * (stage.stage + 1) as f32))
                 .clamp(0.0, 1.0);
-            synth.send(SynthEvent::SetMacro {
+            synth.write(SynthEvent::SetMacro {
                 index: 0,
                 value: tension,
             });
@@ -624,7 +619,7 @@ fn stage_progression_system(
     mut stage: ResMut<StageState>,
     mut palette: ResMut<PaletteState>,
     bubbles: Query<&Bubble>,
-    mut synth: EventWriter<SynthEvent>,
+    mut synth: MessageWriter<SynthEvent>,
 ) {
     if stage.collisions < COLLISIONS_PER_STAGE * (stage.stage + 1) as u32 {
         return;
@@ -648,7 +643,7 @@ fn stage_progression_system(
         palette.transition_to(stage_palette(stage.stage), 3.0);
 
         // Trigger audio scene transition.
-        synth.send(SynthEvent::SceneTransition {
+        synth.write(SynthEvent::SceneTransition {
             name: stage.scene_names[stage.stage].clone(),
             frames: 44_100 * 100,
             mode: None,
@@ -664,7 +659,7 @@ fn ambient_pulse_system(
     mut local_timer: Local<Option<PulseTimer>>,
     mut pulse_step: Local<usize>,
     mut pending_offs: ResMut<PendingNoteOffs>,
-    mut synth: EventWriter<SynthEvent>,
+    mut synth: MessageWriter<SynthEvent>,
 ) {
     if local_timer.is_none() {
         *local_timer = Some(PulseTimer(Timer::from_seconds(3.5, TimerMode::Repeating)));
@@ -675,7 +670,7 @@ fn ambient_pulse_system(
     if t.0.tick(time.delta()).just_finished() {
         let pitch = BASS_PATTERN[*pulse_step % BASS_PATTERN.len()];
         *pulse_step += 1;
-        synth.send(SynthEvent::NoteOn {
+        synth.write(SynthEvent::NoteOn {
             track: 0,
             pitch,
             velocity: 72,
@@ -691,7 +686,7 @@ fn ambient_pulse_system(
 fn pending_note_off_system(
     time: Res<Time>,
     mut pending_offs: ResMut<PendingNoteOffs>,
-    mut synth: EventWriter<SynthEvent>,
+    mut synth: MessageWriter<SynthEvent>,
 ) {
     let dt = time.delta_secs();
     for n in &mut pending_offs.0 {
@@ -701,7 +696,7 @@ fn pending_note_off_system(
     while i < pending_offs.0.len() {
         if pending_offs.0[i].seconds_left <= 0.0 {
             let n = pending_offs.0.swap_remove(i);
-            synth.send(SynthEvent::NoteOff {
+            synth.write(SynthEvent::NoteOff {
                 track: n.track,
                 pitch: n.pitch,
             });
