@@ -1,8 +1,5 @@
 use ambient_engine::{save_scene_json, AmbientPatch, MacroSetKind, Scene, SceneGlobal, SceneTrack};
-use bevy::{
-    prelude::*,
-    post_process::bloom::Bloom,
-};
+use bevy::{post_process::bloom::Bloom, prelude::*};
 use synth_bevy::{SceneTransitionMode, SynthBackendKind, SynthBevyConfig, SynthEvent, SynthPlugin};
 use synth_control::midi_note;
 

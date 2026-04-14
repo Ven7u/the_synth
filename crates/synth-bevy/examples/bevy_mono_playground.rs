@@ -44,8 +44,12 @@ fn move_player(
     windows: Query<&Window>,
     mut q: Query<&mut Transform, With<Player>>,
 ) {
-    let Ok(window) = windows.single() else { return; };
-    let Ok(mut tf) = q.single_mut() else { return; };
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Ok(mut tf) = q.single_mut() else {
+        return;
+    };
 
     let mut dir = Vec2::ZERO;
     if keys.pressed(KeyCode::ArrowLeft) || keys.pressed(KeyCode::KeyA) {
@@ -76,8 +80,12 @@ fn map_player_to_synth(
     q: Query<&Transform, With<Player>>,
     mut synth: MessageWriter<SynthEvent>,
 ) {
-    let Ok(window) = windows.single() else { return; };
-    let Ok(tf) = q.single() else { return; };
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Ok(tf) = q.single() else {
+        return;
+    };
     let x_norm = ((tf.translation.x / (window.width() * 0.5)) * 0.5 + 0.5).clamp(0.0, 1.0);
     let y_norm = ((tf.translation.y / (window.height() * 0.5)) * 0.5 + 0.5).clamp(0.0, 1.0);
 
