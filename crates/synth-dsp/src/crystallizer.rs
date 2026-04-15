@@ -186,14 +186,69 @@ impl Crystallizer {
 mod tests {
     use super::Crystallizer;
 
+    const SR: f32 = 44_100.0;
+
     #[test]
     fn crystallizer_output_is_finite() {
-        let mut c = Crystallizer::new(44_100.0);
+        let mut c = Crystallizer::new(SR);
         for i in 0..20_000 {
             let inp = if i % 2_000 == 0 { 1.0 } else { 0.0 };
             let x = c.tick(inp, 120.0, 0.25, 0.35, 260.0, 2);
             assert!(x.is_finite());
             assert!(x.abs() < 8.0);
+        }
+    }
+
+    /// Run with the exact Echoes scene parameters for 3 minutes of simulated audio.
+    /// High feedback (0.62) + high scatter (0.55) + dotted-8th delay at 76 BPM (394ms).
+    /// Verifies the tanh feedback path stays bounded and output doesn't drift upward.
+    #[test]
+    fn echoes_params_long_run_stays_bounded() {
+        let mut c = Crystallizer::new(SR);
+        let three_min = (SR * 180.0) as usize;
+        let mut max_out: f32 = 0.0;
+        for i in 0..three_min {
+            // Periodic short bursts every 4 bars (~12.6s at 76 BPM) — like chord notes
+            let inp = if i % ((SR * 12.6) as usize) < (SR * 0.05) as usize { 0.4 } else { 0.0 };
+            let x = c.tick(inp, 180.0, 0.55, 0.62, 394.0, 1);
+            assert!(x.is_finite(), "NaN/Inf at sample {i}");
+            max_out = max_out.max(x.abs());
+        }
+        assert!(max_out < 2.0, "output grew beyond expected bounds: {max_out}");
+    }
+
+    /// Feed silence after priming the buffer, verify output decays to near-zero.
+    /// With high scatter, grain heads jump randomly — stale buffer content must not
+    /// sustain itself via the feedback loop indefinitely.
+    #[test]
+    fn silence_input_decays_to_zero() {
+        let mut c = Crystallizer::new(SR);
+
+        // Prime with 1s of signal so the buffer is populated
+        for _ in 0..(SR as usize) {
+            c.tick(0.5, 120.0, 0.55, 0.62, 260.0, 1);
+        }
+
+        // Feed silence for 5s (> longest grain + several feedback cycles)
+        let mut last = 0.0f32;
+        for _ in 0..(SR as usize * 5) {
+            last = c.tick(0.0, 120.0, 0.55, 0.62, 260.0, 1);
+            assert!(last.is_finite());
+        }
+        // Output must have decayed significantly (not necessarily to zero — feedback sustains)
+        // but must not have grown beyond what the priming produced
+        assert!(last.abs() < 0.5, "output still loud after 5s of silence: {last}");
+    }
+
+    /// Feedback at the clamped ceiling (0.95) must not cause unbounded growth.
+    #[test]
+    fn max_feedback_stays_finite() {
+        let mut c = Crystallizer::new(SR);
+        for i in 0..(SR as usize * 10) {
+            let inp = if i < 100 { 0.8 } else { 0.0 };
+            let x = c.tick(inp, 80.0, 0.10, 0.99, 80.0, 2); // 0.99 → clamped to 0.95
+            assert!(x.is_finite(), "NaN/Inf at sample {i}");
+            assert!(x.abs() < 4.0, "output clipped at sample {i}: {x}");
         }
     }
 }

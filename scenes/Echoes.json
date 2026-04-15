@@ -1,0 +1,152 @@
+{
+  "name": "Echoes",
+  "bpm": 76,
+  "key": 5,
+  "scale": "minor",
+  "macro_set": "AmbientCore",
+  "tracks": [
+    {
+      "patch_path": "assets/patches/PinkFloyd/Dark Side Bass.json",
+      "patch": {
+        "name": "Dark Side Bass", "category": "PinkFloyd", "synth_model": "theSynth",
+        "osc_wave": [0, 0, 0], "osc_octave": [-1, -1, 0], "osc_detune": [0.0, 1.5, 0.0],
+        "osc_vol": [0.60, 0.30, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [false, false, false],
+        "osc_unison_enabled": [false, false, false], "osc_unison_count": [2, 2, 2],
+        "osc_unison_spread": [5.0, 5.0, 20.0], "hard_sync": false,
+        "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
+        "noise_vol": 0.0,
+        "lfo_enabled": false, "lfo_rate": 2.0, "lfo_depth": 0.0,
+        "lfo_shape": 0, "lfo_dest": 2,
+        "lfo_sync": false, "lfo_division": 2,
+        "filter_enabled": true, "filter_cutoff": 280.0,
+        "filter_q": 0.10, "filter_env_amount": 0.30, "fenv_adsr": [0.01, 0.40, 0.10, 0.30],
+        "amp_adsr": [0.01, 0.35, 0.20, 0.40], "glide_time": 0.08
+      },
+      "volume": 0.58, "cutoff": 300.0, "resonance": 0.12, "shimmer_send": 0.08, "crystal_send": 0.0
+    },
+    {
+      "patch_path": "assets/patches/PinkFloyd/Echoes Underwater.json",
+      "patch": {
+        "name": "Echoes Underwater", "category": "PinkFloyd", "synth_model": "theSynth",
+        "osc_wave": [0, 0, 0], "osc_octave": [0, 1, 0], "osc_detune": [0.0, 5.0, 0.0],
+        "osc_vol": [0.45, 0.38, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [false, false, false],
+        "osc_unison_enabled": [true, true, false], "osc_unison_count": [5, 4, 2],
+        "osc_unison_spread": [25.0, 20.0, 20.0], "hard_sync": false,
+        "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
+        "noise_vol": 0.005,
+        "lfo_enabled": true, "lfo_rate": 0.06, "lfo_depth": 0.08,
+        "lfo_shape": 0, "lfo_dest": 1,
+        "lfo_sync": false, "lfo_division": 2,
+        "filter_enabled": true, "filter_cutoff": 1200.0,
+        "filter_q": 0.08, "filter_env_amount": 0.25, "fenv_adsr": [6.0, 3.0, 0.70, 12.0],
+        "amp_adsr": [7.0, 2.5, 0.75, 14.0], "glide_time": 0.45
+      },
+      "volume": 0.42, "cutoff": 1100.0, "resonance": 0.07, "shimmer_send": 0.55, "crystal_send": 0.35
+    },
+    {
+      "patch_path": "assets/patches/PinkFloyd/Gilmour Lead.json",
+      "patch": {
+        "name": "Gilmour Lead", "category": "PinkFloyd", "synth_model": "theSynth",
+        "osc_wave": [1, 0, 0], "osc_octave": [0, 1, 0], "osc_detune": [0.0, 4.0, 0.0],
+        "osc_vol": [0.55, 0.40, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [false, false, false],
+        "osc_unison_enabled": [true, false, false], "osc_unison_count": [3, 2, 2],
+        "osc_unison_spread": [10.0, 5.0, 20.0], "hard_sync": false,
+        "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
+        "noise_vol": 0.0,
+        "lfo_enabled": true, "lfo_rate": 5.2, "lfo_depth": 0.04,
+        "lfo_shape": 0, "lfo_dest": 2,
+        "lfo_sync": false, "lfo_division": 2,
+        "filter_enabled": true, "filter_cutoff": 2500.0,
+        "filter_q": 0.18, "filter_env_amount": 0.35, "fenv_adsr": [0.4, 2.5, 0.60, 5.0],
+        "amp_adsr": [0.5, 2.0, 0.65, 6.0], "glide_time": 0.22
+      },
+      "volume": 0.32, "cutoff": 2200.0, "resonance": 0.12, "shimmer_send": 0.35, "crystal_send": 0.60
+    },
+    {
+      "patch_path": "assets/patches/PinkFloyd/Comfortably Numb Choir.json",
+      "patch": {
+        "name": "Comfortably Numb Choir", "category": "PinkFloyd", "synth_model": "theSynth",
+        "osc_wave": [0, 0, 0], "osc_octave": [0, 1, 0], "osc_detune": [0.0, 6.0, 0.0],
+        "osc_vol": [0.40, 0.32, 0.0], "osc_enabled": [true, true, false],
+        "osc_pulse_width": [0.5, 0.5, 0.5], "osc_pw_enabled": [false, false, false],
+        "osc_unison_enabled": [true, true, false], "osc_unison_count": [6, 5, 2],
+        "osc_unison_spread": [28.0, 22.0, 20.0], "hard_sync": false,
+        "fm_enabled": false, "fm_depth": 0.0, "ring_enabled": false, "ring_depth": 0.0,
+        "noise_vol": 0.015,
+        "lfo_enabled": true, "lfo_rate": 0.035, "lfo_depth": 0.06,
+        "lfo_shape": 0, "lfo_dest": 2,
+        "lfo_sync": false, "lfo_division": 2,
+        "filter_enabled": true, "filter_cutoff": 1600.0,
+        "filter_q": 0.06, "filter_env_amount": 0.18, "fenv_adsr": [10.0, 4.0, 0.72, 18.0],
+        "amp_adsr": [12.0, 3.5, 0.78, 22.0], "glide_time": 0.65
+      },
+      "volume": 0.35, "cutoff": 2800.0, "resonance": 0.06, "shimmer_send": 0.80, "crystal_send": 0.18
+    }
+  ],
+  "macros": [],
+  "global": {
+    "master_vol": 0.58,
+    "shimmer_mix": 0.50, "shimmer_amount": 0.60, "shimmer_size": 0.85, "shimmer_damp": 0.22, "shimmer_pitch": 1,
+    "crystal_mix": 0.38, "crystal_grain_ms": 180.0, "crystal_scatter": 0.55, "crystal_feedback": 0.62, "crystal_delay_ms": 394.0, "crystal_pitch": 1
+  },
+  "markov": {
+    "clock_div": 4,
+    "harmonic_seq": [],
+    "root": 53,
+    "scale": 1,
+    "density": 0.35,
+    "bars_per_phrase": 4,
+    "mood": [0.30, 0.0, 0.15, 0.0, 0.0, 0.55],
+    "voice_roles": [0, 1, 2, 3],
+    "voice_densities": [0.0, 0.0, 0.25, 0.0],
+    "voice_enabled": [true, true, true, true],
+    "chord_attraction": 0.55,
+    "bass_lock": true,
+    "dissonance_resolve": true,
+    "dissonance_threshold": 0,
+    "register_drift": 0.30,
+    "generative_mode": 4,
+
+    "timeline": [
+      {
+        "name": "Sonar Ping",
+        "phrases": 3,
+        "transition_phrases": 0,
+        "mood": [0.50, 0.0, 0.10, 0.0, 0.0, 0.40],
+        "density": 0.15,
+        "voice_enabled": [false, true, false, false]
+      },
+      {
+        "name": "Depth",
+        "phrases": 5,
+        "transition_phrases": 2,
+        "mood": [0.30, 0.0, 0.15, 0.0, 0.0, 0.55],
+        "density": 0.28,
+        "voice_enabled": [true, true, false, true],
+        "effects": { "shimmer_mix": 0.55, "crystal_mix": 0.40 }
+      },
+      {
+        "name": "Surface",
+        "phrases": 5,
+        "transition_phrases": 3,
+        "mood": [0.20, 0.0, 0.20, 0.0, 0.10, 0.50],
+        "density": 0.42,
+        "voice_enabled": [true, true, true, true],
+        "effects": { "shimmer_mix": 0.60, "crystal_mix": 0.45 }
+      },
+      {
+        "name": "Open Ocean",
+        "phrases": 6,
+        "transition_phrases": 3,
+        "mood": [0.25, 0.0, 0.10, 0.0, 0.05, 0.60],
+        "density": 0.30,
+        "voice_enabled": [true, true, false, true],
+        "effects": { "shimmer_mix": 0.65, "crystal_mix": 0.35 }
+      }
+    ],
+    "timeline_loop": true
+  }
+}

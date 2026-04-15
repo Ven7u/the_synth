@@ -1,5 +1,7 @@
 pub mod beat_clock;
+pub mod clock_division;
 pub use beat_clock::{BeatClock, BeatClockShared, BeatEvents, BeatPosition};
+pub use clock_division::ClockDivision;
 
 use std::time::{Duration, Instant};
 

@@ -64,11 +64,18 @@ pub struct BeatClockShared {
     pub bpm: Shared,
     /// Transport playing state. When false, tick() returns empty events.
     pub playing: Arc<AtomicBool>,
+    /// Swing amount: 0.0 = straight, 0.5 = full triplet swing.
+    /// Even-numbered subdivisions are delayed by `swing × subdiv_duration`.
+    pub swing: Shared,
 }
 
 impl BeatClockShared {
     pub fn new(bpm: f32) -> Self {
-        Self { bpm: shared(bpm), playing: Arc::new(AtomicBool::new(false)) }
+        Self {
+            bpm: shared(bpm),
+            playing: Arc::new(AtomicBool::new(false)),
+            swing: shared(0.0),
+        }
     }
 
     pub fn bpm(&self) -> f32 {
@@ -85,6 +92,14 @@ impl BeatClockShared {
 
     pub fn is_playing(&self) -> bool {
         self.playing.load(Ordering::Relaxed)
+    }
+
+    pub fn swing(&self) -> f32 {
+        self.swing.value().clamp(0.0, 0.5)
+    }
+
+    pub fn set_swing(&self, swing: f32) {
+        self.swing.set_value(swing.clamp(0.0, 0.5));
     }
 }
 
@@ -149,19 +164,30 @@ impl BeatClock {
             return BeatEvents::default();
         }
 
-        let bpm = shared.bpm().max(1.0) as f64;
-        // Samples per subdivision at current BPM and SR.
-        // subdivisions_per_minute = bpm * subdivisions_per_beat
-        // samples_per_subdiv = sr * 60 / subdivisions_per_minute
-        let samples_per_subdiv =
-            (sr * 60.0) / (bpm * self.subdivisions as f64);
-        let samples_per_subdiv_u = samples_per_subdiv as u64;
+        let bpm   = shared.bpm().max(1.0) as f64;
+        let swing = shared.swing() as f64; // 0.0 – 0.5
+
+        // Base samples per subdivision (no swing).
+        // samples_per_subdiv = sr * 60 / (bpm * subdivisions_per_beat)
+        let base_sps = (sr * 60.0) / (bpm * self.subdivisions as f64);
 
         let mut events = BeatEvents::default();
         let mut remaining = frames as u64;
 
         while remaining > 0 {
-            let room = samples_per_subdiv_u.saturating_sub(self.samples_in_subdiv);
+            // Swing: even subdivisions within a beat are lengthened,
+            // odd subdivisions are shortened by the same amount, keeping
+            // total beat duration constant.
+            //   even threshold = base × (1 + swing)
+            //   odd  threshold = base × (1 − swing)
+            let is_even_subdiv = self.position.subdivision % 2 == 0;
+            let sps = if is_even_subdiv {
+                (base_sps * (1.0 + swing)) as u64
+            } else {
+                (base_sps * (1.0 - swing)).max(1.0) as u64
+            };
+
+            let room = sps.saturating_sub(self.samples_in_subdiv);
             if remaining >= room {
                 // We cross a subdivision boundary.
                 remaining -= room;

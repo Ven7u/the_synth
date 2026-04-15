@@ -1,4 +1,9 @@
-use ambient_engine::{load_scene_json, AmbientEngine, Scene, SceneGlobal, MACRO_COUNT, TRACK_COUNT};
+use ambient_engine::{
+    load_scene_json, AmbientEngine, Scene, SceneGlobal, MACRO_COUNT, TRACK_COUNT,
+    BeatClock, BeatClockShared,
+    MarkovEngine, GenerativeMode,
+    EuclideanGen, ProbTableGen,
+};
 use bevy::prelude::*;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample, Stream};
@@ -79,6 +84,15 @@ pub struct SynthParam {
     pub crystal_mix: Shared,
     pub crystal_feedback: Shared,
     pub master_vol: Shared,
+    /// Phrase epoch — incremented by the audio thread on each phrase boundary.
+    pub phrase_epoch: Arc<std::sync::atomic::AtomicUsize>,
+    /// Bar epoch — incremented by the audio thread on each bar boundary.
+    pub bar_epoch: Arc<std::sync::atomic::AtomicUsize>,
+    /// Subdivision epoch — incremented on each 16th-note subdivision.
+    pub subdivision_epoch: Arc<std::sync::atomic::AtomicUsize>,
+    /// Set to `true` to force an immediate timeline section advance.
+    /// Cleared automatically by the bridge system after processing.
+    pub force_timeline_advance: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Default for SynthParam {
@@ -95,6 +109,10 @@ impl Default for SynthParam {
             crystal_mix: shared(0.0),
             crystal_feedback: shared(0.35),
             master_vol: shared(0.7),
+            phrase_epoch: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            bar_epoch: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            subdivision_epoch: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            force_timeline_advance: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 }
@@ -147,6 +165,9 @@ pub struct SynthBevyRuntime {
     pub backend: SynthBackendRuntime,
     pub control_tx: ControlSender,
     scene_transition: Option<Arc<Mutex<Option<SceneTransitionPlan>>>>,
+    /// Shared clock used by the ambient audio thread's Markov engine.
+    /// Writing BPM here syncs to the audio thread lock-free.
+    pub ambient_beat_clock: Option<BeatClockShared>,
 }
 
 pub struct SynthAudioStream(pub Stream);
@@ -168,7 +189,7 @@ pub struct SynthTempo {
     pub bpm: f32,
 }
 
-#[derive(Event, Debug, Clone)]
+#[derive(Message, Debug, Clone)]
 pub enum SynthEvent {
     NoteOn { track: u8, pitch: u8, velocity: u8 },
     NoteOff { track: u8, pitch: u8 },
@@ -180,6 +201,9 @@ pub enum SynthEvent {
     /// `mode: None` falls back to `SynthBevyConfig::default_transition_mode`.
     SceneTransition { name: String, frames: u32, mode: Option<SceneTransitionMode> },
     Tempo { bpm: f32 },
+    /// Immediately advance the timeline to the next section, ignoring remaining phrase count.
+    /// The Bevy timeline resource (if any) handles the actual state update each frame.
+    TimelineAdvance,
 }
 
 pub struct SynthPlugin;
@@ -189,7 +213,7 @@ impl Plugin for SynthPlugin {
         app.init_resource::<SynthBevyConfig>()
             .init_resource::<SynthTempo>()
             .init_resource::<PendingEngineActions>()
-            .add_event::<SynthEvent>()
+            .add_message::<SynthEvent>()
             .add_systems(Startup, setup_synth_runtime)
             .add_systems(PostUpdate, (bevy_bridge_system, process_pending_engine_actions).chain());
 
@@ -204,7 +228,7 @@ fn setup_synth_runtime(world: &mut World) {
     let actual_sr = detect_output_sample_rate().unwrap_or(cfg.sample_rate_hz);
     let (control_tx, control_rx) = make_control_channel(cfg.control_capacity);
 
-    let (backend, synth_param, stream_res, scene_transition) = match cfg.backend {
+    let (backend, synth_param, stream_res, scene_transition, ambient_beat_clock) = match cfg.backend {
         SynthBackendKind::Ambient => {
             let eng = Arc::new(Mutex::new(AmbientEngine::new(actual_sr)));
             let transition = Arc::new(Mutex::new(None));
@@ -221,6 +245,10 @@ fn setup_synth_runtime(world: &mut World) {
                     crystal_mix: guard.crystal.mix.clone(),
                     crystal_feedback: guard.crystal.feedback.clone(),
                     master_vol: guard.master_vol.clone(),
+                    phrase_epoch: Arc::clone(&guard.markov_shared.phrase_epoch),
+                    bar_epoch: Arc::clone(&guard.markov_shared.bar_epoch),
+                    subdivision_epoch: Arc::clone(&guard.markov_shared.subdivision_epoch),
+                    force_timeline_advance: Arc::clone(&guard.markov_shared.force_timeline_advance),
                 }
             } else {
                 SynthParam::default()
@@ -230,18 +258,24 @@ fn setup_synth_runtime(world: &mut World) {
                 Arc::clone(&transition),
                 control_rx,
                 actual_sr,
+                cfg.initial_bpm,
             );
+            let (stream_and_clock, ambient_clock) = match stream_res {
+                Ok((s, c)) => (Ok(s), Some(c)),
+                Err(e) => (Err(e), None),
+            };
             (
                 SynthBackendRuntime::Ambient(eng),
                 synth_param,
-                stream_res,
+                stream_and_clock,
                 Some(transition),
+                ambient_clock,
             )
         }
         SynthBackendKind::Mono => {
             let state = Arc::new(AudioState::new());
             let stream_res = build_mono_stream(Arc::clone(&state), control_rx, actual_sr);
-            (SynthBackendRuntime::Mono(state), SynthParam::default(), stream_res, None)
+            (SynthBackendRuntime::Mono(state), SynthParam::default(), stream_res, None, None)
         }
     };
 
@@ -267,6 +301,7 @@ fn setup_synth_runtime(world: &mut World) {
         backend,
         control_tx,
         scene_transition,
+        ambient_beat_clock,
     });
     if let Some(stream) = stream_opt {
         world.insert_non_send_resource(SynthAudioStream(stream));
@@ -274,7 +309,7 @@ fn setup_synth_runtime(world: &mut World) {
 }
 
 fn bevy_bridge_system(
-    mut events: EventReader<SynthEvent>,
+    mut events: MessageReader<SynthEvent>,
     cfg: Res<SynthBevyConfig>,
     runtime: Option<Res<SynthBevyRuntime>>,
     params: Option<Res<SynthParam>>,
@@ -328,7 +363,7 @@ fn bevy_bridge_system(
                         Ok(scene) => {
                             pending.queue.push_back(PendingEngineAction::ApplyScene(scene));
                         }
-                        Err(e) => warn!("synth-bevy: scene load failed '{}': {e}", path),
+                        Err(e) => error!("synth-bevy: scene load failed '{}': {e}", path),
                     }
                 }
             }
@@ -350,6 +385,10 @@ fn bevy_bridge_system(
             }
             SynthEvent::Tempo { bpm } => {
                 tempo.bpm = bpm.max(1.0);
+            }
+            SynthEvent::TimelineAdvance => {
+                params.force_timeline_advance
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
             }
         }
     }
@@ -380,7 +419,12 @@ fn process_pending_engine_actions(
                         break;
                     }
                 }
+                let scene_bpm = scene.bpm as f32;
                 guard.apply_scene(&scene);
+                // Sync BPM to the Markov beat clock so the audio thread plays at the right tempo.
+                if let Some(clk) = &runtime.ambient_beat_clock {
+                    clk.set_bpm(scene_bpm);
+                }
             }
             PendingEngineAction::StartTransition { scene, frames, mode } => {
                 if let Some(transition) = &runtime.scene_transition {
@@ -451,7 +495,8 @@ fn build_ambient_stream(
     transition_plan: Arc<Mutex<Option<SceneTransitionPlan>>>,
     rx: ControlReceiver,
     sr: f64,
-) -> anyhow::Result<Stream> {
+    initial_bpm: f32,
+) -> anyhow::Result<(Stream, BeatClockShared)> {
     let host = cpal::default_host();
     let device = host
         .default_output_device()
@@ -460,13 +505,13 @@ fn build_ambient_stream(
 
     match config.sample_format() {
         cpal::SampleFormat::F32 => {
-            make_ambient_stream::<f32>(&device, &config.into(), engine, transition_plan, rx, sr)
+            make_ambient_stream::<f32>(&device, &config.into(), engine, transition_plan, rx, sr, initial_bpm)
         }
         cpal::SampleFormat::I16 => {
-            make_ambient_stream::<i16>(&device, &config.into(), engine, transition_plan, rx, sr)
+            make_ambient_stream::<i16>(&device, &config.into(), engine, transition_plan, rx, sr, initial_bpm)
         }
         cpal::SampleFormat::U16 => {
-            make_ambient_stream::<u16>(&device, &config.into(), engine, transition_plan, rx, sr)
+            make_ambient_stream::<u16>(&device, &config.into(), engine, transition_plan, rx, sr, initial_bpm)
         }
         _ => anyhow::bail!("Unsupported sample format"),
     }
@@ -479,7 +524,8 @@ fn make_ambient_stream<T>(
     transition_plan: Arc<Mutex<Option<SceneTransitionPlan>>>,
     rx: ControlReceiver,
     sr: f64,
-) -> anyhow::Result<Stream>
+    initial_bpm: f32,
+) -> anyhow::Result<(Stream, BeatClockShared)>
 where
     T: SizedSample + FromSample<f32>,
 {
@@ -490,6 +536,17 @@ where
     let mut lfo_phases: [f32; TRACK_COUNT] = [0.0; TRACK_COUNT];
     let mut arp_states: [ArpState; TRACK_COUNT] = std::array::from_fn(|_| ArpState::new());
     let mut walker_states: [ScaleWalker; TRACK_COUNT] = std::array::from_fn(|_| ScaleWalker::new());
+
+    // Markov generative engine — drives note events from the audio thread.
+    let mut markov_engine = MarkovEngine::new(TRACK_COUNT, 0xABE_BEEF_C0DE_1234_u64);
+    let mut markov_subdiv_counter: u8 = 0;
+    let mut euclidean_states: [EuclideanGen; TRACK_COUNT] = std::array::from_fn(|_| EuclideanGen::new());
+    let mut prob_table_states: [ProbTableGen; TRACK_COUNT] = std::array::from_fn(|i| ProbTableGen::new(0xDEAD_BEEF ^ i as u64));
+    let beat_clock_shared = BeatClockShared::new(initial_bpm);
+    let beat_clock_shared_for_runtime = beat_clock_shared.clone();
+    beat_clock_shared.set_playing(true);
+    let mut beat_clock = BeatClock::default();
+    let _was_playing = true; // Bevy ambient auto-plays
 
     let stream = device.build_output_stream(
         config,
@@ -604,6 +661,101 @@ where
                         voice_notes[ti][slot] = Some(p);
                         eng.tracks[ti].voice_freq_targets[slot].set(midi_hz(p as f64) as f32);
                         eng.tracks[ti].voice_gates[slot].set(1.0);
+                    }
+                }
+            }
+
+            // ── Markov / generative tick (once per buffer) ───────────────────
+            {
+                let beat_ev = beat_clock.tick(frames, sr, &beat_clock_shared);
+                let markov_active = GenerativeMode::from_u8(
+                    eng.generative_modes[0].load(std::sync::atomic::Ordering::Relaxed),
+                ) == GenerativeMode::Markov;
+
+                if beat_ev.bar {
+                    eng.markov_shared.bar_epoch.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    for ti in 0..TRACK_COUNT {
+                        euclidean_states[ti].reset();
+                        prob_table_states[ti].reset();
+                    }
+                    if markov_active {
+                        markov_engine.on_bar(&eng.markov_shared);
+                    }
+                }
+                if beat_ev.subdivision {
+                    eng.markov_shared.subdivision_epoch.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if markov_active {
+                        markov_subdiv_counter += 1;
+                        let clock_div = eng.markov_shared.clock_div();
+                        let step_now = markov_subdiv_counter >= clock_div;
+                        if step_now { markov_subdiv_counter = 0; }
+
+                        let voice_events = if step_now {
+                            markov_engine.on_subdivision(&eng.markov_shared)
+                        } else {
+                            vec![Default::default(); TRACK_COUNT]
+                        };
+
+                        for (ti, vev) in voice_events.iter().enumerate().take(TRACK_COUNT) {
+                            if let Some(pitch) = vev.note_off {
+                                for (slot, note) in voice_notes[ti].iter_mut().enumerate() {
+                                    if *note == Some(pitch) {
+                                        eng.tracks[ti].voice_gates[slot].set(0.0);
+                                        break;
+                                    }
+                                }
+                            }
+                            if let Some(pitch) = vev.note_on {
+                                if !voice_notes[ti].iter().enumerate().any(|(s, &n)| {
+                                    n == Some(pitch) && eng.tracks[ti].voice_gates[s].value() > 0.5
+                                }) {
+                                    let slot = voice_notes[ti].iter().position(|&n| n == Some(pitch))
+                                        .or_else(|| voice_notes[ti].iter().position(|n| n.is_none()))
+                                        .or_else(|| (0..synth_engine::VOICE_COUNT).find(|&s| eng.tracks[ti].voice_gates[s].value() < 0.5))
+                                        .unwrap_or_else(|| {
+                                            let s = steal_idx[ti] % synth_engine::VOICE_COUNT;
+                                            steal_idx[ti] += 1;
+                                            s
+                                        });
+                                    voice_notes[ti][slot] = Some(pitch);
+                                    eng.tracks[ti].voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
+                                    let vel = if vev.accent { 1.0f32 } else { 0.75 };
+                                    eng.tracks[ti].voice_gates[slot].set(vel);
+                                }
+                            }
+                        }
+                    } else {
+                        for ti in 0..TRACK_COUNT {
+                            let mode = GenerativeMode::from_u8(
+                                eng.generative_modes[ti].load(std::sync::atomic::Ordering::Relaxed),
+                            );
+                            let gen_ev = match mode {
+                                GenerativeMode::Euclidean =>
+                                    euclidean_states[ti].on_subdivision(&eng.euclidean_configs[ti]),
+                                GenerativeMode::ProbTable =>
+                                    prob_table_states[ti].on_subdivision(&eng.prob_table_configs[ti]),
+                                _ => continue,
+                            };
+                            if let Some(pitch) = gen_ev.note_off {
+                                for (slot, note) in voice_notes[ti].iter_mut().enumerate() {
+                                    if *note == Some(pitch) {
+                                        eng.tracks[ti].voice_gates[slot].set(0.0);
+                                        break;
+                                    }
+                                }
+                            }
+                            if let Some(pitch) = gen_ev.note_on {
+                                let slot = voice_notes[ti].iter().position(|n| n.is_none())
+                                    .unwrap_or_else(|| {
+                                        let s = steal_idx[ti] % synth_engine::VOICE_COUNT;
+                                        steal_idx[ti] += 1;
+                                        s
+                                    });
+                                voice_notes[ti][slot] = Some(pitch);
+                                eng.tracks[ti].voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
+                                eng.tracks[ti].voice_gates[slot].set(1.0);
+                            }
+                        }
                     }
                 }
             }
@@ -752,7 +904,7 @@ where
         |err| error!("synth-bevy ambient audio error: {err}"),
         None,
     )?;
-    Ok(stream)
+    Ok((stream, beat_clock_shared_for_runtime))
 }
 
 fn build_mono_stream(state: Arc<AudioState>, rx: ControlReceiver, sr: f64) -> anyhow::Result<Stream> {

@@ -60,7 +60,14 @@ pub struct TrackState {
     pub lfo_depth: Shared,
     pub lfo_shape: Arc<AtomicU8>,
     pub lfo_dest: Arc<AtomicU8>,
+    /// 0 = free (Hz), 1 = BPM-synced. When synced the callback overwrites lfo_rate.
+    pub lfo_sync: Arc<AtomicU8>,
+    /// ClockDivision::to_u8() — active when lfo_sync == 1.
+    pub lfo_division: Arc<AtomicU8>,
     pub lfo_pitch_mult: Shared,
+    /// Amplitude multiplier written by tick_lfo_sample when lfo_dest == 2.
+    /// Initialised to 1.0 (no effect). Range roughly 0.0 .. 2.0.
+    pub lfo_amp_mult: Shared,
 
     // Voice freq/gate
     pub voice_freq_targets: Vec<Shared>,
@@ -83,6 +90,14 @@ pub struct TrackState {
     // Effect send levels (0.0 = dry, 1.0 = fully sent)
     pub shimmer_send: Shared,
     pub crystal_send: Shared,
+
+    // Delay sync (per-track; wired to FX chain when a per-track delay exists)
+    /// 0 = free (use delay_time seconds), 1 = BPM-synced.
+    pub fx_delay_sync:        Arc<AtomicU8>,
+    /// ClockDivision::to_u8() — active when fx_delay_sync == 1.
+    pub fx_delay_division:    Arc<AtomicU8>,
+    /// Written by the audio callback each buffer when sync is active. Units: seconds.
+    pub fx_delay_synced_time: Shared,
 }
 
 impl TrackState {
@@ -124,7 +139,10 @@ impl TrackState {
             lfo_depth: shared(0.0),
             lfo_shape: Arc::new(AtomicU8::new(0)),
             lfo_dest: Arc::new(AtomicU8::new(1)),
+            lfo_sync: Arc::new(AtomicU8::new(0)),
+            lfo_division: Arc::new(AtomicU8::new(2)), // ClockDivision::Quarter
             lfo_pitch_mult: shared(1.0),
+            lfo_amp_mult: shared(1.0),
             voice_freq_targets: (0..VOICE_COUNT).map(|_| shared(440.0)).collect(),
             voice_freqs: (0..VOICE_COUNT).map(|_| shared(440.0)).collect(),
             voice_gates: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
@@ -139,6 +157,9 @@ impl TrackState {
             track_vol: shared(1.0),
             shimmer_send: shared(0.0),
             crystal_send: shared(0.0),
+            fx_delay_sync:        Arc::new(AtomicU8::new(0)),
+            fx_delay_division:    Arc::new(AtomicU8::new(8)), // ClockDivision::DottedEighth
+            fx_delay_synced_time: shared(0.375), // dotted 8th at 120 BPM
         }
     }
 }
@@ -258,7 +279,7 @@ fn build_track_graph(state: &TrackState, sr: f64) -> Box<dyn AudioUnit + Send> {
     let v5 = make_voice(5);
 
     let voice_mix = v0 + v1 + v2 + v3 + v4 + v5;
-    let track_out = voice_mix * var(&state.track_vol);
+    let track_out = voice_mix * var(&state.lfo_amp_mult) * var(&state.track_vol);
     let mut g: Box<dyn AudioUnit + Send> = Box::new(track_out);
     g.set_sample_rate(sr);
     g.allocate();
@@ -363,13 +384,23 @@ impl MultiTrackEngine {
 
         match lfo_dest {
             0 => {
+                // Pitch modulation
                 track.lfo_pitch_mult.set(2_f32.powf(lfo_out * 2.0 / 12.0));
                 track.effective_cutoff.set(base_cutoff);
+                track.lfo_amp_mult.set(1.0);
+            }
+            2 => {
+                // Amplitude modulation — tremolo
+                track.lfo_pitch_mult.set(1.0);
+                track.effective_cutoff.set(base_cutoff);
+                track.lfo_amp_mult.set((1.0 + lfo_out).max(0.0));
             }
             _ => {
+                // Filter (dest == 1) and any future dest
                 track.lfo_pitch_mult.set(1.0);
                 track.effective_cutoff.set(
                     (base_cutoff + lfo_out * base_cutoff * 0.5).clamp(80.0, 18000.0));
+                track.lfo_amp_mult.set(1.0);
             }
         }
     }
@@ -432,33 +463,158 @@ impl MultiTrackEngine {
 mod tests {
     use super::*;
 
+    const SR: f64 = 44100.0;
+
+    fn run_samples(engine: &mut MultiTrackEngine, n: usize) {
+        let buf = 64usize;
+        let mut done = 0;
+        while done < n {
+            let chunk = std::cmp::min(buf, n - done);
+            engine.tick_glide(chunk);
+            for s in 0..chunk {
+                for ti in 0..TRACK_COUNT {
+                    engine.tick_lfo_sample(ti, s as f32 / chunk as f32);
+                }
+                let (l, r) = engine.get_stereo();
+                assert!(l.is_finite(), "NaN/Inf on L at sample {}", done + s);
+                assert!(r.is_finite(), "NaN/Inf on R at sample {}", done + s);
+                assert!(l.abs() < 4.0,  "output clipped on L at sample {}", done + s);
+                assert!(r.abs() < 4.0,  "output clipped on R at sample {}", done + s);
+            }
+            done += chunk;
+        }
+    }
+
     #[test]
     fn multitrack_engine_output_is_finite() {
-        let mut engine = MultiTrackEngine::new(44100.0);
+        let mut engine = MultiTrackEngine::new(SR);
         engine.master_vol.set(0.8);
         engine.tracks[0].track_vol.set(1.0);
         engine.tracks[0].voice_gates[0].set(1.0);
         engine.tracks[0].voice_freq_targets[0].set(440.0);
-        engine.tick_glide(64);
-        for ti in 0..TRACK_COUNT {
-            engine.tick_lfo_sample(ti, 0.125);
-        }
-        let (l, r) = engine.get_stereo();
-        assert!(l.is_finite() && r.is_finite());
+        run_samples(&mut engine, 64);
     }
 
     #[test]
     fn multitrack_engine_repeated_output_stays_finite() {
-        let mut engine = MultiTrackEngine::new(44100.0);
+        let mut engine = MultiTrackEngine::new(SR);
         engine.master_vol.set(0.75);
         engine.tracks[0].track_vol.set(0.85);
         engine.tracks[0].voice_gates[0].set(1.0);
         engine.tracks[0].voice_freq_targets[0].set(880.0);
-        engine.tick_glide(64);
-        for i in 0..128 {
-            engine.tick_lfo_sample(0, i as f32 / 128.0);
-            let (l, r) = engine.get_stereo();
-            assert!(l.is_finite() && r.is_finite());
+        run_samples(&mut engine, 128);
+    }
+
+    /// Simulate 30 seconds of audio with realistic pad settings (long release).
+    /// Output must stay finite and below clip threshold throughout.
+    #[test]
+    fn long_run_stays_finite() {
+        let mut engine = MultiTrackEngine::new(SR);
+        engine.master_vol.set(0.6);
+        let t = &engine.tracks[0];
+        t.track_vol.set(0.5);
+        t.adsr_attack.set(8.0);
+        t.adsr_decay.set(3.0);
+        t.adsr_sustain.set(0.8);
+        t.adsr_release.set(22.0); // Echoes String Cluster release
+        t.cutoff.set(1800.0);
+        t.effective_cutoff.set(1800.0);
+        t.voice_freq_targets[0].set(261.63);
+        t.voice_gates[0].set(1.0);
+
+        let thirty_sec = (SR as usize) * 30;
+        run_samples(&mut engine, thirty_sec);
+    }
+
+    /// Steal mid-release: voice 0 is fired, then gated off while still in sustain/release.
+    /// Before the release is complete, the same slot is retriggered (simulating a steal).
+    /// Output must stay finite and bounded — no clicks or runaway.
+    #[test]
+    fn steal_mid_release_stays_bounded() {
+        let mut engine = MultiTrackEngine::new(SR);
+        engine.master_vol.set(0.7);
+        let t = &engine.tracks[0];
+        t.track_vol.set(0.6);
+        t.adsr_attack.set(0.01);
+        t.adsr_decay.set(0.1);
+        t.adsr_sustain.set(0.75);
+        t.adsr_release.set(5.0);
+        t.cutoff.set(1200.0);
+        t.effective_cutoff.set(1200.0);
+        t.voice_freq_targets[0].set(220.0);
+        t.voice_gates[0].set(1.0);
+
+        // Run to sustain (0.5 s)
+        run_samples(&mut engine, (SR * 0.5) as usize);
+
+        // Gate off → release starts
+        engine.tracks[0].voice_gates[0].set(0.0);
+        run_samples(&mut engine, (SR * 0.3) as usize); // 300ms into 5s release
+
+        // Steal: retrigger while still audibly releasing
+        engine.tracks[0].voice_freq_targets[0].set(440.0);
+        engine.tracks[0].voice_gates[0].set(0.75);
+
+        // Continue for 2 more seconds — should be clean attack from prior release level
+        run_samples(&mut engine, (SR * 2.0) as usize);
+    }
+
+    /// All 6 voice slots are filled and gated simultaneously, then note-off'd one by one.
+    /// Verifies the voice pool drains correctly and output returns toward silence.
+    #[test]
+    fn voice_pool_drain_returns_to_silence() {
+        let mut engine = MultiTrackEngine::new(SR);
+        engine.master_vol.set(0.7);
+        let freqs = [130.81, 164.81, 196.00, 220.00, 261.63, 329.63];
+        let t = &engine.tracks[0];
+        t.track_vol.set(0.5);
+        t.adsr_attack.set(0.01);
+        t.adsr_decay.set(0.05);
+        t.adsr_sustain.set(0.7);
+        t.adsr_release.set(0.5);
+        t.cutoff.set(2000.0);
+        t.effective_cutoff.set(2000.0);
+
+        for (vi, &f) in freqs.iter().enumerate() {
+            engine.tracks[0].voice_freq_targets[vi].set(f);
+            engine.tracks[0].voice_gates[vi].set(0.75);
         }
+        run_samples(&mut engine, (SR * 0.2) as usize);
+
+        // Gate all off
+        for vi in 0..VOICE_COUNT {
+            engine.tracks[0].voice_gates[vi].set(0.0);
+        }
+        // Let releases decay (release = 0.5s, run 1.5s to be sure)
+        run_samples(&mut engine, (SR * 1.5) as usize);
+
+        // Output should be near silence
+        engine.tick_glide(64);
+        for ti in 0..TRACK_COUNT {
+            engine.tick_lfo_sample(ti, 0.0);
+        }
+        let (l, _r) = engine.get_stereo();
+        assert!(l.abs() < 0.01, "expected near silence after all releases, got {l}");
+    }
+
+    /// LFO amp dest (dest=2): tremolo must modulate output level without blowing up.
+    #[test]
+    fn lfo_amp_dest_stays_bounded() {
+        let mut engine = MultiTrackEngine::new(SR);
+        engine.master_vol.set(0.7);
+        let t = &engine.tracks[0];
+        t.track_vol.set(0.5);
+        t.adsr_attack.set(0.01);
+        t.adsr_sustain.set(0.8);
+        t.adsr_release.set(0.5);
+        t.cutoff.set(1000.0);
+        t.effective_cutoff.set(1000.0);
+        t.lfo_rate.set(4.0);   // 4 Hz tremolo
+        t.lfo_depth.set(0.8);
+        t.lfo_dest.store(2, std::sync::atomic::Ordering::Relaxed);
+        t.voice_freq_targets[0].set(440.0);
+        t.voice_gates[0].set(1.0);
+
+        run_samples(&mut engine, (SR * 2.0) as usize);
     }
 }

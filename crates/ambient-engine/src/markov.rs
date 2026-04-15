@@ -991,6 +991,15 @@ pub struct MarkovEngineShared {
     /// Per-phrase register drift probability override (0.0–1.0).
     pub register_drift: Shared,
 
+    // ── Motif lock (per-voice) ───────────────────────────────────────────────
+    /// When true for voice i, the engine switches to motif-lock mode.
+    /// Setting to true triggers the Capturing phase; false returns to Off.
+    pub motif_lock:   Vec<Arc<AtomicBool>>,
+    /// Capture length in steps (4, 8, 16, or 32). Clamped to MOTIF_BUF_MAX.
+    pub motif_length: Vec<Arc<AtomicU8>>,
+    /// Read-only flag written by the audio thread: true when voice is in Replaying phase.
+    pub motif_active: Vec<Arc<AtomicBool>>,
+
     // ── Clock division ───────────────────────────────────────────────────────
     /// How many BeatClock subdivisions pass between Markov steps.
     /// 1 = every 16th note, 2 = every 8th note, 4 = every beat, 8 = every 2 beats.
@@ -1000,6 +1009,14 @@ pub struct MarkovEngineShared {
     /// Monotonically increasing counter, incremented on each phrase boundary
     /// by the audio thread. The control thread polls this to drive the Timeline.
     pub phrase_epoch: Arc<AtomicUsize>,
+    /// Incremented by the audio thread on each bar boundary.
+    pub bar_epoch: Arc<AtomicUsize>,
+    /// Incremented by the audio thread on each 16th-note subdivision.
+    pub subdivision_epoch: Arc<AtomicUsize>,
+    /// Set to true by the control thread to request an immediate timeline
+    /// section advance (hard cut, ignores remaining phrase count).
+    /// Cleared by the control thread after processing.
+    pub force_timeline_advance: Arc<AtomicBool>,
 
     // ── Harmonic sequence ────────────────────────────────────────────────────
     /// Number of active chord slots in the sequence (1–8). 1 = static key (legacy).
@@ -1040,8 +1057,14 @@ impl MarkovEngineShared {
             dissonance_resolve:   Arc::new(AtomicBool::new(true)),
             dissonance_threshold: Arc::new(AtomicU8::new(1)),
             register_drift:       shared(0.2),
+            motif_lock:   (0..n_voices).map(|_| Arc::new(AtomicBool::new(false))).collect(),
+            motif_length: (0..n_voices).map(|_| Arc::new(AtomicU8::new(16))).collect(),
+            motif_active: (0..n_voices).map(|_| Arc::new(AtomicBool::new(false))).collect(),
             clock_div:            Arc::new(AtomicU8::new(4)), // one step per beat by default
-            phrase_epoch:         Arc::new(AtomicUsize::new(0)),
+            phrase_epoch:             Arc::new(AtomicUsize::new(0)),
+            bar_epoch:                Arc::new(AtomicUsize::new(0)),
+            subdivision_epoch:        Arc::new(AtomicUsize::new(0)),
+            force_timeline_advance:   Arc::new(AtomicBool::new(false)),
             seq_len:              Arc::new(AtomicU8::new(1)),
             seq_roots:   (0..Self::SEQ_MAX).map(|_| Arc::new(AtomicU8::new(60))).collect(),
             seq_scales:  (0..Self::SEQ_MAX).map(|_| Arc::new(AtomicU8::new(0))).collect(),
@@ -1101,8 +1124,27 @@ impl MarkovEngineShared {
 }
 
 // ---------------------------------------------------------------------------
+// MotifPhase — internal state machine for motif lock
+// ---------------------------------------------------------------------------
+
+/// Phase of the per-voice motif lock state machine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MotifPhase {
+    /// Normal Markov mode — motif lock is off.
+    Off,
+    /// Observing: lock was just enabled; we run the chain normally and record
+    /// output into the buffer until `capture_steps` steps have been collected.
+    Capturing { steps_remaining: u8 },
+    /// Replaying the captured buffer in a loop.
+    Replaying,
+}
+
+// ---------------------------------------------------------------------------
 // MarkovVoice — one voice, audio thread only
 // ---------------------------------------------------------------------------
+
+/// Maximum motif buffer length (steps). A 32-step buffer at 1/16 = 2 bars.
+pub const MOTIF_BUF_MAX: usize = 32;
 
 /// Audio-thread-only state for one voice.
 pub struct MarkovVoice {
@@ -1115,6 +1157,11 @@ pub struct MarkovVoice {
     pub octave_drift: i8,
     /// Subdivisions since last note-on. Used for mood-driven gate length.
     note_age_subdivs: u32,
+    // ── Motif lock ────────────────────────────────────────────────────────────
+    motif_phase: MotifPhase,
+    motif_buf:   [RhythmicState; MOTIF_BUF_MAX],
+    motif_len:   u8,  // captured length (4–32 steps)
+    motif_pos:   u8,  // current replay cursor
 }
 
 /// Events emitted by a single voice per subdivision.
@@ -1139,6 +1186,75 @@ impl MarkovVoice {
             pending_root_snap: false,
             octave_drift: 0,
             note_age_subdivs: 0,
+            motif_phase: MotifPhase::Off,
+            motif_buf:   [RhythmicState::Rest; MOTIF_BUF_MAX],
+            motif_len:   16,
+            motif_pos:   0,
+        }
+    }
+
+    /// Sample the rhythmic state for this step, applying motif lock if active.
+    ///
+    /// Returns the `RhythmicState` to use for this step, and records it into
+    /// the motif buffer if we're in the Capturing phase.
+    fn rhythmic_step(
+        &mut self,
+        rhythmic_matrix: &RhythmicMatrix,
+        density: f32,
+        role: VoiceRole,
+        rhythmic_speed: f32,
+        shared: &MarkovEngineShared,
+        voice_idx: usize,
+    ) -> Option<RhythmicState> {
+        let lock_requested = shared.motif_lock[voice_idx].load(Ordering::Relaxed);
+        let capture_len = (shared.motif_length[voice_idx].load(Ordering::Relaxed) as usize)
+            .clamp(4, MOTIF_BUF_MAX) as u8;
+
+        // State transitions driven by lock_requested flag.
+        match self.motif_phase {
+            MotifPhase::Off => {
+                if lock_requested {
+                    // Start capturing.
+                    self.motif_len = capture_len;
+                    self.motif_pos = 0;
+                    self.motif_phase = MotifPhase::Capturing { steps_remaining: capture_len };
+                    shared.motif_active[voice_idx].store(false, Ordering::Relaxed);
+                }
+            }
+            MotifPhase::Capturing { .. } | MotifPhase::Replaying => {
+                if !lock_requested {
+                    // Lock released — return to normal Markov.
+                    self.motif_phase = MotifPhase::Off;
+                    shared.motif_active[voice_idx].store(false, Ordering::Relaxed);
+                }
+            }
+        }
+
+        match self.motif_phase {
+            MotifPhase::Off => {
+                // Normal Markov path.
+                self.rhythmic.on_subdivision(rhythmic_matrix, density, role, rhythmic_speed)
+            }
+            MotifPhase::Capturing { ref mut steps_remaining } => {
+                // Run chain normally and record the output.
+                let state = self.rhythmic.on_subdivision(rhythmic_matrix, density, role, rhythmic_speed)?;
+                let idx = (self.motif_len - *steps_remaining) as usize;
+                self.motif_buf[idx.min(MOTIF_BUF_MAX - 1)] = state;
+                *steps_remaining -= 1;
+                if *steps_remaining == 0 {
+                    // Capture complete — switch to replaying.
+                    self.motif_pos = 0;
+                    self.motif_phase = MotifPhase::Replaying;
+                    shared.motif_active[voice_idx].store(true, Ordering::Relaxed);
+                }
+                Some(state)
+            }
+            MotifPhase::Replaying => {
+                // Read from buffer, advance cursor.
+                let state = self.motif_buf[self.motif_pos as usize];
+                self.motif_pos = (self.motif_pos + 1) % self.motif_len;
+                Some(state)
+            }
         }
     }
 
@@ -1176,8 +1292,9 @@ impl MarkovVoice {
             }
         }
 
-        let Some(rhythmic_state) = self.rhythmic.on_subdivision(rhythmic_matrix, density, role, rhythmic_speed)
-        else {
+        let Some(rhythmic_state) = self.rhythmic_step(
+            rhythmic_matrix, density, role, rhythmic_speed, shared, voice_idx
+        ) else {
             return VoiceEvent::default();
         };
 
@@ -1691,6 +1808,19 @@ impl Timeline {
             let t = self.phrase_in_sect as f32 / transition as f32;
             self.prev_state.lerp(&self.target_state, t)
         }
+    }
+
+    /// Force-advance to the next section immediately, ignoring remaining phrase count.
+    /// Use for Bevy-controlled or visual-driven transitions.
+    /// Returns the new section name (empty string if already on last section and not looping).
+    pub fn force_advance(&mut self) -> String {
+        if !self.active || self.sections.is_empty() {
+            return String::new();
+        }
+        // Jump phrase_in_sect to the section boundary to trigger advance logic.
+        self.phrase_in_sect = self.sections[self.cursor].phrases.saturating_sub(1);
+        self.on_phrase_boundary();
+        self.sections.get(self.cursor).map(|s| s.name.clone()).unwrap_or_default()
     }
 
     /// Write the current interpolated state to the engine's shared atomics.

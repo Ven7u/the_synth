@@ -13,6 +13,7 @@ use synth_dsp::envelope::LiveAdsr;
 use synth_dsp::osc::{MultiWaveOsc, SyncRole};
 use synth_dsp::shimmer::{ShimmerShared, ShimmerReverb};
 use synth_dsp::crystallizer::{CrystallizerShared, Crystallizer};
+use synth_common::ClockDivision;
 
 pub const VOICE_COUNT: usize = 6;
 
@@ -56,10 +57,14 @@ pub struct AudioState {
     pub fenv_release: Shared,
 
     // LFO
-    pub lfo_rate: Shared,         // 0.1..20 Hz
+    pub lfo_rate: Shared,         // 0.1..20 Hz (free mode) or computed from division (synced)
     pub lfo_depth: Shared,        // 0.0..1.0
     pub lfo_shape: Arc<AtomicU8>, // 0=sin 1=tri 2=saw
     pub lfo_dest: Arc<AtomicU8>,  // 0=pitch 1=filter 2=amp
+    /// 0 = free (Hz), 1 = BPM-synced. When synced the callback overwrites lfo_rate each buffer.
+    pub lfo_sync: Arc<AtomicU8>,
+    /// ClockDivision::to_u8() — active when lfo_sync == 1.
+    pub lfo_division: Arc<AtomicU8>,
     // Written by callback each buffer; read by graph
     pub lfo_pitch_mult: Shared,   // frequency multiplier (1.0 = no pitch mod)
 
@@ -130,9 +135,16 @@ pub struct AudioState {
     pub fx_chorus_rate:  Shared, // 0.1..5.0 Hz
     pub fx_chorus_depth: Shared, // 0.0..0.02 (seconds of modulation)
     pub fx_chorus_mix:   Shared,
-    pub fx_delay_time:     Shared, // 0.0..1.0 s
+    pub fx_delay_time:     Shared, // 0.0..1.0 s  (free mode)
     pub fx_delay_feedback: Shared, // 0.0..0.95
     pub fx_delay_mix:      Shared,
+    /// 0 = free (use fx_delay_time), 1 = BPM-synced (use fx_delay_division).
+    pub fx_delay_sync:     Arc<AtomicU8>,
+    /// ClockDivision::to_u8() — active when fx_delay_sync == 1.
+    pub fx_delay_division: Arc<AtomicU8>,
+    /// Written by the audio callback each buffer when sync is active;
+    /// FxChain reads this instead of fx_delay_time. Units: seconds.
+    pub fx_delay_synced_time: Shared,
     pub fx_reverb_size:    Shared, // 0.0..1.0 (room size)
     pub fx_reverb_damp:    Shared, // 0.0..1.0 (high-freq damping)
     pub fx_reverb_mix:     Shared,
@@ -213,6 +225,8 @@ impl AudioState {
             lfo_depth: shared(0.0),
             lfo_shape: Arc::new(AtomicU8::new(0)), // sine
             lfo_dest: Arc::new(AtomicU8::new(1)),  // filter
+            lfo_sync: Arc::new(AtomicU8::new(0)),
+            lfo_division: Arc::new(AtomicU8::new(ClockDivision::Quarter.to_u8())),
             lfo_pitch_mult: shared(1.0),
             voice_freq_targets: (0..VOICE_COUNT).map(|_| shared(440.0)).collect(),
             adsr_attack: shared(0.01),
@@ -257,6 +271,9 @@ impl AudioState {
             fx_delay_time:     shared(0.35),
             fx_delay_feedback: shared(0.4),
             fx_delay_mix:      shared(0.0),
+            fx_delay_sync:     Arc::new(AtomicU8::new(0)),
+            fx_delay_division: Arc::new(AtomicU8::new(synth_common::ClockDivision::DottedEighth.to_u8())),
+            fx_delay_synced_time: shared(0.375), // dotted 8th at 120 BPM
             fx_reverb_size:    shared(0.6),
             fx_reverb_damp:    shared(0.5),
             fx_reverb_mix:     shared(0.0),
@@ -458,11 +475,15 @@ struct FxChain {
     cho_rate:     Shared,
     cho_depth:    Shared,
     del_feedback: Shared,
+    del_sync:        Arc<AtomicU8>, // 0=free, 1=BPM-synced
+    #[allow(dead_code)] // value is forwarded via del_synced_time_smooth
+    del_synced_time: Shared,       // written by callback; seconds
     // Smoothed params — use SmoothedParam to prevent clicks/artifacts
     od_mix:   SmoothedParam, // 5 ms — pop-free toggle
     dist_mix: SmoothedParam, // 5 ms
     cho_mix:  SmoothedParam, // 5 ms
-    del_time: SmoothedParam, // 20 ms — prevents pitch-jump noise on slider move
+    del_time: SmoothedParam, // 20 ms — prevents pitch-jump noise on slider move (free mode)
+    del_synced_time_smooth: SmoothedParam, // 20 ms — synced mode
     del_mix:  SmoothedParam, // 5 ms
     // Reverb params (plain reverb, shimmer_amt always 0)
     rev_size: SmoothedParam, // 50 ms
@@ -514,12 +535,15 @@ impl FxChain {
             dist_drive: SmoothedParam::new(state.fx_distortion_drive.clone(), DEL_TAU, sr),
             cho_rate:     state.fx_chorus_rate.clone(),
             cho_depth:    state.fx_chorus_depth.clone(),
-            del_feedback: state.fx_delay_feedback.clone(),
-            od_mix:   SmoothedParam::new(state.fx_overdrive_mix.clone(),  MIX_TAU, sr),
-            dist_mix: SmoothedParam::new(state.fx_distortion_mix.clone(), MIX_TAU, sr),
-            cho_mix:  SmoothedParam::new(state.fx_chorus_mix.clone(),     MIX_TAU, sr),
-            del_time: SmoothedParam::new(state.fx_delay_time.clone(),     DEL_TAU, sr),
-            del_mix:  SmoothedParam::new(state.fx_delay_mix.clone(),      MIX_TAU, sr),
+            del_feedback:    state.fx_delay_feedback.clone(),
+            del_sync:        Arc::clone(&state.fx_delay_sync),
+            del_synced_time: state.fx_delay_synced_time.clone(),
+            od_mix:   SmoothedParam::new(state.fx_overdrive_mix.clone(),        MIX_TAU, sr),
+            dist_mix: SmoothedParam::new(state.fx_distortion_mix.clone(),       MIX_TAU, sr),
+            cho_mix:  SmoothedParam::new(state.fx_chorus_mix.clone(),           MIX_TAU, sr),
+            del_time: SmoothedParam::new(state.fx_delay_time.clone(),           DEL_TAU, sr),
+            del_synced_time_smooth: SmoothedParam::new(state.fx_delay_synced_time.clone(), DEL_TAU, sr),
+            del_mix:  SmoothedParam::new(state.fx_delay_mix.clone(),            MIX_TAU, sr),
             rev_size:   SmoothedParam::new(state.fx_reverb_size.clone(),     REV_TAU, sr),
             rev_damp:   SmoothedParam::new(state.fx_reverb_damp.clone(),     REV_TAU, sr),
             rev_mix:    SmoothedParam::new(state.fx_reverb_mix.clone(),      MIX_TAU, sr),
@@ -564,7 +588,7 @@ impl AudioNode for FxChain {
         self.del_pos = 0;
         self.od_drive.reset(); self.od_mix.reset();
         self.dist_drive.reset(); self.dist_mix.reset();
-        self.cho_mix.reset();  self.del_time.reset(); self.del_mix.reset();
+        self.cho_mix.reset();  self.del_time.reset(); self.del_synced_time_smooth.reset(); self.del_mix.reset();
         self.rev_size.reset(); self.rev_damp.reset(); self.rev_mix.reset();
         self.shim_size.reset(); self.shim_damp.reset();
         self.shim_mix.reset(); self.shim_amt.reset();
@@ -585,6 +609,7 @@ impl AudioNode for FxChain {
         self.od_drive.set_sample_rate(self.sr); self.od_mix.set_sample_rate(self.sr);
         self.dist_drive.set_sample_rate(self.sr); self.dist_mix.set_sample_rate(self.sr);
         self.cho_mix.set_sample_rate(self.sr);  self.del_time.set_sample_rate(self.sr);
+        self.del_synced_time_smooth.set_sample_rate(self.sr);
         self.del_mix.set_sample_rate(self.sr);  self.rev_size.set_sample_rate(self.sr);
         self.rev_damp.set_sample_rate(self.sr); self.rev_mix.set_sample_rate(self.sr);
         self.shim_size.set_sample_rate(self.sr); self.shim_damp.set_sample_rate(self.sr);
@@ -664,7 +689,14 @@ impl AudioNode for FxChain {
 
         // ── Delay ──────────────────────────────────────────────────────────
         let del_mix      = self.del_mix.next();
-        let del_time     = self.del_time.next(); // smoothed — prevents pitch-jump noise
+        // Advance both smoothers every sample so they track correctly when mode switches.
+        let del_time_free   = self.del_time.next();
+        let del_time_synced = self.del_synced_time_smooth.next();
+        let del_time = if self.del_sync.load(std::sync::atomic::Ordering::Relaxed) != 0 {
+            del_time_synced
+        } else {
+            del_time_free
+        };
         let del_feedback = self.del_feedback.value() as f32;
         let del_feedback = del_feedback.clamp(0.0, 0.95);
         let del_wet = if del_mix > 0.0001 {

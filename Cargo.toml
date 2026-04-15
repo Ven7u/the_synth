@@ -1,25 +1,8 @@
 [workspace]
-members = [".", "crates/synth-dsp", "crates/synth-engine", "crates/synth-control", "crates/synth-ui", "crates/synth-common", "crates/ambient-engine", "crates/ambient-box", "crates/synth-bevy"]
 resolver = "2"
-
-[package]
-name = "the_synth"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-synth-dsp    = { path = "crates/synth-dsp" }
-synth-engine = { path = "crates/synth-engine" }
-synth-control = { path = "crates/synth-control" }
-fundsp      = { version = "0.23", features = ["files", "fft"] }
-cpal        = "0.15"
-anyhow      = "1"
-eframe      = "0.29"
-egui        = "0.29"
-midir       = "0.9"
-serde       = { version = "1", features = ["derive"] }
-serde_json  = "1"
-rfd         = "0.15"
+members = [
+    "crates/*",
+]
 
 [profile.dev]
 opt-level = 2
