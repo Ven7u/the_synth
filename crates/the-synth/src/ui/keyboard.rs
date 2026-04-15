@@ -1,5 +1,5 @@
 use crate::SynthApp;
-use crate::sequencer::SeqMode;
+use crate::sequencer::{SeqMode, ScaleType, NOTE_NAMES, DEGREE_LABELS, chord_name, chord_quality};
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, Rounding, Sense, Stroke, Vec2};
 
@@ -40,48 +40,18 @@ fn count_white_keys() -> usize {
 }
 
 impl SynthApp {
-    pub fn ui_keyboard_panel(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label("Octave:").on_hover_text("Keyboard octave range (1–7). Shifts the computer keyboard mapping up or down.");
-            if ui.button("−").on_hover_text("One octave down").clicked() && self.piano_octave > 1 {
-                self.piano_octave -= 1;
-            }
-            ui.label(format!("{}", self.piano_octave)).on_hover_text("Current keyboard octave.");
-            if ui.button("+").on_hover_text("One octave up").clicked() && self.piano_octave < 7 {
-                self.piano_octave += 1;
-            }
-            let hint = if self.seq_mode == SeqMode::ChordKb {
-                "  a s d f g h j = chords I–VII"
-            } else if self.seq_mode == SeqMode::ChordSeq && self.seq_playing {
-                "  any key = set root note (live transpose)"
-            } else {
-                "  a–l = white keys, w e t y u = sharps"
-            };
-            ui.label(egui::RichText::new(hint).weak().small());
-        });
-
+    /// Process keyboard input every frame regardless of which tab is visible.
+    /// Call this from the main update loop, not from a tab panel.
+    pub fn tick_keyboard_input(&mut self, ctx: &egui::Context) {
         const WHITE_KEYS: &[egui::Key] = &[
             egui::Key::A, egui::Key::S, egui::Key::D, egui::Key::F,
             egui::Key::G, egui::Key::H, egui::Key::J,
         ];
 
-        if self.seq_mode == SeqMode::ChordSeq && self.seq_playing {
-            let mut pressed_semitone: Option<u8> = None;
-            ui.input(|inp| {
-                for &(key, semitone) in KEY_MAP {
-                    if inp.key_pressed(key) {
-                        pressed_semitone = Some((semitone % 12) as u8);
-                    }
-                }
-            });
-            if let Some(semi) = pressed_semitone {
-                self.chord_seq.root = semi;
-            }
-            let prev: Vec<u8> = self.piano_held_midi.drain().collect();
-            for m in prev { self.push_note_off(m); }
-        } else if self.seq_mode == SeqMode::ChordKb {
+        if self.kb_chord_mode {
+            // Chord KB: A–G trigger chord degrees I–VII
             let mut current_degrees = std::collections::HashSet::<usize>::new();
-            ui.input(|inp| {
+            ctx.input(|inp| {
                 for (degree, &key) in WHITE_KEYS.iter().enumerate() {
                     if inp.key_down(key) { current_degrees.insert(degree); }
                 }
@@ -98,34 +68,165 @@ impl SynthApp {
                 for m in self.chord_kb.chord_notes(deg) { self.push_note_off(m); }
             }
             self.chord_kb.kb_held = current_degrees;
+            // Release any piano notes that were held before switching mode
             let prev_midi: Vec<u8> = self.piano_held_midi.drain().collect();
             for m in prev_midi { self.push_note_off(m); }
         } else {
+            // Piano mode — release chord notes if mode just switched
             if !self.chord_kb.kb_held.is_empty() {
                 let held: Vec<usize> = self.chord_kb.kb_held.drain().collect();
                 for deg in held {
                     for m in self.chord_kb.chord_notes(deg) { self.push_note_off(m); }
                 }
             }
-            let mut current_held = std::collections::HashSet::<u8>::new();
-            ui.input(|inp| {
-                for &(key, semitone) in KEY_MAP {
-                    if inp.key_down(key) {
-                        current_held.insert((self.piano_octave * 12 + semitone) as u8);
+            // ChordSeq live transpose: any key press sets the root note
+            if self.seq_mode == SeqMode::ChordSeq && self.seq_playing {
+                let mut pressed_semitone: Option<u8> = None;
+                ctx.input(|inp| {
+                    for &(key, semitone) in KEY_MAP {
+                        if inp.key_pressed(key) {
+                            pressed_semitone = Some((semitone % 12) as u8);
+                        }
                     }
+                });
+                if let Some(semi) = pressed_semitone {
+                    self.chord_seq.root = semi;
                 }
-            });
-            for &midi in &current_held {
-                if !self.piano_held_midi.contains(&midi) { self.push_note_on(midi); }
+                let prev: Vec<u8> = self.piano_held_midi.drain().collect();
+                for m in prev { self.push_note_off(m); }
+            } else {
+                let mut current_held = std::collections::HashSet::<u8>::new();
+                ctx.input(|inp| {
+                    for &(key, semitone) in KEY_MAP {
+                        if inp.key_down(key) {
+                            current_held.insert((self.piano_octave * 12 + semitone) as u8);
+                        }
+                    }
+                });
+                for &midi in &current_held {
+                    if !self.piano_held_midi.contains(&midi) { self.push_note_on(midi); }
+                }
+                let released: Vec<u8> = self.piano_held_midi.iter()
+                    .filter(|&&m| !current_held.contains(&m))
+                    .copied().collect();
+                for midi in released { self.push_note_off(midi); }
+                self.piano_held_midi = current_held;
             }
-            let released: Vec<u8> = self.piano_held_midi.iter()
-                .filter(|&&m| !current_held.contains(&m))
-                .copied().collect();
-            for midi in released { self.push_note_off(midi); }
-            self.piano_held_midi = current_held;
         }
+    }
 
-        self.draw_piano_88(ui);
+    /// Render the persistent bottom keyboard strip.
+    pub fn ui_keyboard_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            // Mode toggle: Piano / Chord KB
+            let piano_label = egui::RichText::new("Piano")
+                .color(if !self.kb_chord_mode { self.theme.c(&self.theme.accent) } else { Color32::GRAY })
+                .strong();
+            if ui.button(piano_label).on_hover_text("Standard piano — play individual notes.").clicked()
+                && self.kb_chord_mode
+            {
+                self.kb_chord_mode = false;
+            }
+            let chord_label = egui::RichText::new("Chord KB")
+                .color(if self.kb_chord_mode { self.theme.c(&self.theme.accent) } else { Color32::GRAY })
+                .strong();
+            if ui.button(chord_label).on_hover_text("Chord Keyboard — A–G trigger diatonic chords I–VII.").clicked()
+                && !self.kb_chord_mode
+            {
+                self.kb_chord_mode = true;
+            }
+
+            ui.separator();
+
+            if self.kb_chord_mode {
+                // Key + scale selectors for chord KB
+                ui.label("Key:").on_hover_text("Root note for the chord scale.");
+                egui::ComboBox::from_id_salt("chord_kb_root")
+                    .selected_text(NOTE_NAMES[self.chord_kb.root as usize])
+                    .show_ui(ui, |ui| {
+                        for (i, name) in NOTE_NAMES.iter().enumerate() {
+                            ui.selectable_value(&mut self.chord_kb.root, i as u8, *name);
+                        }
+                    });
+                ui.label("Scale:");
+                for &sc in &[ScaleType::Major, ScaleType::Minor] {
+                    let active = self.chord_kb.scale == sc;
+                    let label = egui::RichText::new(sc.label())
+                        .color(if active { self.theme.c(&self.theme.accent_dim) } else { Color32::GRAY });
+                    if ui.button(label).clicked() { self.chord_kb.scale = sc; }
+                }
+                ui.label(egui::RichText::new("  a s d f g h j = I–VII").weak().small());
+            } else {
+                // Octave controls for piano
+                ui.label("Oct:").on_hover_text("Keyboard octave (1–7).");
+                if ui.button("−").on_hover_text("One octave down").clicked() && self.piano_octave > 1 {
+                    self.piano_octave -= 1;
+                }
+                ui.label(format!("{}", self.piano_octave));
+                if ui.button("+").on_hover_text("One octave up").clicked() && self.piano_octave < 7 {
+                    self.piano_octave += 1;
+                }
+                let hint = if self.seq_mode == SeqMode::ChordSeq && self.seq_playing {
+                    "  any key = set root note (live transpose)"
+                } else {
+                    "  a–l = white keys,  w e t y u = sharps"
+                };
+                ui.label(egui::RichText::new(hint).weak().small());
+            }
+        });
+
+        if self.kb_chord_mode {
+            self.draw_chord_pads(ui);
+        } else {
+            self.draw_piano_88(ui);
+        }
+    }
+
+    fn draw_chord_pads(&mut self, ui: &mut egui::Ui) {
+        let spacing = ui.spacing().item_spacing.x;
+        let btn_w = ((ui.available_width() - spacing * 6.0) / 7.0).max(40.0);
+        let btn_h = 64.0;
+
+        ui.horizontal(|ui| {
+            for degree in 0..7 {
+                let (resp, painter) = ui.allocate_painter(
+                    Vec2::new(btn_w, btn_h), Sense::click_and_drag());
+                let r = resp.rect;
+
+                let is_held_mouse = self.chord_kb.held_degree == Some(degree);
+                let is_held_kb    = self.chord_kb.kb_held.contains(&degree);
+                let is_held = is_held_mouse || is_held_kb;
+                let quality = chord_quality(self.chord_kb.scale, degree);
+                let bg = if is_held { self.theme.c(&self.theme.seq_current) }
+                    else if quality == "m" { self.theme.c(&self.theme.seq_kb_minor) }
+                    else if quality == "°" { self.theme.c(&self.theme.seq_kb_dim) }
+                    else { self.theme.c(&self.theme.seq_kb_major) };
+                painter.rect_filled(r, Rounding::same(8.0), bg);
+                painter.rect_stroke(r, Rounding::same(8.0),
+                    Stroke::new(if is_held { 2.0 } else { 1.0 },
+                    if is_held { Color32::WHITE } else { Color32::from_gray(80) }));
+
+                let cname = chord_name(self.chord_kb.root, self.chord_kb.scale, degree);
+                painter.text(egui::pos2(r.center().x, r.center().y - 8.0),
+                    egui::Align2::CENTER_CENTER, &cname,
+                    egui::FontId::proportional(13.0), Color32::WHITE);
+                painter.text(egui::pos2(r.center().x, r.center().y + 10.0),
+                    egui::Align2::CENTER_CENTER, DEGREE_LABELS[degree],
+                    egui::FontId::monospace(9.0), Color32::from_gray(180));
+
+                if resp.is_pointer_button_down_on() && !is_held_mouse {
+                    if let Some(prev) = self.chord_kb.held_degree {
+                        for m in self.chord_kb.chord_notes(prev) { self.push_note_off(m); }
+                    }
+                    self.chord_kb.held_degree = Some(degree);
+                    for m in self.chord_kb.chord_notes(degree) { self.push_note_on(m); }
+                }
+                if !resp.is_pointer_button_down_on() && is_held_mouse {
+                    self.chord_kb.held_degree = None;
+                    for m in self.chord_kb.chord_notes(degree) { self.push_note_off(m); }
+                }
+            }
+        });
     }
 
     /// Draw a full 88-key piano (A0–C8) with the active keyboard range highlighted.

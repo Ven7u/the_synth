@@ -127,17 +127,17 @@ impl SynthApp {
                         self.state.fx_delay_mix.set_value(if *on { self.fx_delay_mix } else { 0.0 });
                     }
 
-                    ui.horizontal(|ui| {
-                        let sync_label = egui::RichText::new(if self.fx_delay_sync { "BPM sync: ON" } else { "BPM sync: OFF" })
-                            .small()
-                            .color(if self.fx_delay_sync { col_dly } else { Color32::GRAY });
-                        if ui.button(sync_label).on_hover_text("Sync delay time to the sequencer BPM.").clicked() {
+                    ui.add_enabled_ui(!self.global_sync, |ui| {
+                        let delay_sync_on = self.delay_sync_active();
+                        let sync_label = egui::RichText::new("BPM Sync")
+                            .color(if delay_sync_on { col_dly } else { Color32::GRAY });
+                        if ui.button(sync_label).on_hover_text("Sync delay time to the Global BPM.").clicked() {
                             self.fx_delay_sync = !self.fx_delay_sync;
                         }
                     });
 
-                    if self.fx_delay_sync {
-                        let bpm = self.seq_bpm as f32;
+                    if self.delay_sync_active() {
+                        let bpm = self.global_bpm as f32;
                         let beat_sec = 60.0 / bpm;
                         ui.horizontal_wrapped(|ui| {
                             for (i, (name, _)) in DELAY_DIVISIONS.iter().enumerate() {
@@ -151,8 +151,8 @@ impl SynthApp {
                         });
                         let synced_time = (beat_sec * DELAY_DIVISIONS[self.fx_delay_division].1).clamp(0.01, 1.0);
                         self.fx_delay_time = synced_time;
-                        ui.label(egui::RichText::new(format!("{:.3} s  @{}BPM", synced_time, self.seq_bpm)).small().color(Color32::DARK_GRAY))
-                            .on_hover_text("Current delay time computed from BPM and selected note division.");
+                        ui.label(egui::RichText::new(format!("{:.3} s  @{}BPM", synced_time, self.global_bpm)).small().color(Color32::DARK_GRAY))
+                            .on_hover_text("Current delay time computed from Global BPM and selected note division.");
                     } else {
                         ui.add(egui::Slider::new(&mut self.fx_delay_time, 0.01_f32..=1.0)
                             .text("Time").suffix(" s").clamp_to_range(true))

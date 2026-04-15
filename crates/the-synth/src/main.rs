@@ -129,8 +129,10 @@ pub(crate) struct SynthApp {
     pub(crate) lfo_enabled: bool,
     pub(crate) lfo_rate: f32,
     pub(crate) lfo_depth: f32,
-    pub(crate) lfo_shape: usize, // 0=sin 1=tri 2=saw
-    pub(crate) lfo_dest: usize,  // 0=pitch 1=filter 2=amp
+    pub(crate) lfo_shape: usize,    // 0=sin 1=tri 2=saw
+    pub(crate) lfo_dest: usize,     // 0=pitch 1=filter 2=amp
+    pub(crate) lfo_sync: bool,      // per-component sync toggle
+    pub(crate) lfo_division: usize, // index into LFO_SYNC_DIVISIONS
 
     pub(crate) filter_enabled: bool,
 
@@ -151,6 +153,7 @@ pub(crate) struct SynthApp {
     pub(crate) piano_octave: i32,
     pub(crate) piano_held_midi: std::collections::HashSet<u8>,
     pub(crate) piano_mouse_midi: Option<u8>,
+    pub(crate) kb_chord_mode: bool,  // true = chord pads, false = standard piano
 
     // Peak meter
     pub(crate) peak_display: f32,
@@ -161,10 +164,16 @@ pub(crate) struct SynthApp {
     pub(crate) limiter_enabled: bool,
     pub(crate) limiter_threshold: f32,
 
+    // Global tempo / sync
+    pub(crate) global_bpm: u32,     // master tempo — source of truth when components are synced
+    pub(crate) global_sync: bool,   // when true, all components are forced to BPM sync
+    pub(crate) arp_sync: bool,      // per-component sync toggle for arpeggiator
+    pub(crate) walker_sync: bool,   // per-component sync toggle for scale walker
+    pub(crate) seq_sync: bool,      // per-component sync toggle for sequencer
+
     // Sequencer — shared timing
     pub(crate) seq_playing: bool,
-    pub(crate) seq_bpm: u32,
-    pub(crate) seq_clock_sync: bool,
+    pub(crate) seq_bpm: u32,        // sequencer's own BPM (follows global_bpm when seq_sync is active)
     pub(crate) seq_bar_quantize_start: bool,
     pub(crate) arp_restart_pending: bool,
     pub(crate) walker_restart_pending: bool,
@@ -294,6 +303,8 @@ impl SynthApp {
             lfo_depth: 0.0,
             lfo_shape: 0,
             lfo_dest: 1,
+            lfo_sync: false,
+            lfo_division: 4, // default: 1/4 note
             filter_enabled: true,
             filter_cutoff: 3000.0,
             filter_q: 0.3,
@@ -303,6 +314,7 @@ impl SynthApp {
             glide_time: 0.0,
             master_vol: 0.8,
             piano_octave: 4,
+            kb_chord_mode: false,
             piano_held_midi: std::collections::HashSet::new(),
             piano_mouse_midi: None,
             peak_display: 0.0,
@@ -310,9 +322,13 @@ impl SynthApp {
             peak_hold_timer: 0.0,
             limiter_enabled: true,
             limiter_threshold: 0.95,
+            global_bpm: 120,
+            global_sync: false,
+            arp_sync: true,
+            walker_sync: true,
+            seq_sync: true,
             seq_playing: false,
             seq_bpm: 120,
-            seq_clock_sync: true,
             seq_bar_quantize_start: false,
             arp_restart_pending: false,
             walker_restart_pending: false,
@@ -406,8 +422,28 @@ impl SynthApp {
         let _ = self.control.try_send(ControlEvent::WalkerRestart { track: 0 });
     }
 
+    pub(crate) fn arp_sync_active(&self) -> bool {
+        self.global_sync || self.arp_sync
+    }
+
+    pub(crate) fn walker_sync_active(&self) -> bool {
+        self.global_sync || self.walker_sync
+    }
+
+    pub(crate) fn seq_sync_active(&self) -> bool {
+        self.global_sync || self.seq_sync
+    }
+
+    pub(crate) fn delay_sync_active(&self) -> bool {
+        self.global_sync || self.fx_delay_sync
+    }
+
+    pub(crate) fn lfo_sync_active(&self) -> bool {
+        self.global_sync || self.lfo_sync
+    }
+
     pub(crate) fn schedule_or_restart_arp(&mut self) {
-        if self.seq_clock_sync && self.seq_bar_quantize_start && self.seq_playing {
+        if self.arp_sync_active() && self.seq_bar_quantize_start && self.seq_playing {
             self.arp_restart_pending = true;
         } else {
             let _ = self.control.try_send(ControlEvent::ArpRestart { track: 0 });
@@ -415,7 +451,7 @@ impl SynthApp {
     }
 
     pub(crate) fn schedule_or_restart_walker(&mut self) {
-        if self.seq_clock_sync && self.seq_bar_quantize_start && self.seq_playing {
+        if self.walker_sync_active() && self.seq_bar_quantize_start && self.seq_playing {
             self.walker_restart_pending = true;
         } else {
             let _ = self.control.try_send(ControlEvent::WalkerRestart { track: 0 });
@@ -423,17 +459,24 @@ impl SynthApp {
     }
 
     pub(crate) fn apply_clock_sync(&mut self) {
-        if !self.seq_clock_sync {
-            return;
+        let global = self.global_bpm as f32;
+        if self.seq_sync_active() && self.seq_bpm != self.global_bpm {
+            self.seq_bpm = self.global_bpm;
         }
-        let bpm = self.seq_bpm as f32;
-        if (self.arp_bpm - bpm).abs() > f32::EPSILON {
-            self.arp_bpm = bpm;
-            self.state.arp.bpm.set(bpm);
+        if self.arp_sync_active() && (self.arp_bpm - global).abs() > f32::EPSILON {
+            self.arp_bpm = global;
+            self.state.arp.bpm.set(global);
         }
-        if (self.walker_bpm - bpm).abs() > f32::EPSILON {
-            self.walker_bpm = bpm;
-            self.state.walker.bpm.set(bpm);
+        if self.walker_sync_active() && (self.walker_bpm - global).abs() > f32::EPSILON {
+            self.walker_bpm = global;
+            self.state.walker.bpm.set(global);
+        }
+        if self.lfo_sync_active() {
+            let rate = ui::modulation::lfo_synced_rate(global, self.lfo_division);
+            if (self.lfo_rate - rate).abs() > f32::EPSILON {
+                self.lfo_rate = rate;
+                self.state.lfo_rate.set(rate);
+            }
         }
     }
 
@@ -578,6 +621,7 @@ impl eframe::App for SynthApp {
         self.tick_midi();
         self.apply_clock_sync();
         self.tick_sequencer(ctx);
+        self.tick_keyboard_input(ctx);
 
         self.ui_patch_browser(ctx);
 
@@ -668,6 +712,63 @@ impl eframe::App for SynthApp {
                     ui.add(egui::TextEdit::singleline(&mut self.patch_name).desired_width(100.0));
                 });
             });
+        });
+
+        // --- Global transport bar ---
+        egui::TopBottomPanel::top("transport_bar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("BPM:").strong())
+                    .on_hover_text("Master tempo — all synced components follow this.");
+                if ui.add(egui::Slider::new(&mut self.global_bpm, 40..=600).clamp_to_range(true))
+                    .on_hover_text("Global tempo (40–600 BPM).")
+                    .changed()
+                {
+                    self.apply_clock_sync();
+                }
+
+                ui.separator();
+
+                let global_label = egui::RichText::new("Global Sync").strong()
+                    .color(if self.global_sync { self.theme.c(&self.theme.accent) } else { egui::Color32::GRAY });
+                if ui.button(global_label)
+                    .on_hover_text("Force all components (Seq, Arp, Walker, Delay) to follow the Global BPM.")
+                    .clicked()
+                {
+                    self.global_sync = !self.global_sync;
+                    if self.global_sync {
+                        self.apply_clock_sync();
+                        self.sync_transport_now();
+                    } else {
+                        self.arp_restart_pending = false;
+                        self.walker_restart_pending = false;
+                    }
+                }
+
+                let any_sync = self.global_sync || self.seq_sync || self.arp_sync || self.walker_sync;
+                ui.add_enabled_ui(any_sync, |ui| {
+                    let bq_label = egui::RichText::new("Bar Quantize")
+                        .color(if self.seq_bar_quantize_start { self.theme.c(&self.theme.accent_dim) } else { egui::Color32::GRAY });
+                    if ui.button(bq_label)
+                        .on_hover_text("Arp/Walker restart on the next bar boundary instead of immediately.")
+                        .clicked()
+                    {
+                        self.seq_bar_quantize_start = !self.seq_bar_quantize_start;
+                    }
+                });
+
+                if ui.button("SYNC NOW")
+                    .on_hover_text("Reset phases for sequencer, arpeggiator, and walker.")
+                    .clicked()
+                {
+                    self.apply_clock_sync();
+                    self.sync_transport_now();
+                }
+            });
+        });
+
+        // --- Persistent keyboard strip ---
+        egui::TopBottomPanel::bottom("keyboard_strip").show(ctx, |ui| {
+            self.ui_keyboard_panel(ui);
         });
 
         // --- Docked panels ---

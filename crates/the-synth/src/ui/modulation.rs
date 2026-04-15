@@ -3,6 +3,25 @@ use eframe::egui;
 use egui::{Color32, Pos2, Stroke};
 use std::sync::atomic::Ordering;
 
+/// (label, beats_per_cycle) — beats relative to a quarter note.
+/// rate_hz = bpm / 60.0 / beats_per_cycle
+pub const LFO_SYNC_DIVISIONS: &[(&str, f32)] = &[
+    ("4",    16.0),  // 4 bars
+    ("2",     8.0),  // 2 bars
+    ("1",     4.0),  // 1 bar
+    ("1/2",   2.0),
+    ("1/4",   1.0),
+    ("1/8",   0.5),
+    ("1/16",  0.25),
+    ("1/4T",  2.0 / 3.0),  // quarter triplet
+    ("1/8T",  1.0 / 3.0),  // eighth triplet
+];
+
+pub fn lfo_synced_rate(bpm: f32, division: usize) -> f32 {
+    let beats = LFO_SYNC_DIVISIONS[division.min(LFO_SYNC_DIVISIONS.len() - 1)].1;
+    (bpm / 60.0 / beats).clamp(0.01, 20.0)
+}
+
 impl SynthApp {
     pub fn ui_lfo_panel(&mut self, ui: &mut egui::Ui) {
         // Header toggle
@@ -21,11 +40,15 @@ impl SynthApp {
 
         ui.add_enabled_ui(self.lfo_enabled, |ui| {
             ui.horizontal(|ui| {
-                if super::widgets::knob(ui, &mut self.lfo_rate, 0.1..=20.0, "Rate", &self.theme)
-                    .on_hover_text("LFO speed in Hz. 0.1 = very slow. 5 = fast vibrato. 20 = audio range.")
-                    .changed()
-                {
-                    self.state.lfo_rate.set(self.lfo_rate);
+                // Rate knob — hidden when synced, shown when free
+                let sync_on = self.lfo_sync_active();
+                if !sync_on {
+                    if super::widgets::knob(ui, &mut self.lfo_rate, 0.1..=20.0, "Rate", &self.theme)
+                        .on_hover_text("LFO speed in Hz. 0.1 = very slow. 5 = fast vibrato. 20 = audio range.")
+                        .changed()
+                    {
+                        self.state.lfo_rate.set(self.lfo_rate);
+                    }
                 }
                 if super::widgets::knob(ui, &mut self.lfo_depth, 0.0..=1.0, "Depth", &self.theme)
                     .on_hover_text("How strongly the LFO modulates its destination. 0 = off, 1 = full.")
@@ -33,7 +56,44 @@ impl SynthApp {
                 {
                     self.state.lfo_depth.set(self.lfo_depth);
                 }
+
+                // Sync toggle button
+                ui.add_enabled_ui(!self.global_sync, |ui| {
+                    let sync_label = egui::RichText::new("Sync")
+                        .color(if sync_on { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
+                    if ui.button(sync_label)
+                        .on_hover_text("Lock LFO rate to a note division of the Global BPM.")
+                        .clicked()
+                    {
+                        self.lfo_sync = !self.lfo_sync;
+                        if self.lfo_sync_active() {
+                            let rate = lfo_synced_rate(self.global_bpm as f32, self.lfo_division);
+                            self.lfo_rate = rate;
+                            self.state.lfo_rate.set(rate);
+                        }
+                    }
+                });
             });
+
+            // Division selector — shown only when synced
+            if self.lfo_sync_active() {
+                ui.horizontal_wrapped(|ui| {
+                    for (i, &(label, _)) in LFO_SYNC_DIVISIONS.iter().enumerate() {
+                        let active = self.lfo_division == i;
+                        let btn_label = egui::RichText::new(label).small()
+                            .color(if active { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
+                        let rate = lfo_synced_rate(self.global_bpm as f32, i);
+                        if ui.button(btn_label)
+                            .on_hover_text(format!("{} → {:.3} Hz @ {} BPM", label, rate, self.global_bpm))
+                            .clicked()
+                        {
+                            self.lfo_division = i;
+                            self.lfo_rate = rate;
+                            self.state.lfo_rate.set(rate);
+                        }
+                    }
+                });
+            }
             ui.horizontal(|ui| {
                 ui.label("Shape:").on_hover_text("Waveform of the LFO. Affects the character of the modulation.");
                 let shape_tips = [
@@ -113,6 +173,72 @@ impl SynthApp {
                     self.state.filter_env_amount.set(self.filter_env_amount);
                 }
             });
+
+            // XY pad — X: cutoff, Y: resonance (drag up = more resonance)
+            let pad_size = egui::Vec2::new(ui.available_width(), 120.0);
+            let (rect, response) = ui.allocate_exact_size(pad_size, egui::Sense::click_and_drag());
+
+            if response.dragged() {
+                let delta = response.drag_delta();
+                let dx = delta.x / rect.width();
+                let dy = -delta.y / rect.height(); // invert: up = increase
+                self.filter_cutoff = (self.filter_cutoff + dx * (18000.0 - 80.0)).clamp(80.0, 18000.0);
+                self.filter_q = (self.filter_q + dy * 0.95).clamp(0.0, 0.95);
+                self.state.cutoff.set(self.filter_cutoff);
+                self.state.resonance.set(self.filter_q);
+            }
+            if response.double_clicked() {
+                self.filter_cutoff = 18000.0;
+                self.filter_q = 0.0;
+                self.state.cutoff.set(self.filter_cutoff);
+                self.state.resonance.set(self.filter_q);
+            }
+
+            if ui.is_rect_visible(rect) {
+                let painter = ui.painter_at(rect);
+                let accent = self.theme.c(&self.theme.accent);
+                let bg = Color32::from_rgba_premultiplied(
+                    accent.r() / 5, accent.g() / 5, accent.b() / 5, 120,
+                );
+                painter.rect_filled(rect, egui::Rounding::same(6.0), bg);
+                painter.rect_stroke(rect, egui::Rounding::same(6.0),
+                    egui::Stroke::new(1.0, if response.hovered() || response.dragged() {
+                        accent
+                    } else {
+                        Color32::from_gray(60)
+                    }));
+
+                let tx = (self.filter_cutoff - 80.0) / (18000.0 - 80.0);
+                let ty = 1.0 - self.filter_q / 0.95; // invert for screen coords
+                let px = rect.left() + tx * rect.width();
+                let py = rect.top() + ty * rect.height();
+
+                // Crosshair lines
+                let line_color = Color32::from_rgba_premultiplied(
+                    accent.r(), accent.g(), accent.b(), 40,
+                );
+                painter.line_segment(
+                    [egui::pos2(px, rect.top()), egui::pos2(px, rect.bottom())],
+                    egui::Stroke::new(1.0, line_color),
+                );
+                painter.line_segment(
+                    [egui::pos2(rect.left(), py), egui::pos2(rect.right(), py)],
+                    egui::Stroke::new(1.0, line_color),
+                );
+
+                // Handle dot
+                painter.circle_filled(egui::pos2(px, py), 6.0, accent);
+                painter.circle_stroke(egui::pos2(px, py), 6.0,
+                    egui::Stroke::new(1.0, Color32::WHITE));
+
+                // Axis labels
+                let label_color = Color32::from_gray(110);
+                let font = egui::FontId::proportional(9.0);
+                painter.text(egui::pos2(rect.left() + 4.0, rect.bottom() - 3.0),
+                    egui::Align2::LEFT_BOTTOM, "cut →", font.clone(), label_color);
+                painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 3.0),
+                    egui::Align2::LEFT_TOP, "res ↑", font, label_color);
+            }
         });
     }
 

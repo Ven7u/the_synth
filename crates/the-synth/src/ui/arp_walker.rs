@@ -15,7 +15,7 @@ impl SynthApp {
             if ui.button(label).clicked() {
                 let new_enabled = !enabled;
                 self.state.arp.enabled.store(new_enabled, Ordering::Relaxed);
-                if new_enabled && self.seq_clock_sync {
+                if new_enabled && self.arp_sync_active() {
                     self.apply_clock_sync();
                     self.schedule_or_restart_arp();
                 }
@@ -41,17 +41,32 @@ impl SynthApp {
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal(|ui| {
                 ui.label("BPM:");
-                if self.seq_clock_sync {
+                let sync_active = self.arp_sync_active();
+                if sync_active {
                     self.arp_bpm = self.seq_bpm as f32;
                 }
-                ui.add_enabled_ui(!self.seq_clock_sync, |ui| {
+                ui.add_enabled_ui(!sync_active, |ui| {
                     if ui.add(egui::Slider::new(&mut self.arp_bpm, 20.0..=300.0)).changed() {
                         self.state.arp.bpm.set(self.arp_bpm);
                     }
                 });
-                if self.seq_clock_sync {
-                    ui.label(egui::RichText::new("SYNC").small().color(Color32::GRAY));
-                }
+                // Per-component sync toggle (disabled when global sync is on)
+                ui.add_enabled_ui(!self.global_sync, |ui| {
+                    let sync_label = egui::RichText::new("Sync")
+                        .color(if self.arp_sync_active() { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
+                    if ui.button(sync_label)
+                        .on_hover_text("Lock Arp BPM to the Global BPM.")
+                        .clicked()
+                    {
+                        self.arp_sync = !self.arp_sync;
+                        if self.arp_sync {
+                            self.apply_clock_sync();
+                            self.schedule_or_restart_arp();
+                        } else {
+                            self.arp_restart_pending = false;
+                        }
+                    }
+                });
             });
             ui.horizontal(|ui| {
                 ui.label("Div:");
@@ -97,7 +112,7 @@ impl SynthApp {
             if ui.button(label).on_hover_text("Scale Walker — autonomous random walk within a scale. Generates notes independently of keyboard input.").clicked() {
                 let new_enabled = !enabled;
                 self.state.walker.enabled.store(new_enabled, Ordering::Relaxed);
-                if new_enabled && self.seq_clock_sync {
+                if new_enabled && self.walker_sync_active() {
                     self.apply_clock_sync();
                     self.schedule_or_restart_walker();
                 }
@@ -110,17 +125,32 @@ impl SynthApp {
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal(|ui| {
                 ui.label("BPM:");
-                if self.seq_clock_sync {
+                let sync_active = self.walker_sync_active();
+                if sync_active {
                     self.walker_bpm = self.seq_bpm as f32;
                 }
-                ui.add_enabled_ui(!self.seq_clock_sync, |ui| {
+                ui.add_enabled_ui(!sync_active, |ui| {
                     if ui.add(egui::Slider::new(&mut self.walker_bpm, 20.0..=300.0)).changed() {
                         self.state.walker.bpm.set(self.walker_bpm);
                     }
                 });
-                if self.seq_clock_sync {
-                    ui.label(egui::RichText::new("SYNC").small().color(Color32::GRAY));
-                }
+                // Per-component sync toggle (disabled when global sync is on)
+                ui.add_enabled_ui(!self.global_sync, |ui| {
+                    let sync_label = egui::RichText::new("Sync")
+                        .color(if self.walker_sync_active() { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
+                    if ui.button(sync_label)
+                        .on_hover_text("Lock Walker BPM to the Global BPM.")
+                        .clicked()
+                    {
+                        self.walker_sync = !self.walker_sync;
+                        if self.walker_sync {
+                            self.apply_clock_sync();
+                            self.schedule_or_restart_walker();
+                        } else {
+                            self.walker_restart_pending = false;
+                        }
+                    }
+                });
             });
             ui.horizontal(|ui| {
                 ui.label("Div:");

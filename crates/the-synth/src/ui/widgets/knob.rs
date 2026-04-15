@@ -19,10 +19,12 @@ pub fn knob(
     theme: &SynthTheme,
 ) -> Response {
     let desired_size = Vec2::new(44.0, 56.0);
-    let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click_and_drag());
+    let (rect, mut response) = ui.allocate_exact_size(desired_size, Sense::click_and_drag());
 
     let knob_radius = 16.0;
     let center = Pos2::new(rect.center().x, rect.top() + knob_radius + 2.0);
+
+    let old_value = *value;
 
     // Handle drag input.
     if response.dragged() {
@@ -35,6 +37,10 @@ pub fn knob(
     // Double-click to reset to midpoint.
     if response.double_clicked() {
         *value = (*range.start() + *range.end()) * 0.5;
+    }
+
+    if (*value - old_value).abs() > f32::EPSILON {
+        response.mark_changed();
     }
 
     if ui.is_rect_visible(rect) {

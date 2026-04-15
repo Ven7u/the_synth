@@ -19,7 +19,7 @@ impl SynthApp {
         // --- Shared toolbar ---
         ui.horizontal(|ui| {
             // Mode tabs
-            for &mode in &[SeqMode::NoteSeq, SeqMode::ChordSeq, SeqMode::ChordKb] {
+            for &mode in &[SeqMode::NoteSeq, SeqMode::ChordSeq] {
                 let active = self.seq_mode == mode;
                 let label = egui::RichText::new(mode.label())
                     .color(if active { self.theme.c(&self.theme.accent) } else { Color32::GRAY })
@@ -27,7 +27,7 @@ impl SynthApp {
                 let tip = match mode {
                     SeqMode::NoteSeq  => "Note Sequencer — step-sequence individual notes.",
                     SeqMode::ChordSeq => "Chord Sequencer — step-sequence chords from a diatonic scale.",
-                    SeqMode::ChordKb  => "Chord Keyboard — play chords live via keyboard keys (A–J = degrees I–VII).",
+                    SeqMode::ChordKb  => unreachable!(),
                 };
                 if ui.button(label).on_hover_text(tip).clicked() && !active {
                     let prev: Vec<u8> = self.seq_prev_notes.drain(..).collect();
@@ -40,8 +40,8 @@ impl SynthApp {
 
             ui.separator();
 
-            // Play/Stop — only for sequencer modes
-            if self.seq_mode != SeqMode::ChordKb {
+            // Play/Stop
+            {
                 let btn = if self.seq_playing { "⏹ Stop" } else { "▶ Play" };
                 if ui.button(btn).on_hover_text("Start or stop the sequencer.").clicked() {
                     self.seq_playing = !self.seq_playing;
@@ -62,12 +62,31 @@ impl SynthApp {
                         for m in prev { self.push_note_off(m); }
                     }
                 }
-                ui.label("BPM:").on_hover_text("Sequencer tempo in beats per minute.");
-                ui.add(egui::Slider::new(&mut self.seq_bpm, 40..=600))
-                    .on_hover_text("Sequencer tempo (40–600 BPM).");
-                if self.seq_clock_sync {
-                    self.apply_clock_sync();
+                // Sequencer BPM — locked to global when seq_sync is active
+                let seq_sync_on = self.seq_sync_active();
+                if seq_sync_on {
+                    self.seq_bpm = self.global_bpm;
                 }
+                ui.label("BPM:").on_hover_text("Sequencer tempo. Follows Global BPM when Sync is enabled.");
+                ui.add_enabled_ui(!seq_sync_on, |ui| {
+                    if ui.add(egui::Slider::new(&mut self.seq_bpm, 40..=600))
+                        .on_hover_text("Sequencer tempo (40–600 BPM).")
+                        .changed()
+                    {
+                        // seq has its own BPM while unsynced — no clock sync propagation needed
+                    }
+                });
+                ui.add_enabled_ui(!self.global_sync, |ui| {
+                    let sync_label = egui::RichText::new("Sync")
+                        .color(if self.seq_sync_active() { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
+                    if ui.button(sync_label)
+                        .on_hover_text("Lock sequencer BPM to the Global BPM.")
+                        .clicked()
+                    {
+                        self.seq_sync = !self.seq_sync;
+                        if self.seq_sync { self.apply_clock_sync(); }
+                    }
+                });
 
                 // Step length selector
                 let cur_length = match self.seq_mode {
@@ -117,55 +136,26 @@ impl SynthApp {
                 }
             }
 
-            ui.separator();
-            if ui.checkbox(&mut self.seq_clock_sync, "Clock Sync")
-                .on_hover_text("Lock ARP + Walker BPM to sequencer BPM and align phases.")
-                .changed() && self.seq_clock_sync
-            {
-                self.apply_clock_sync();
-                self.sync_transport_now();
-            }
-            if !self.seq_clock_sync {
-                self.arp_restart_pending = false;
-                self.walker_restart_pending = false;
-            }
-            ui.add_enabled_ui(self.seq_clock_sync, |ui| {
-                ui.checkbox(&mut self.seq_bar_quantize_start, "Bar Quantize")
-                    .on_hover_text("When enabled, ARP/WALKER restart on the next bar instead of immediately.");
-            });
-            if ui.button("SYNC NOW")
-                .on_hover_text("Restart sequencer, arpeggiator, and walker phase together.")
-                .clicked()
-            {
-                self.apply_clock_sync();
-                self.sync_transport_now();
-            }
-
-            // Chord key/scale selector (ChordSeq and ChordKb)
-            if self.seq_mode == SeqMode::ChordSeq || self.seq_mode == SeqMode::ChordKb {
+            // Chord key/scale selector (ChordSeq only)
+            if self.seq_mode == SeqMode::ChordSeq {
                 ui.separator();
-                let (root, scale) = match self.seq_mode {
-                    SeqMode::ChordSeq => (&mut self.chord_seq.root, &mut self.chord_seq.scale),
-                    SeqMode::ChordKb  => (&mut self.chord_kb.root,  &mut self.chord_kb.scale),
-                    _ => unreachable!(),
-                };
                 ui.label("Key:").on_hover_text("Root note for the chord scale.");
                 egui::ComboBox::from_id_salt("chord_root")
-                    .selected_text(NOTE_NAMES[*root as usize])
+                    .selected_text(NOTE_NAMES[self.chord_seq.root as usize])
                     .show_ui(ui, |ui| {
                         for (i, name) in NOTE_NAMES.iter().enumerate() {
-                            ui.selectable_value(root, i as u8, *name);
+                            ui.selectable_value(&mut self.chord_seq.root, i as u8, *name);
                         }
                     });
-                ui.label("Scale:").on_hover_text("Diatonic scale used to build chords (Major = bright, Minor = dark).");
+                ui.label("Scale:");
                 for &sc in &[ScaleType::Major, ScaleType::Minor] {
-                    let active = *scale == sc;
+                    let active = self.chord_seq.scale == sc;
                     let label = egui::RichText::new(sc.label())
                         .color(if active { self.theme.c(&self.theme.accent_dim) } else { Color32::GRAY });
                     if ui.button(label).on_hover_text(match sc {
                         ScaleType::Major => "Major scale — bright, happy feel.",
                         ScaleType::Minor => "Minor scale — dark, moody feel.",
-                    }).clicked() { *scale = sc; }
+                    }).clicked() { self.chord_seq.scale = sc; }
                 }
             }
         });
@@ -175,7 +165,7 @@ impl SynthApp {
         match self.seq_mode {
             SeqMode::NoteSeq  => self.ui_note_seq(ui),
             SeqMode::ChordSeq => self.ui_chord_seq(ui),
-            SeqMode::ChordKb  => self.ui_chord_kb(ui),
+            SeqMode::ChordKb  => {} // handled in keyboard strip
         }
     }
 
@@ -308,50 +298,4 @@ impl SynthApp {
         });
     }
 
-    fn ui_chord_kb(&mut self, ui: &mut egui::Ui) {
-        let spacing = ui.spacing().item_spacing.x;
-        let btn_w = ((ui.available_width() - spacing * 6.0) / 7.0).max(40.0);
-        let btn_h = 90.0;
-
-        ui.horizontal(|ui| {
-            for degree in 0..7 {
-                let (resp, painter) = ui.allocate_painter(
-                    Vec2::new(btn_w, btn_h), Sense::click_and_drag());
-                let r = resp.rect;
-
-                let is_held_mouse = self.chord_kb.held_degree == Some(degree);
-                let is_held_kb    = self.chord_kb.kb_held.contains(&degree);
-                let is_held = is_held_mouse || is_held_kb;
-                let quality = chord_quality(self.chord_kb.scale, degree);
-                let bg = if is_held { self.theme.c(&self.theme.seq_current) }
-                    else if quality == "m" { self.theme.c(&self.theme.seq_kb_minor) }
-                    else if quality == "°" { self.theme.c(&self.theme.seq_kb_dim) }
-                    else { self.theme.c(&self.theme.seq_kb_major) };
-                painter.rect_filled(r, Rounding::same(8.0), bg);
-                painter.rect_stroke(r, Rounding::same(8.0),
-                    Stroke::new(if is_held { 2.0 } else { 1.0 },
-                    if is_held { Color32::WHITE } else { Color32::from_gray(80) }));
-
-                let cname = chord_name(self.chord_kb.root, self.chord_kb.scale, degree);
-                painter.text(egui::pos2(r.center().x, r.center().y - 10.0),
-                    egui::Align2::CENTER_CENTER, &cname,
-                    egui::FontId::proportional(14.0), Color32::WHITE);
-                painter.text(egui::pos2(r.center().x, r.center().y + 10.0),
-                    egui::Align2::CENTER_CENTER, DEGREE_LABELS[degree],
-                    egui::FontId::monospace(10.0), Color32::from_gray(180));
-
-                if resp.is_pointer_button_down_on() && !is_held_mouse {
-                    if let Some(prev) = self.chord_kb.held_degree {
-                        for m in self.chord_kb.chord_notes(prev) { self.push_note_off(m); }
-                    }
-                    self.chord_kb.held_degree = Some(degree);
-                    for m in self.chord_kb.chord_notes(degree) { self.push_note_on(m); }
-                }
-                if !resp.is_pointer_button_down_on() && is_held_mouse {
-                    self.chord_kb.held_degree = None;
-                    for m in self.chord_kb.chord_notes(degree) { self.push_note_off(m); }
-                }
-            }
-        });
-    }
 }

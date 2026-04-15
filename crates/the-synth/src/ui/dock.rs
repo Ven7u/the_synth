@@ -7,7 +7,6 @@ use crate::SynthApp;
 pub enum Tab {
     Oscillators,
     Modulation,
-    Keyboard,
     Sequencer,
     ArpWalker,
     FxChain,
@@ -20,7 +19,6 @@ impl Tab {
         match self {
             Tab::Oscillators => "Oscillators",
             Tab::Modulation  => "Modulation & Filter",
-            Tab::Keyboard    => "Keyboard",
             Tab::Sequencer   => "Sequencer",
             Tab::ArpWalker   => "Arp & Walker",
             Tab::FxChain     => "FX Chain",
@@ -32,7 +30,6 @@ impl Tab {
     pub const ALL: &[Tab] = &[
         Tab::Oscillators,
         Tab::Modulation,
-        Tab::Keyboard,
         Tab::Sequencer,
         Tab::ArpWalker,
         Tab::FxChain,
@@ -58,10 +55,10 @@ pub fn default_dock_state() -> DockState<Tab> {
     let mut state = DockState::new(vec![Tab::Oscillators]);
     let surface = state.main_surface_mut();
 
-    // 1. Split bottom from root: Keyboard + Sequencer (tabbed) — bottom 35%.
+    // 1. Split bottom from root: Sequencer — bottom 35%.
     let [top, bottom] = surface.split_below(
         NodeIndex::root(), 0.65,
-        vec![Tab::Keyboard, Tab::Sequencer],
+        vec![Tab::Sequencer],
     );
 
     // 2. In top area, split right: Oscilloscope — right takes 42%.
@@ -108,9 +105,6 @@ impl<'a> TabViewer for SynthTabViewer<'a> {
                     self.app.ui_adsr_panel(&mut cols[2], "Filter Env", &mut [0usize, 1, 2, 3], true);
                     self.app.ui_adsr_panel(&mut cols[3], "Amp Env", &mut [0usize, 1, 2, 3], false);
                 });
-            }
-            Tab::Keyboard => {
-                self.app.ui_keyboard_panel(ui);
             }
             Tab::Sequencer => {
                 self.app.ui_sequencer_panel(ui);
