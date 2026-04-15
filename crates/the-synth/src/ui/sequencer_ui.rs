@@ -22,7 +22,7 @@ impl SynthApp {
             for &mode in &[SeqMode::NoteSeq, SeqMode::ChordSeq, SeqMode::ChordKb] {
                 let active = self.seq_mode == mode;
                 let label = egui::RichText::new(mode.label())
-                    .color(if active { Color32::from_rgb(0, 220, 160) } else { Color32::GRAY })
+                    .color(if active { self.theme.c(&self.theme.accent) } else { Color32::GRAY })
                     .strong();
                 let tip = match mode {
                     SeqMode::NoteSeq  => "Note Sequencer — step-sequence individual notes.",
@@ -79,7 +79,7 @@ impl SynthApp {
                 for &len in &[8usize, 16, 24] {
                     let active = *cur_length == len;
                     let label = egui::RichText::new(format!("{len}"))
-                        .color(if active { Color32::from_rgb(0, 200, 130) } else { Color32::GRAY });
+                        .color(if active { self.theme.c(&self.theme.accent_dim) } else { Color32::GRAY });
                     if ui.button(label).on_hover_text(format!("Set pattern length to {len} steps.")).clicked() {
                         *cur_length = len;
                         if self.seq_current_step >= len { self.seq_current_step = 0; }
@@ -161,7 +161,7 @@ impl SynthApp {
                 for &sc in &[ScaleType::Major, ScaleType::Minor] {
                     let active = *scale == sc;
                     let label = egui::RichText::new(sc.label())
-                        .color(if active { Color32::from_rgb(0, 200, 130) } else { Color32::GRAY });
+                        .color(if active { self.theme.c(&self.theme.accent_dim) } else { Color32::GRAY });
                     if ui.button(label).on_hover_text(match sc {
                         ScaleType::Major => "Major scale — bright, happy feel.",
                         ScaleType::Minor => "Minor scale — dark, moody feel.",
@@ -199,16 +199,16 @@ impl SynthApp {
                     let (bar_resp, painter) = ui.allocate_painter(
                         Vec2::new(step_w, bar_area_h), Sense::click_and_drag());
                     let r = bar_resp.rect;
-                    painter.rect_filled(r, Rounding::same(4.0), Color32::from_rgb(25, 25, 35));
+                    painter.rect_filled(r, Rounding::same(4.0), self.theme.c(&self.theme.bg_seq_bar));
                     let t = (note - midi_min) / (midi_max - midi_min);
                     let bar_h = (t * (bar_area_h - 4.0)).max(4.0);
                     let bar_rect = egui::Rect::from_min_size(
                         egui::pos2(r.min.x + 2.0, r.max.y - bar_h - 2.0),
                         Vec2::new(step_w - 4.0, bar_h),
                     );
-                    let bar_color = if is_current { Color32::from_rgb(255, 210, 60) }
-                        else if is_on { Color32::from_rgb(0, 120, 80) }
-                        else { Color32::from_rgb(40, 50, 55) };
+                    let bar_color = if is_current { self.theme.c(&self.theme.seq_current) }
+                        else if is_on { self.theme.c(&self.theme.seq_note_bar_on) }
+                        else { self.theme.c(&self.theme.seq_note_bar_off) };
                     painter.rect_filled(bar_rect, Rounding::same(3.0), bar_color);
                     painter.text(r.center(), egui::Align2::CENTER_CENTER,
                         super::midi_note_name(self.note_seq.notes[i]),
@@ -229,9 +229,9 @@ impl SynthApp {
                     if bar_resp.drag_stopped() { self.note_seq.drag_accum[i] = 0.0; }
 
                     // Step button
-                    let fill = if is_current { Color32::from_rgb(255, 200, 50) }
-                        else if is_on { Color32::from_rgb(0, 180, 120) }
-                        else { Color32::from_rgb(40, 40, 55) };
+                    let fill = if is_current { self.theme.c(&self.theme.seq_current) }
+                        else if is_on { self.theme.c(&self.theme.seq_step_on) }
+                        else { self.theme.c(&self.theme.seq_step_off) };
                     let (r, painter) = ui.allocate_painter(Vec2::new(step_w, 28.0), Sense::click());
                     painter.rect_filled(r.rect, Rounding::same(5.0), fill);
                     painter.rect_stroke(r.rect, Rounding::same(5.0),
@@ -259,7 +259,7 @@ impl SynthApp {
                     let (bar_resp, painter) = ui.allocate_painter(
                         Vec2::new(step_w, bar_area_h), Sense::click_and_drag());
                     let r = bar_resp.rect;
-                    painter.rect_filled(r, Rounding::same(4.0), Color32::from_rgb(25, 25, 35));
+                    painter.rect_filled(r, Rounding::same(4.0), self.theme.c(&self.theme.bg_seq_bar));
                     let t = degree as f32 / 6.0;
                     let bar_h = (t * (bar_area_h - 4.0)).max(4.0);
                     let bar_rect = egui::Rect::from_min_size(
@@ -267,11 +267,11 @@ impl SynthApp {
                         Vec2::new(step_w - 4.0, bar_h),
                     );
                     let quality = chord_quality(self.chord_seq.scale, degree);
-                    let bar_color = if is_current { Color32::from_rgb(255, 210, 60) }
-                        else if !is_on { Color32::from_rgb(40, 50, 55) }
-                        else if quality == "m" { Color32::from_rgb(60, 80, 140) }
-                        else if quality == "°" { Color32::from_rgb(120, 50, 50) }
-                        else { Color32::from_rgb(0, 100, 70) };
+                    let bar_color = if is_current { self.theme.c(&self.theme.seq_current) }
+                        else if !is_on { self.theme.c(&self.theme.seq_note_bar_off) }
+                        else if quality == "m" { self.theme.c(&self.theme.seq_chord_minor) }
+                        else if quality == "°" { self.theme.c(&self.theme.seq_chord_dim) }
+                        else { self.theme.c(&self.theme.seq_chord_major) };
                     painter.rect_filled(bar_rect, Rounding::same(3.0), bar_color);
 
                     let cname = chord_name(self.chord_seq.root, self.chord_seq.scale, degree);
@@ -295,9 +295,9 @@ impl SynthApp {
                     }
                     if bar_resp.drag_stopped() { self.chord_seq.drag_accum[i] = 0.0; }
 
-                    let fill = if is_current { Color32::from_rgb(255, 200, 50) }
-                        else if is_on { Color32::from_rgb(0, 180, 120) }
-                        else { Color32::from_rgb(40, 40, 55) };
+                    let fill = if is_current { self.theme.c(&self.theme.seq_current) }
+                        else if is_on { self.theme.c(&self.theme.seq_step_on) }
+                        else { self.theme.c(&self.theme.seq_step_off) };
                     let (r, painter) = ui.allocate_painter(Vec2::new(step_w, 28.0), Sense::click());
                     painter.rect_filled(r.rect, Rounding::same(5.0), fill);
                     painter.rect_stroke(r.rect, Rounding::same(5.0),
@@ -323,10 +323,10 @@ impl SynthApp {
                 let is_held_kb    = self.chord_kb.kb_held.contains(&degree);
                 let is_held = is_held_mouse || is_held_kb;
                 let quality = chord_quality(self.chord_kb.scale, degree);
-                let bg = if is_held { Color32::from_rgb(255, 210, 60) }
-                    else if quality == "m" { Color32::from_rgb(40, 55, 100) }
-                    else if quality == "°" { Color32::from_rgb(80, 35, 35) }
-                    else { Color32::from_rgb(30, 80, 55) };
+                let bg = if is_held { self.theme.c(&self.theme.seq_current) }
+                    else if quality == "m" { self.theme.c(&self.theme.seq_kb_minor) }
+                    else if quality == "°" { self.theme.c(&self.theme.seq_kb_dim) }
+                    else { self.theme.c(&self.theme.seq_kb_major) };
                 painter.rect_filled(r, Rounding::same(8.0), bg);
                 painter.rect_stroke(r, Rounding::same(8.0),
                     Stroke::new(if is_held { 2.0 } else { 1.0 },

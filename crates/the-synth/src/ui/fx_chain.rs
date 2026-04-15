@@ -15,12 +15,12 @@ pub const DELAY_DIVISIONS: &[(&str, f32)] = &[
 
 impl SynthApp {
     pub fn ui_fx_chain(&mut self, ui: &mut egui::Ui) {
-        let col_od   = Color32::from_rgb(255, 140,  60); // orange
-        let col_dist = Color32::from_rgb(220,  60,  60); // red
-        let col_cho  = Color32::from_rgb( 80, 200, 140); // green
-        let col_dly  = Color32::from_rgb( 80, 160, 255); // blue
-        let col_rev  = Color32::from_rgb(170,  90, 240); // purple
-        let col_crys = Color32::from_rgb(255, 170,  90); // amber
+        let col_od   = self.theme.c(&self.theme.fx_overdrive);
+        let col_dist = self.theme.c(&self.theme.fx_distortion);
+        let col_cho  = self.theme.c(&self.theme.fx_chorus);
+        let col_dly  = self.theme.c(&self.theme.fx_delay);
+        let col_rev  = self.theme.c(&self.theme.fx_reverb);
+        let col_crys = self.theme.c(&self.theme.fx_crystallizer);
 
         ui.horizontal(|ui| {
             // ---- Overdrive ----
@@ -202,7 +202,7 @@ impl SynthApp {
             });
 
             // ---- Shimmer ----
-            let col_shim = Color32::from_rgb(120, 200, 255);
+            let col_shim = self.theme.c(&self.theme.fx_shimmer);
             ui.group(|ui| {
                 ui.set_min_width(110.0);
                 ui.vertical(|ui| {

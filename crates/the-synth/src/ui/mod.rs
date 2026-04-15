@@ -1,3 +1,4 @@
+pub mod theme;
 pub mod oscillators;
 pub mod modulation;
 pub mod keyboard;

@@ -41,7 +41,7 @@ impl SynthApp {
 
         // Library browser toggle
         let browser_label = egui::RichText::new("📚 Library")
-            .color(if self.patch_browser_open { Color32::from_rgb(0, 220, 160) } else { Color32::WHITE });
+            .color(if self.patch_browser_open { self.theme.c(&self.theme.accent) } else { Color32::WHITE });
         if ui.button(browser_label).on_hover_text("Browse and load factory patches organized by category and synth model.").clicked() {
             self.patch_browser_open = !self.patch_browser_open;
         }
@@ -72,7 +72,7 @@ impl SynthApp {
                     for cat in &categories {
                         let active = &self.patch_browser_category == cat;
                         let label = egui::RichText::new(cat)
-                            .color(if active { Color32::from_rgb(0, 220, 160) } else { Color32::GRAY });
+                            .color(if active { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
                         if ui.button(label).clicked() {
                             self.patch_browser_category = cat.clone();
                         }
@@ -103,7 +103,7 @@ impl SynthApp {
                     for m in &models {
                         let active = &self.patch_browser_model == m;
                         let label = egui::RichText::new(m)
-                            .color(if active { Color32::from_rgb(100, 180, 255) } else { Color32::GRAY });
+                            .color(if active { self.theme.c(&self.theme.patch_browser_model) } else { Color32::GRAY });
                         if ui.button(label).clicked() {
                             self.patch_browser_model = m.clone();
                         }
@@ -116,7 +116,7 @@ impl SynthApp {
                 ui.horizontal(|ui| {
                     let label = egui::RichText::new("Load FX with patch")
                         .small()
-                        .color(if self.patch_load_fx { Color32::from_rgb(255, 180, 60) } else { Color32::GRAY });
+                        .color(if self.patch_load_fx { self.theme.c(&self.theme.patch_load_fx_on) } else { Color32::GRAY });
                     ui.checkbox(&mut self.patch_load_fx, label)
                         .on_hover_text("When enabled, loading a patch also restores its FX chain settings.\nWhen disabled, your current FX chain stays untouched.");
                 });
@@ -144,7 +144,7 @@ impl SynthApp {
                     for (idx, name, cat, model) in &patches {
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(format!("[{cat}]")).weak().small().monospace());
-                            ui.label(egui::RichText::new(format!("{model}")).color(Color32::from_rgb(100, 180, 255)).small().monospace());
+                            ui.label(egui::RichText::new(format!("{model}")).color(self.theme.c(&self.theme.patch_browser_model)).small().monospace());
                             if ui.selectable_label(false, name).clicked() {
                                 load_idx = Some(*idx);
                             }

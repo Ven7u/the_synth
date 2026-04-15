@@ -11,7 +11,7 @@ impl SynthApp {
         let enabled = self.state.arp.enabled.load(Ordering::Relaxed);
         ui.horizontal(|ui| {
             let label = egui::RichText::new("ARP").strong()
-                .color(if enabled { Color32::from_rgb(0, 220, 160) } else { Color32::GRAY });
+                .color(if enabled { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
             if ui.button(label).clicked() {
                 let new_enabled = !enabled;
                 self.state.arp.enabled.store(new_enabled, Ordering::Relaxed);
@@ -28,7 +28,7 @@ impl SynthApp {
             }
             let hold = self.state.arp.hold.load(Ordering::Relaxed);
             let hold_label = egui::RichText::new("HOLD")
-                .color(if hold { Color32::from_rgb(255, 200, 0) } else { Color32::GRAY });
+                .color(if hold { self.theme.c(&self.theme.accent_hold) } else { Color32::GRAY });
             if ui.button(hold_label).clicked() {
                 let new_hold = !hold;
                 self.state.arp.hold.store(new_hold, Ordering::Relaxed);
@@ -93,7 +93,7 @@ impl SynthApp {
         let enabled = self.state.walker.enabled.load(Ordering::Relaxed);
         ui.horizontal(|ui| {
             let label = egui::RichText::new("WALKER").strong()
-                .color(if enabled { Color32::from_rgb(100, 180, 255) } else { Color32::GRAY });
+                .color(if enabled { self.theme.c(&self.theme.accent_walker) } else { Color32::GRAY });
             if ui.button(label).on_hover_text("Scale Walker — autonomous random walk within a scale. Generates notes independently of keyboard input.").clicked() {
                 let new_enabled = !enabled;
                 self.state.walker.enabled.store(new_enabled, Ordering::Relaxed);

@@ -139,7 +139,7 @@ impl SynthApp {
                 let pressed =
                     self.piano_held_midi.contains(&midi) || self.piano_mouse_midi == Some(midi);
                 let fill = if pressed {
-                    Color32::from_rgb(100, 180, 255)
+                    self.theme.c(&self.theme.key_white_pressed)
                 } else {
                     Color32::WHITE
                 };
@@ -166,7 +166,7 @@ impl SynthApp {
                 let pressed =
                     self.piano_held_midi.contains(&midi) || self.piano_mouse_midi == Some(midi);
                 let fill = if pressed {
-                    Color32::from_rgb(60, 120, 200)
+                    self.theme.c(&self.theme.key_black_pressed)
                 } else {
                     Color32::BLACK
                 };

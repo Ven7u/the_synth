@@ -47,7 +47,7 @@ impl SynthApp {
 
         // Status dot
         let (color, label) = if connected.is_some() {
-            (Color32::from_rgb(0, 220, 120), "●")
+            (self.theme.c(&self.theme.midi_connected), "●")
         } else {
             (Color32::from_gray(80), "○")
         };

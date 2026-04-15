@@ -9,7 +9,7 @@ impl SynthApp {
         ui.horizontal(|ui| {
             let on = self.lfo_enabled;
             let label = egui::RichText::new("LFO").strong()
-                .color(if on { Color32::from_rgb(0, 220, 160) } else { Color32::GRAY });
+                .color(if on { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
             if ui.button(label)
                 .on_hover_text("Low Frequency Oscillator — a slow (sub-audio) wave that modulates pitch, filter cutoff, or amplitude. Creates vibrato, filter wobble, or tremolo.")
                 .clicked()
@@ -81,7 +81,7 @@ impl SynthApp {
         ui.horizontal(|ui| {
             let on = self.filter_enabled;
             let label = egui::RichText::new("FILTER").strong()
-                .color(if on { Color32::from_rgb(0, 220, 160) } else { Color32::GRAY });
+                .color(if on { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
             if ui.button(label)
                 .on_hover_text("Moog-style 4-pole lowpass filter. Removes high frequencies, shaping the brightness and timbre of the sound. The classic 'sweep' sound of a synthesizer.")
                 .clicked()
@@ -195,17 +195,17 @@ impl SynthApp {
         } else {
             self.state.amp_cursors.iter().map(|s| s.value()).collect()
         };
-        draw_adsr_visualizer(ui, adsr, &cursors);
+        draw_adsr_visualizer(ui, adsr, &cursors, &self.theme);
     }
 }
 
-pub fn draw_adsr_visualizer(ui: &mut egui::Ui, adsr: &[f32; 4], cursors: &[f32]) {
+pub fn draw_adsr_visualizer(ui: &mut egui::Ui, adsr: &[f32; 4], cursors: &[f32], theme: &super::theme::SynthTheme) {
     let height = 48.0;
     let (resp, painter) =
         ui.allocate_painter(egui::Vec2::new(ui.available_width(), height), egui::Sense::hover());
     let rect = resp.rect;
 
-    painter.rect_filled(rect, egui::Rounding::same(3.0), Color32::from_rgb(8, 14, 10));
+    painter.rect_filled(rect, egui::Rounding::same(3.0), theme.c(&theme.bg_adsr));
 
     let a = adsr[0];
     let d = adsr[1];
@@ -237,17 +237,17 @@ pub fn draw_adsr_visualizer(ui: &mut egui::Ui, adsr: &[f32; 4], cursors: &[f32])
     ];
     painter.add(egui::Shape::convex_polygon(
         fill_pts,
-        Color32::from_rgba_premultiplied(0, 160, 100, 30),
+        theme.ca(&theme.adsr_fill),
         Stroke::NONE,
     ));
 
     let pts = vec![p0, p1, p2, p3, p4];
-    let stroke = Stroke::new(1.5, Color32::from_rgb(0, 200, 130));
+    let stroke = Stroke::new(1.5, theme.c(&theme.adsr_outline));
     for w in pts.windows(2) {
         painter.line_segment([w[0], w[1]], stroke);
     }
 
-    let label_color = Color32::from_rgba_premultiplied(80, 160, 110, 180);
+    let label_color = theme.ca(&theme.adsr_label);
     let small = egui::FontId::proportional(9.0);
     for (label, x) in [
         ("A", tx(a * 0.5)),
@@ -278,7 +278,8 @@ pub fn draw_adsr_visualizer(ui: &mut egui::Ui, adsr: &[f32; 4], cursors: &[f32])
             _ => continue,
         };
 
-        painter.circle_filled(pos, 5.0, Color32::from_rgba_premultiplied(0, 255, 160, 40));
-        painter.circle_filled(pos, 2.5, Color32::from_rgb(0, 255, 160));
+        let cursor_c = theme.c(&theme.adsr_cursor);
+        painter.circle_filled(pos, 5.0, Color32::from_rgba_premultiplied(cursor_c.r(), cursor_c.g(), cursor_c.b(), 40));
+        painter.circle_filled(pos, 2.5, cursor_c);
     }
 }

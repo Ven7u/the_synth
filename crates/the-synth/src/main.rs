@@ -46,6 +46,7 @@ pub(crate) struct SynthApp {
     pub(crate) state: Arc<AudioState>,
     pub(crate) midi: MidiEngine,
     pub(crate) control: ControlSender,
+    pub(crate) theme: ui::theme::SynthTheme,
 
     // OSC bank
     pub(crate) osc_wave: [usize; 3], // 0=sine 1=saw 2=square 3=triangle
@@ -202,6 +203,7 @@ impl SynthApp {
             state,
             midi,
             control,
+            theme: ui::theme::midnight(),
             osc_wave: [1, 0, 0], // OSC1=saw, OSC2=sine, OSC3=sine
             osc_octave: [0, 0, 0],
             osc_detune: [0.0, 0.0, 0.0],
@@ -589,7 +591,7 @@ impl eframe::App for SynthApp {
             ui.horizontal(|ui| {
                 self.ui_midi_panel(ui);
                 ui.separator();
-                ui::scope::draw_latency_bar(ui, &self.state, self.amp_adsr[0]);
+                ui::scope::draw_latency_bar(ui, &self.state, self.amp_adsr[0], &self.theme);
             });
 
             // Oscilloscope footer
