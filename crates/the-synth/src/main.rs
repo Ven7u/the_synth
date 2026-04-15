@@ -616,97 +616,109 @@ impl eframe::App for SynthApp {
             });
         });
 
-        // --- Central panel ---
-        egui::CentralPanel::default().show(ctx, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
+        // --- Floating panels ---
+        // Copy visibility flags out to avoid borrow conflicts with self in closures.
+        let mut p = std::mem::take(&mut self.panels);
 
-            if self.panels.oscillators {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("OSCILLATORS").strong().small());
-                });
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    ui.columns(4, |cols| {
-                        self.ui_osc_panel(&mut cols[0], 0);
-                        self.ui_osc_panel(&mut cols[1], 1);
-                        self.ui_osc_panel(&mut cols[2], 2);
-                        self.ui_mixer_panel(&mut cols[3]);
-                    });
-                });
-                ui.add_space(4.0);
-            }
+        // CentralPanel is still needed as a background behind all windows.
+        egui::CentralPanel::default().show(ctx, |_ui| {});
 
-            if self.panels.modulation {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("MODULATION & FILTER").strong().small());
+        egui::Window::new("Oscillators")
+            .open(&mut p.oscillators)
+            .resizable(true)
+            .collapsible(true)
+            .default_pos([5.0, 30.0])
+            .default_width(700.0)
+            .show(ctx, |ui| {
+                ui.columns(4, |cols| {
+                    self.ui_osc_panel(&mut cols[0], 0);
+                    self.ui_osc_panel(&mut cols[1], 1);
+                    self.ui_osc_panel(&mut cols[2], 2);
+                    self.ui_mixer_panel(&mut cols[3]);
                 });
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    ui.columns(4, |cols| {
-                        self.ui_lfo_panel(&mut cols[0]);
-                        self.ui_filter_panel(&mut cols[1]);
-                        self.ui_adsr_panel(&mut cols[2], "Filter Env", &mut [0usize, 1, 2, 3], true);
-                        self.ui_adsr_panel(&mut cols[3], "Amp Env", &mut [0usize, 1, 2, 3], false);
-                    });
-                });
-                ui.add_space(4.0);
-            }
+            });
 
-            if self.panels.keyboard {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("KEYBOARD").strong().small());
+        egui::Window::new("Modulation & Filter")
+            .open(&mut p.modulation)
+            .resizable(true)
+            .collapsible(true)
+            .default_pos([5.0, 290.0])
+            .default_width(700.0)
+            .show(ctx, |ui| {
+                ui.columns(4, |cols| {
+                    self.ui_lfo_panel(&mut cols[0]);
+                    self.ui_filter_panel(&mut cols[1]);
+                    self.ui_adsr_panel(&mut cols[2], "Filter Env", &mut [0usize, 1, 2, 3], true);
+                    self.ui_adsr_panel(&mut cols[3], "Amp Env", &mut [0usize, 1, 2, 3], false);
                 });
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    self.ui_keyboard_panel(ui);
-                });
-                ui.add_space(4.0);
-            }
+            });
 
-            if self.panels.sequencer {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("SEQUENCER").strong().small());
-                });
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    self.ui_sequencer_panel(ui);
-                });
-                ui.add_space(4.0);
-            }
+        egui::Window::new("Keyboard")
+            .open(&mut p.keyboard)
+            .resizable(true)
+            .collapsible(true)
+            .default_pos([5.0, 500.0])
+            .default_width(500.0)
+            .show(ctx, |ui| {
+                self.ui_keyboard_panel(ui);
+            });
 
-            if self.panels.arp_walker {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("ARPEGGIATOR & SCALE WALKER").strong().small());
-                });
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    ui.columns(2, |cols| {
-                        self.ui_arp_panel(&mut cols[0]);
-                        self.ui_walker_panel(&mut cols[1]);
-                    });
-                });
-                ui.add_space(4.0);
-            }
+        egui::Window::new("Sequencer")
+            .open(&mut p.sequencer)
+            .resizable(true)
+            .collapsible(true)
+            .default_pos([5.0, 640.0])
+            .default_width(700.0)
+            .show(ctx, |ui| {
+                self.ui_sequencer_panel(ui);
+            });
 
-            if self.panels.fx_chain {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("FX CHAIN").strong().small());
+        egui::Window::new("Arpeggiator & Walker")
+            .open(&mut p.arp_walker)
+            .resizable(true)
+            .collapsible(true)
+            .default_pos([520.0, 500.0])
+            .default_width(500.0)
+            .show(ctx, |ui| {
+                ui.columns(2, |cols| {
+                    self.ui_arp_panel(&mut cols[0]);
+                    self.ui_walker_panel(&mut cols[1]);
                 });
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    self.ui_fx_chain(ui);
-                });
-                ui.add_space(4.0);
-            }
+            });
 
-            if self.panels.midi {
-                ui.horizontal(|ui| {
-                    self.ui_midi_panel(ui);
-                    ui.separator();
-                    ui::scope::draw_latency_bar(ui, &self.state, self.amp_adsr[0], &self.theme);
-                });
-            }
+        egui::Window::new("FX Chain")
+            .open(&mut p.fx_chain)
+            .resizable(true)
+            .collapsible(true)
+            .default_pos([710.0, 30.0])
+            .default_width(680.0)
+            .show(ctx, |ui| {
+                self.ui_fx_chain(ui);
+            });
 
-            if self.panels.scope {
+        egui::Window::new("Oscilloscope")
+            .open(&mut p.scope)
+            .resizable(true)
+            .collapsible(true)
+            .default_pos([710.0, 290.0])
+            .default_width(680.0)
+            .show(ctx, |ui| {
                 self.ui_oscilloscope(ui);
-            }
+            });
 
-            }); // end ScrollArea
-        });
+        egui::Window::new("MIDI & Latency")
+            .open(&mut p.midi)
+            .resizable(false)
+            .collapsible(true)
+            .default_pos([710.0, 500.0])
+            .show(ctx, |ui| {
+                self.ui_midi_panel(ui);
+                ui.separator();
+                ui::scope::draw_latency_bar(ui, &self.state, self.amp_adsr[0], &self.theme);
+            });
+
+        // Write back visibility (X button may have toggled a panel off).
+        self.panels = p;
 
         ctx.request_repaint();
     }
