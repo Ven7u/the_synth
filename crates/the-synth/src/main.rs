@@ -41,12 +41,39 @@ fn main() -> eframe::Result {
 // App state
 // ---------------------------------------------------------------------------
 
+pub(crate) struct PanelVisibility {
+    pub oscillators: bool,
+    pub modulation: bool,
+    pub keyboard: bool,
+    pub sequencer: bool,
+    pub arp_walker: bool,
+    pub fx_chain: bool,
+    pub scope: bool,
+    pub midi: bool,
+}
+
+impl Default for PanelVisibility {
+    fn default() -> Self {
+        Self {
+            oscillators: true,
+            modulation: true,
+            keyboard: true,
+            sequencer: true,
+            arp_walker: true,
+            fx_chain: true,
+            scope: true,
+            midi: true,
+        }
+    }
+}
+
 pub(crate) struct SynthApp {
     pub(crate) _audio: AudioEngine, // keeps cpal stream alive
     pub(crate) state: Arc<AudioState>,
     pub(crate) midi: MidiEngine,
     pub(crate) control: ControlSender,
     pub(crate) theme: ui::theme::SynthTheme,
+    pub(crate) panels: PanelVisibility,
 
     // OSC bank
     pub(crate) osc_wave: [usize; 3], // 0=sine 1=saw 2=square 3=triangle
@@ -204,6 +231,7 @@ impl SynthApp {
             midi,
             control,
             theme: ui::theme::midnight(),
+            panels: PanelVisibility::default(),
             osc_wave: [1, 0, 0], // OSC1=saw, OSC2=sine, OSC3=sine
             osc_octave: [0, 0, 0],
             osc_detune: [0.0, 0.0, 0.0],
@@ -504,98 +532,178 @@ impl eframe::App for SynthApp {
 
         self.ui_patch_browser(ctx);
 
+        // --- Menu bar ---
+        egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+            egui::menu::bar(ui, |ui| {
+                // File menu
+                ui.menu_button("File", |ui| {
+                    if ui.button("New Patch").clicked() {
+                        self.patch_name = "Init".into();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Save Patch...").clicked() {
+                        let p = self.capture_patch();
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_file_name(&format!("{}.json", p.name))
+                            .add_filter("Patch", &["json"])
+                            .save_file()
+                        {
+                            if let Ok(json) = serde_json::to_string_pretty(&p) {
+                                let _ = std::fs::write(path, json);
+                            }
+                        }
+                        ui.close_menu();
+                    }
+                    if ui.button("Load Patch...").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("Patch", &["json"])
+                            .pick_file()
+                        {
+                            if let Ok(json) = std::fs::read_to_string(path) {
+                                if let Ok(p) = serde_json::from_str::<patch::Patch>(&json) {
+                                    self.apply_patch(p);
+                                }
+                            }
+                        }
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Browse Library...").clicked() {
+                        self.patch_browser_open = !self.patch_browser_open;
+                        ui.close_menu();
+                    }
+                });
+
+                // View menu — panel toggles
+                ui.menu_button("View", |ui| {
+                    ui.checkbox(&mut self.panels.oscillators, "Oscillators");
+                    ui.checkbox(&mut self.panels.modulation, "Modulation & Filter");
+                    ui.checkbox(&mut self.panels.keyboard, "Keyboard");
+                    ui.checkbox(&mut self.panels.sequencer, "Sequencer");
+                    ui.checkbox(&mut self.panels.arp_walker, "Arpeggiator & Walker");
+                    ui.checkbox(&mut self.panels.fx_chain, "FX Chain");
+                    ui.checkbox(&mut self.panels.scope, "Oscilloscope");
+                    ui.checkbox(&mut self.panels.midi, "MIDI & Latency");
+                    ui.separator();
+                    if ui.button("Show All").clicked() {
+                        self.panels = PanelVisibility::default();
+                        ui.close_menu();
+                    }
+                });
+
+                // Theme menu
+                ui.menu_button("Theme", |ui| {
+                    for t in ui::theme::builtin_themes() {
+                        if ui.selectable_label(self.theme.name == t.name, &t.name).clicked() {
+                            self.theme = t;
+                            ui.close_menu();
+                        }
+                    }
+                });
+
+                // MIDI in menu bar
+                ui.menu_button("MIDI", |ui| {
+                    self.ui_midi_panel(ui);
+                });
+
+                // Right-aligned patch name + latency
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui::scope::draw_latency_bar(ui, &self.state, self.amp_adsr[0], &self.theme);
+                    ui.separator();
+                    ui.add(egui::TextEdit::singleline(&mut self.patch_name).desired_width(100.0));
+                });
+            });
+        });
+
+        // --- Central panel ---
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
 
-            // Patch bar
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.horizontal(|ui| { self.ui_patch_bar(ui); });
-            });
-
-            ui.add_space(2.0);
-
-            // Row 1: OSC bank + mixer
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("OSCILLATORS").strong().small());
-            });
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.columns(4, |cols| {
-                    self.ui_osc_panel(&mut cols[0], 0);
-                    self.ui_osc_panel(&mut cols[1], 1);
-                    self.ui_osc_panel(&mut cols[2], 2);
-                    self.ui_mixer_panel(&mut cols[3]);
+            if self.panels.oscillators {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("OSCILLATORS").strong().small());
                 });
-            });
-
-            ui.add_space(4.0);
-
-            // Row 2: LFO + Filter + Filter ADSR + Amp ADSR
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("MODULATION & FILTER").strong().small());
-            });
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.columns(4, |cols| {
-                    self.ui_lfo_panel(&mut cols[0]);
-                    self.ui_filter_panel(&mut cols[1]);
-                    self.ui_adsr_panel(&mut cols[2], "Filter Env", &mut [0usize, 1, 2, 3], true);
-                    self.ui_adsr_panel(&mut cols[3], "Amp Env", &mut [0usize, 1, 2, 3], false);
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.columns(4, |cols| {
+                        self.ui_osc_panel(&mut cols[0], 0);
+                        self.ui_osc_panel(&mut cols[1], 1);
+                        self.ui_osc_panel(&mut cols[2], 2);
+                        self.ui_mixer_panel(&mut cols[3]);
+                    });
                 });
-            });
+                ui.add_space(4.0);
+            }
 
-            ui.add_space(4.0);
-
-            // Row 3: Keyboard
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("KEYBOARD").strong().small());
-            });
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                self.ui_keyboard_panel(ui);
-            });
-
-            ui.add_space(4.0);
-
-            // Row 4: Sequencer (full width)
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("SEQUENCER").strong().small());
-            });
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                self.ui_sequencer_panel(ui);
-            });
-
-            ui.add_space(4.0);
-
-            // Row 4b: Arp + Scale Walker
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("ARPEGGIATOR & SCALE WALKER").strong().small());
-            });
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.columns(2, |cols| {
-                    self.ui_arp_panel(&mut cols[0]);
-                    self.ui_walker_panel(&mut cols[1]);
+            if self.panels.modulation {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("MODULATION & FILTER").strong().small());
                 });
-            });
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.columns(4, |cols| {
+                        self.ui_lfo_panel(&mut cols[0]);
+                        self.ui_filter_panel(&mut cols[1]);
+                        self.ui_adsr_panel(&mut cols[2], "Filter Env", &mut [0usize, 1, 2, 3], true);
+                        self.ui_adsr_panel(&mut cols[3], "Amp Env", &mut [0usize, 1, 2, 3], false);
+                    });
+                });
+                ui.add_space(4.0);
+            }
 
-            ui.add_space(4.0);
+            if self.panels.keyboard {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("KEYBOARD").strong().small());
+                });
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    self.ui_keyboard_panel(ui);
+                });
+                ui.add_space(4.0);
+            }
 
-            // Row 5: FX Chain
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("FX CHAIN").strong().small());
-            });
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                self.ui_fx_chain(ui);
-            });
+            if self.panels.sequencer {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("SEQUENCER").strong().small());
+                });
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    self.ui_sequencer_panel(ui);
+                });
+                ui.add_space(4.0);
+            }
 
-            ui.add_space(4.0);
+            if self.panels.arp_walker {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("ARPEGGIATOR & SCALE WALKER").strong().small());
+                });
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.columns(2, |cols| {
+                        self.ui_arp_panel(&mut cols[0]);
+                        self.ui_walker_panel(&mut cols[1]);
+                    });
+                });
+                ui.add_space(4.0);
+            }
 
-            // MIDI + Latency row
-            ui.horizontal(|ui| {
-                self.ui_midi_panel(ui);
-                ui.separator();
-                ui::scope::draw_latency_bar(ui, &self.state, self.amp_adsr[0], &self.theme);
-            });
+            if self.panels.fx_chain {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("FX CHAIN").strong().small());
+                });
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    self.ui_fx_chain(ui);
+                });
+                ui.add_space(4.0);
+            }
 
-            // Oscilloscope footer
-            self.ui_oscilloscope(ui);
+            if self.panels.midi {
+                ui.horizontal(|ui| {
+                    self.ui_midi_panel(ui);
+                    ui.separator();
+                    ui::scope::draw_latency_bar(ui, &self.state, self.amp_adsr[0], &self.theme);
+                });
+            }
+
+            if self.panels.scope {
+                self.ui_oscilloscope(ui);
+            }
 
             }); // end ScrollArea
         });
