@@ -1,4 +1,8 @@
 pub mod theme;
+pub mod layout;
+pub mod snap;
+pub mod widgets;
+pub mod dock;
 pub mod oscillators;
 pub mod modulation;
 pub mod keyboard;

@@ -21,19 +21,14 @@ impl SynthApp {
 
         ui.add_enabled_ui(self.lfo_enabled, |ui| {
             ui.horizontal(|ui| {
-                ui.label("Rate:").on_hover_text("LFO speed in Hz. Below ~20 Hz = slow modulation. At 20 Hz+ the effect becomes a subtle audio-rate wobble.");
-                if ui.add(egui::Slider::new(&mut self.lfo_rate, 0.1..=20.0)
-                    .text("Hz").logarithmic(true))
-                    .on_hover_text("0.1 Hz = very slow sweep (~10s cycle). 5 Hz = fast vibrato. 20 Hz = enters audio range.")
+                if super::widgets::knob(ui, &mut self.lfo_rate, 0.1..=20.0, "Rate", &self.theme)
+                    .on_hover_text("LFO speed in Hz. 0.1 = very slow. 5 = fast vibrato. 20 = audio range.")
                     .changed()
                 {
                     self.state.lfo_rate.set(self.lfo_rate);
                 }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Depth:").on_hover_text("How strongly the LFO modulates its destination. 0 = no effect, 1 = full range.");
-                if ui.add(egui::Slider::new(&mut self.lfo_depth, 0.0..=1.0))
-                    .on_hover_text("Depth scales the mod amount. For pitch: ±2 semitones at 1.0. For filter: ±50% cutoff. For amp: full tremolo.")
+                if super::widgets::knob(ui, &mut self.lfo_depth, 0.0..=1.0, "Depth", &self.theme)
+                    .on_hover_text("How strongly the LFO modulates its destination. 0 = off, 1 = full.")
                     .changed()
                 {
                     self.state.lfo_depth.set(self.lfo_depth);
@@ -99,29 +94,20 @@ impl SynthApp {
 
         ui.add_enabled_ui(self.filter_enabled, |ui| {
             ui.horizontal(|ui| {
-                ui.label("Cut:").on_hover_text("Cutoff frequency — frequencies above this point are attenuated. Low = dark/muffled, high = bright/open.");
-                if ui.add(egui::Slider::new(&mut self.filter_cutoff, 80.0..=18000.0)
-                    .text("Hz").logarithmic(true))
-                    .on_hover_text("80 Hz = very dark. 500–2000 Hz = classic filter sweep range. 18000 Hz = fully open.")
+                if super::widgets::knob(ui, &mut self.filter_cutoff, 80.0..=18000.0, "Cut", &self.theme)
+                    .on_hover_text("Cutoff frequency. 80 Hz = dark, 18000 Hz = fully open.")
                     .changed()
                 {
                     self.state.cutoff.set(self.filter_cutoff);
                 }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Res:").on_hover_text("Resonance — boosts frequencies near the cutoff, adding a peak. High resonance = squelchy, whistling quality. Near 1.0 = self-oscillation.");
-                if ui.add(egui::Slider::new(&mut self.filter_q, 0.0..=0.95)
-                    .text("Res").fixed_decimals(2))
-                    .on_hover_text("0 = no resonance. 0.5 = prominent peak. 0.9+ = near self-oscillation (the filter sings on its own).")
+                if super::widgets::knob(ui, &mut self.filter_q, 0.0..=0.95, "Res", &self.theme)
+                    .on_hover_text("Resonance. 0 = none. 0.9+ = self-oscillation.")
                     .changed()
                 {
                     self.state.resonance.set(self.filter_q);
                 }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Env:").on_hover_text("Filter envelope amount — how much the filter ADSR envelope opens the filter above the base cutoff on each note.");
-                if ui.add(egui::Slider::new(&mut self.filter_env_amount, 0.0..=1.0))
-                    .on_hover_text("0 = envelope has no effect. 1 = envelope sweeps up to +12 kHz above base cutoff. For 'pew': low cutoff, env=1, fast attack, short decay, sustain=0.")
+                if super::widgets::knob(ui, &mut self.filter_env_amount, 0.0..=1.0, "Env", &self.theme)
+                    .on_hover_text("Filter envelope amount. 0 = no effect, 1 = full sweep.")
                     .changed()
                 {
                     self.state.filter_env_amount.set(self.filter_env_amount);

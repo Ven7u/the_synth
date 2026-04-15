@@ -67,6 +67,34 @@ impl Default for PanelVisibility {
     }
 }
 
+impl PanelVisibility {
+    pub fn to_state(&self) -> ui::layout::PanelVisibilityState {
+        ui::layout::PanelVisibilityState {
+            oscillators: self.oscillators,
+            modulation: self.modulation,
+            keyboard: self.keyboard,
+            sequencer: self.sequencer,
+            arp_walker: self.arp_walker,
+            fx_chain: self.fx_chain,
+            scope: self.scope,
+            midi: self.midi,
+        }
+    }
+
+    pub fn from_state(s: &ui::layout::PanelVisibilityState) -> Self {
+        Self {
+            oscillators: s.oscillators,
+            modulation: s.modulation,
+            keyboard: s.keyboard,
+            sequencer: s.sequencer,
+            arp_walker: s.arp_walker,
+            fx_chain: s.fx_chain,
+            scope: s.scope,
+            midi: s.midi,
+        }
+    }
+}
+
 pub(crate) struct SynthApp {
     pub(crate) _audio: AudioEngine, // keeps cpal stream alive
     pub(crate) state: Arc<AudioState>,
@@ -74,6 +102,8 @@ pub(crate) struct SynthApp {
     pub(crate) control: ControlSender,
     pub(crate) theme: ui::theme::SynthTheme,
     pub(crate) panels: PanelVisibility,
+    pub(crate) reset_layout_pending: bool,
+    pub(crate) dock_state: egui_dock::DockState<ui::dock::Tab>,
 
     // OSC bank
     pub(crate) osc_wave: [usize; 3], // 0=sine 1=saw 2=square 3=triangle
@@ -225,13 +255,24 @@ impl SynthApp {
     fn new(state: Arc<AudioState>, audio: AudioEngine, control: ControlSender) -> Self {
         let mut midi = MidiEngine::new();
         midi.list_ports(); // populate port list at startup
+
+        // Restore persisted layout (theme + panel visibility).
+        let saved = ui::layout::load_layout();
+        let theme = ui::theme::builtin_themes()
+            .into_iter()
+            .find(|t| t.name == saved.theme_name)
+            .unwrap_or_else(ui::theme::midnight);
+        let panels = PanelVisibility::from_state(&saved.panels);
+
         Self {
             _audio: audio,
             state,
             midi,
             control,
-            theme: ui::theme::midnight(),
-            panels: PanelVisibility::default(),
+            theme,
+            panels,
+            reset_layout_pending: true,
+            dock_state: ui::dock::default_dock_state(),
             osc_wave: [1, 0, 0], // OSC1=saw, OSC2=sine, OSC3=sine
             osc_octave: [0, 0, 0],
             osc_detune: [0.0, 0.0, 0.0],
@@ -525,6 +566,14 @@ impl SynthApp {
 // ---------------------------------------------------------------------------
 
 impl eframe::App for SynthApp {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        let state = ui::layout::LayoutState {
+            theme_name: self.theme.name.clone(),
+            panels: self.panels.to_state(),
+        };
+        ui::layout::save_layout(&state);
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.tick_midi();
         self.apply_clock_sync();
@@ -575,19 +624,24 @@ impl eframe::App for SynthApp {
                     }
                 });
 
-                // View menu — panel toggles
+                // View menu — open panels as dock tabs
                 ui.menu_button("View", |ui| {
-                    ui.checkbox(&mut self.panels.oscillators, "Oscillators");
-                    ui.checkbox(&mut self.panels.modulation, "Modulation & Filter");
-                    ui.checkbox(&mut self.panels.keyboard, "Keyboard");
-                    ui.checkbox(&mut self.panels.sequencer, "Sequencer");
-                    ui.checkbox(&mut self.panels.arp_walker, "Arpeggiator & Walker");
-                    ui.checkbox(&mut self.panels.fx_chain, "FX Chain");
-                    ui.checkbox(&mut self.panels.scope, "Oscilloscope");
-                    ui.checkbox(&mut self.panels.midi, "MIDI & Latency");
+                    for &tab in ui::dock::Tab::ALL {
+                        let is_open = self.dock_state.find_tab(&tab).is_some();
+                        let label = if is_open {
+                            egui::RichText::new(tab.title())
+                        } else {
+                            egui::RichText::new(format!("+ {}", tab.title())).weak()
+                        };
+                        if ui.button(label).clicked() && !is_open {
+                            // Add the tab to the focused leaf (or first leaf if none focused).
+                            self.dock_state.push_to_focused_leaf(tab);
+                            ui.close_menu();
+                        }
+                    }
                     ui.separator();
-                    if ui.button("Show All").clicked() {
-                        self.panels = PanelVisibility::default();
+                    if ui.button("Reset Layout").on_hover_text("Reset to default panel arrangement.").clicked() {
+                        self.reset_layout_pending = true;
                         ui.close_menu();
                     }
                 });
@@ -616,109 +670,25 @@ impl eframe::App for SynthApp {
             });
         });
 
-        // --- Floating panels ---
-        // Copy visibility flags out to avoid borrow conflicts with self in closures.
-        let mut p = std::mem::take(&mut self.panels);
+        // --- Docked panels ---
+        if self.reset_layout_pending {
+            self.dock_state = ui::dock::default_dock_state();
+            self.reset_layout_pending = false;
+        }
 
-        // CentralPanel is still needed as a background behind all windows.
-        egui::CentralPanel::default().show(ctx, |_ui| {});
-
-        egui::Window::new("Oscillators")
-            .open(&mut p.oscillators)
-            .resizable(true)
-            .collapsible(true)
-            .default_pos([5.0, 30.0])
-            .default_width(700.0)
-            .show(ctx, |ui| {
-                ui.columns(4, |cols| {
-                    self.ui_osc_panel(&mut cols[0], 0);
-                    self.ui_osc_panel(&mut cols[1], 1);
-                    self.ui_osc_panel(&mut cols[2], 2);
-                    self.ui_mixer_panel(&mut cols[3]);
-                });
-            });
-
-        egui::Window::new("Modulation & Filter")
-            .open(&mut p.modulation)
-            .resizable(true)
-            .collapsible(true)
-            .default_pos([5.0, 290.0])
-            .default_width(700.0)
-            .show(ctx, |ui| {
-                ui.columns(4, |cols| {
-                    self.ui_lfo_panel(&mut cols[0]);
-                    self.ui_filter_panel(&mut cols[1]);
-                    self.ui_adsr_panel(&mut cols[2], "Filter Env", &mut [0usize, 1, 2, 3], true);
-                    self.ui_adsr_panel(&mut cols[3], "Amp Env", &mut [0usize, 1, 2, 3], false);
-                });
-            });
-
-        egui::Window::new("Keyboard")
-            .open(&mut p.keyboard)
-            .resizable(true)
-            .collapsible(true)
-            .default_pos([5.0, 500.0])
-            .default_width(500.0)
-            .show(ctx, |ui| {
-                self.ui_keyboard_panel(ui);
-            });
-
-        egui::Window::new("Sequencer")
-            .open(&mut p.sequencer)
-            .resizable(true)
-            .collapsible(true)
-            .default_pos([5.0, 640.0])
-            .default_width(700.0)
-            .show(ctx, |ui| {
-                self.ui_sequencer_panel(ui);
-            });
-
-        egui::Window::new("Arpeggiator & Walker")
-            .open(&mut p.arp_walker)
-            .resizable(true)
-            .collapsible(true)
-            .default_pos([520.0, 500.0])
-            .default_width(500.0)
-            .show(ctx, |ui| {
-                ui.columns(2, |cols| {
-                    self.ui_arp_panel(&mut cols[0]);
-                    self.ui_walker_panel(&mut cols[1]);
-                });
-            });
-
-        egui::Window::new("FX Chain")
-            .open(&mut p.fx_chain)
-            .resizable(true)
-            .collapsible(true)
-            .default_pos([710.0, 30.0])
-            .default_width(680.0)
-            .show(ctx, |ui| {
-                self.ui_fx_chain(ui);
-            });
-
-        egui::Window::new("Oscilloscope")
-            .open(&mut p.scope)
-            .resizable(true)
-            .collapsible(true)
-            .default_pos([710.0, 290.0])
-            .default_width(680.0)
-            .show(ctx, |ui| {
-                self.ui_oscilloscope(ui);
-            });
-
-        egui::Window::new("MIDI & Latency")
-            .open(&mut p.midi)
-            .resizable(false)
-            .collapsible(true)
-            .default_pos([710.0, 500.0])
-            .show(ctx, |ui| {
-                self.ui_midi_panel(ui);
-                ui.separator();
-                ui::scope::draw_latency_bar(ui, &self.state, self.amp_adsr[0], &self.theme);
-            });
-
-        // Write back visibility (X button may have toggled a panel off).
-        self.panels = p;
+        // Take dock_state out to avoid borrow conflict (DockArea needs &mut dock_state,
+        // TabViewer needs &mut self).
+        let mut dock = std::mem::replace(
+            &mut self.dock_state,
+            egui_dock::DockState::new(vec![]),
+        );
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let style = egui_dock::Style::from_egui(ui.style().as_ref());
+            egui_dock::DockArea::new(&mut dock)
+                .style(style)
+                .show_inside(ui, &mut ui::dock::SynthTabViewer { app: self });
+        });
+        self.dock_state = dock;
 
         ctx.request_repaint();
     }

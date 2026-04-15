@@ -250,54 +250,33 @@ impl SynthApp {
         ui.label(egui::RichText::new("MIXER").strong());
         ui.horizontal(|ui| {
             for i in 0..3 {
-                ui.vertical(|ui| {
-                    ui.set_width(36.0);
-                    if ui
-                        .add(
-                            egui::Slider::new(&mut self.osc_vol[i], 0.0..=1.0)
-                                .vertical()
-                                .text(format!("{}", i + 1)),
-                        )
-                        .on_hover_text(format!("OSC {} volume in the mix.", i + 1))
-                        .changed()
-                    {
-                        if self.osc_enabled[i] {
-                            self.state.osc_vol[i].set(self.osc_vol[i]);
-                        }
-                    }
-                });
-            }
-            ui.vertical(|ui| {
-                ui.set_width(36.0);
-                if ui
-                    .add(
-                        egui::Slider::new(&mut self.noise_vol, 0.0..=1.0)
-                            .vertical()
-                            .text("N"),
-                    )
-                    .on_hover_text("White noise volume. Adds breathiness, air, or full noise textures.")
+                let label = format!("O{}", i + 1);
+                if super::widgets::knob(ui, &mut self.osc_vol[i], 0.0..=1.0, &label, &self.theme)
+                    .on_hover_text(format!("OSC {} volume in the mix.", i + 1))
                     .changed()
                 {
-                    self.state.noise_vol.set(self.noise_vol);
+                    if self.osc_enabled[i] {
+                        self.state.osc_vol[i].set(self.osc_vol[i]);
+                    }
                 }
-            });
+            }
+            if super::widgets::knob(ui, &mut self.noise_vol, 0.0..=1.0, "Noise", &self.theme)
+                .on_hover_text("White noise volume. Adds breathiness, air, or full noise textures.")
+                .changed()
+            {
+                self.state.noise_vol.set(self.noise_vol);
+            }
         });
 
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.label("Vol:").on_hover_text("Master output volume.");
-            if ui
-                .add(egui::Slider::new(&mut self.master_vol, 0.0..=1.0))
+            if super::widgets::knob(ui, &mut self.master_vol, 0.0..=1.0, "Vol", &self.theme)
                 .on_hover_text("Master output volume.")
                 .changed()
             {
                 self.state.master_vol.set(self.master_vol);
             }
-        });
-        ui.horizontal(|ui| {
-            ui.label("Glide:").on_hover_text("Portamento — glide pitch from previous note to next. 0 = instant.");
-            if ui
-                .add(egui::Slider::new(&mut self.glide_time, 0.0..=0.5).text("s"))
+            if super::widgets::knob(ui, &mut self.glide_time, 0.0..=0.5, "Glide", &self.theme)
                 .on_hover_text("Glide time in seconds. Higher = slower pitch slide between notes.")
                 .changed()
             {
