@@ -5,6 +5,7 @@
 
 mod audio;
 mod patch;
+mod recorder;
 mod sequencer;
 mod ui;
 
@@ -16,10 +17,11 @@ use eframe::egui;
 use sequencer::{
     ChordKbState, ChordSeqState, NoteSeqState, SeqMode,
 };
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 fn main() -> eframe::Result {
-    let engine = AudioEngine::new().expect("Failed to start audio");
+    let recorder_sink = Arc::new(Mutex::new(None));
+    let engine = AudioEngine::new(Arc::clone(&recorder_sink)).expect("Failed to start audio");
     let state = Arc::clone(&engine.state);
     let control_tx = engine.control_tx.clone();
 
@@ -33,7 +35,7 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "The Synth",
         options,
-        Box::new(move |_cc| Ok(Box::new(SynthApp::new(state, engine, control_tx)))),
+        Box::new(move |_cc| Ok(Box::new(SynthApp::new(state, engine, control_tx, recorder_sink)))),
     )
 }
 
@@ -154,6 +156,13 @@ pub(crate) struct SynthApp {
     pub(crate) piano_held_midi: std::collections::HashSet<u8>,
     pub(crate) piano_mouse_midi: Option<u8>,
     pub(crate) kb_chord_mode: bool,  // true = chord pads, false = standard piano
+    /// When true, NoteOffs are suppressed; notes keep sounding until a new chord/note is played.
+    pub(crate) kb_freeze: bool,
+    /// MIDI notes currently sustained by freeze (key lifted but NoteOff suppressed).
+    pub(crate) frozen_notes: std::collections::HashSet<u8>,
+    /// NoteOns deferred by one frame so the audio callback sees at least one buffer
+    /// with gate=0 before the retrigger — prevents same-buffer NoteOff+NoteOn killing the attack.
+    pub(crate) pending_note_ons: Vec<u8>,
 
     // Peak meter
     pub(crate) peak_display: f32,
@@ -258,10 +267,13 @@ pub(crate) struct SynthApp {
     pub(crate) fx_crystal_feedback: f32,
     pub(crate) fx_crystal_delay_ms: f32,
     pub(crate) fx_crystal_pitch: u8, // 0=0.5x, 1=1x, 2=2x, 3=4x
+
+    /// Shared WAV recorder sink — `Some` while recording, `None` otherwise.
+    pub(crate) recorder_sink: Arc<Mutex<Option<recorder::Recorder>>>,
 }
 
 impl SynthApp {
-    fn new(state: Arc<AudioState>, audio: AudioEngine, control: ControlSender) -> Self {
+    fn new(state: Arc<AudioState>, audio: AudioEngine, control: ControlSender, recorder_sink: Arc<Mutex<Option<recorder::Recorder>>>) -> Self {
         let mut midi = MidiEngine::new();
         midi.list_ports(); // populate port list at startup
 
@@ -315,6 +327,9 @@ impl SynthApp {
             master_vol: 0.8,
             piano_octave: 4,
             kb_chord_mode: false,
+            kb_freeze: false,
+            frozen_notes: std::collections::HashSet::new(),
+            pending_note_ons: Vec::new(),
             piano_held_midi: std::collections::HashSet::new(),
             piano_mouse_midi: None,
             peak_display: 0.0,
@@ -398,6 +413,7 @@ impl SynthApp {
             fx_crystal_feedback: 0.35,
             fx_crystal_delay_ms: 260.0,
             fx_crystal_pitch: 2,
+            recorder_sink,
         }
     }
 }
@@ -531,7 +547,15 @@ impl SynthApp {
                             self.filter_cutoff = hz;
                             self.state.cutoff.set(hz);
                         }
-                        64 => { // Sustain pedal
+                        64 => { // Sustain pedal → freeze
+                            let pedal_down = value >= 64;
+                            if pedal_down && !self.kb_freeze {
+                                self.kb_freeze = true;
+                            } else if !pedal_down && self.kb_freeze {
+                                self.kb_freeze = false;
+                                let frozen: Vec<u8> = self.frozen_notes.drain().collect();
+                                for n in frozen { self.push_note_off(n); }
+                            }
                         }
                         _ => {}
                     }
@@ -762,6 +786,58 @@ impl eframe::App for SynthApp {
                 {
                     self.apply_clock_sync();
                     self.sync_transport_now();
+                }
+
+                ui.separator();
+
+                let is_recording = self.recorder_sink.lock().map(|g| g.is_some()).unwrap_or(false);
+                if is_recording {
+                    let stop_label = egui::RichText::new("■ STOP REC")
+                        .strong()
+                        .color(egui::Color32::from_rgb(220, 60, 60));
+                    if ui.button(stop_label)
+                        .on_hover_text("Stop recording and finalise the WAV file.")
+                        .clicked()
+                    {
+                        if let Ok(mut guard) = self.recorder_sink.lock() {
+                            if let Some(rec) = guard.take() {
+                                let path = rec.path.clone();
+                                match rec.stop() {
+                                    Ok(()) => eprintln!("Recording saved: {path}"),
+                                    Err(e) => eprintln!("Recording stop error: {e}"),
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    let rec_label = egui::RichText::new("⏺ REC").strong();
+                    if ui.button(rec_label)
+                        .on_hover_text("Start recording the stereo output to a WAV file.")
+                        .clicked()
+                    {
+                        let default_name = "recording";
+                        let default_path = format!("recordings/{default_name}.wav");
+                        let sr = self.state.sample_rate.load(std::sync::atomic::Ordering::Relaxed);
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_title("Save recording as")
+                            .set_file_name(std::path::Path::new(&default_path)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("recording.wav"))
+                            .add_filter("WAV audio", &["wav"])
+                            .save_file()
+                        {
+                            let path_str = path.to_string_lossy().into_owned();
+                            match recorder::Recorder::start(path_str, sr) {
+                                Ok(rec) => {
+                                    if let Ok(mut guard) = self.recorder_sink.lock() {
+                                        *guard = Some(rec);
+                                    }
+                                }
+                                Err(e) => eprintln!("Failed to start recording: {e}"),
+                            }
+                        }
+                    }
                 }
             });
         });

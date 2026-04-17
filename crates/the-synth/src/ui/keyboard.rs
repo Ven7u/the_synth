@@ -48,6 +48,21 @@ impl SynthApp {
             egui::Key::G, egui::Key::H, egui::Key::J,
         ];
 
+        // Flush deferred NoteOns from last frame — the audio callback has had at least
+        // one buffer with gate=0 since the NoteOff, so the ADSR will see a real retrigger.
+        let deferred: Vec<u8> = self.pending_note_ons.drain(..).collect();
+        for n in deferred { self.push_note_on(n); }
+
+        // Space bar toggles freeze (when no text widget has focus).
+        let space_pressed = ctx.input(|inp| inp.key_pressed(egui::Key::Space));
+        if space_pressed && !ctx.memory(|m| m.focused().is_some()) {
+            self.kb_freeze = !self.kb_freeze;
+            if !self.kb_freeze {
+                let frozen: Vec<u8> = self.frozen_notes.drain().collect();
+                for n in frozen { self.push_note_off(n); }
+            }
+        }
+
         if self.kb_chord_mode {
             // Chord KB: A–G trigger chord degrees I–VII
             let mut current_degrees = std::collections::HashSet::<usize>::new();
@@ -58,14 +73,29 @@ impl SynthApp {
             });
             for &deg in &current_degrees {
                 if !self.chord_kb.kb_held.contains(&deg) {
-                    for m in self.chord_kb.chord_notes(deg) { self.push_note_on(m); }
+                    // New chord pressed: release frozen notes now, defer NoteOns to next frame
+                    // so the audio thread sees at least one buffer with gate=0.
+                    if self.kb_freeze {
+                        let frozen: Vec<u8> = self.frozen_notes.drain().collect();
+                        for n in frozen { self.push_note_off(n); }
+                        for m in self.chord_kb.chord_notes(deg) {
+                            self.pending_note_ons.push(m);
+                        }
+                    } else {
+                        for m in self.chord_kb.chord_notes(deg) { self.push_note_on(m); }
+                    }
                 }
             }
             let released: Vec<usize> = self.chord_kb.kb_held.iter()
                 .filter(|&&d| !current_degrees.contains(&d))
                 .copied().collect();
             for deg in released {
-                for m in self.chord_kb.chord_notes(deg) { self.push_note_off(m); }
+                let notes = self.chord_kb.chord_notes(deg);
+                if self.kb_freeze {
+                    for m in notes { self.frozen_notes.insert(m); }
+                } else {
+                    for m in notes { self.push_note_off(m); }
+                }
             }
             self.chord_kb.kb_held = current_degrees;
             // Release any piano notes that were held before switching mode
@@ -104,12 +134,27 @@ impl SynthApp {
                     }
                 });
                 for &midi in &current_held {
-                    if !self.piano_held_midi.contains(&midi) { self.push_note_on(midi); }
+                    if !self.piano_held_midi.contains(&midi) {
+                        // New note: release frozen set now, defer NoteOn to next frame.
+                        if self.kb_freeze {
+                            let frozen: Vec<u8> = self.frozen_notes.drain().collect();
+                            for n in frozen { self.push_note_off(n); }
+                            self.pending_note_ons.push(midi);
+                        } else {
+                            self.push_note_on(midi);
+                        }
+                    }
                 }
                 let released: Vec<u8> = self.piano_held_midi.iter()
                     .filter(|&&m| !current_held.contains(&m))
                     .copied().collect();
-                for midi in released { self.push_note_off(midi); }
+                for midi in released {
+                    if self.kb_freeze {
+                        self.frozen_notes.insert(midi);
+                    } else {
+                        self.push_note_off(midi);
+                    }
+                }
                 self.piano_held_midi = current_held;
             }
         }
@@ -134,6 +179,28 @@ impl SynthApp {
                 && !self.kb_chord_mode
             {
                 self.kb_chord_mode = true;
+            }
+
+            ui.separator();
+
+            // Freeze toggle
+            let freeze_color = if self.kb_freeze {
+                Color32::from_rgb(80, 160, 240)
+            } else {
+                Color32::GRAY
+            };
+            let freeze_label = egui::RichText::new("❄ Freeze")
+                .color(freeze_color)
+                .strong();
+            if ui.button(freeze_label)
+                .on_hover_text("Freeze held notes — they keep sounding until a new chord/note is played.\nSpace bar toggles. MIDI CC 64 (sustain pedal) also works.")
+                .clicked()
+            {
+                self.kb_freeze = !self.kb_freeze;
+                if !self.kb_freeze {
+                    let frozen: Vec<u8> = self.frozen_notes.drain().collect();
+                    for n in frozen { self.push_note_off(n); }
+                }
             }
 
             ui.separator();
@@ -215,15 +282,34 @@ impl SynthApp {
                     egui::FontId::monospace(9.0), Color32::from_gray(180));
 
                 if resp.is_pointer_button_down_on() && !is_held_mouse {
-                    if let Some(prev) = self.chord_kb.held_degree {
-                        for m in self.chord_kb.chord_notes(prev) { self.push_note_off(m); }
+                    if self.kb_freeze {
+                        // Release the frozen set now; defer NoteOns to next frame.
+                        let frozen: Vec<u8> = self.frozen_notes.drain().collect();
+                        for n in frozen { self.push_note_off(n); }
+                        if let Some(prev) = self.chord_kb.held_degree {
+                            for m in self.chord_kb.chord_notes(prev) {
+                                self.frozen_notes.insert(m);
+                            }
+                        }
+                        for m in self.chord_kb.chord_notes(degree) {
+                            self.pending_note_ons.push(m);
+                        }
+                    } else {
+                        if let Some(prev) = self.chord_kb.held_degree {
+                            for m in self.chord_kb.chord_notes(prev) { self.push_note_off(m); }
+                        }
+                        for m in self.chord_kb.chord_notes(degree) { self.push_note_on(m); }
                     }
                     self.chord_kb.held_degree = Some(degree);
-                    for m in self.chord_kb.chord_notes(degree) { self.push_note_on(m); }
                 }
                 if !resp.is_pointer_button_down_on() && is_held_mouse {
                     self.chord_kb.held_degree = None;
-                    for m in self.chord_kb.chord_notes(degree) { self.push_note_off(m); }
+                    let notes = self.chord_kb.chord_notes(degree);
+                    if self.kb_freeze {
+                        for m in notes { self.frozen_notes.insert(m); }
+                    } else {
+                        for m in notes { self.push_note_off(m); }
+                    }
                 }
             }
         });

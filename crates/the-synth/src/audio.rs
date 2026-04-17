@@ -6,14 +6,82 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample, Stream};
 use fundsp::prelude32::*;
 use fundsp::prelude::midi_hz;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use synth_engine::audio::build_synth_graph;
 use synth_engine::arp::{ArpState, ScaleWalker};
 use synth_control::{make_control_channel, ControlSender, ControlReceiver, ControlEvent, ParamId};
+use crate::recorder::Recorder;
+
+type RecorderSink = Arc<Mutex<Option<Recorder>>>;
 
 // Re-export so main.rs can keep its existing import unchanged.
 pub use synth_engine::audio::{AudioState, VOICE_COUNT};
+
+// ---------------------------------------------------------------------------
+// Voice allocation helpers
+// ---------------------------------------------------------------------------
+
+/// Trigger or retrigger a voice for `pitch`.
+///
+/// - Increments the pitch's hold count.
+/// - If the count was 0 (fresh note): allocates a slot and sets gate=1.0 immediately.
+/// - If the count was >0 (retrigger): sets gate=0.0 and starts a 4-sample countdown;
+///   the sample loop will flip the gate back to 1.0 once it expires, giving the ADSR
+///   a real 0→1 transition without a same-buffer NoteOff+NoteOn collision.
+fn trigger_note(
+    pitch: u8,
+    voice_notes: &mut [Option<u8>],
+    steal_idx: &mut usize,
+    pitch_hold_count: &mut [u8; 128],
+    retrigger_countdown: &mut [u8],
+    voice_freq_targets: &[fundsp::prelude32::Shared],
+    voice_gates: &[fundsp::prelude32::Shared],
+) {
+    let count = &mut pitch_hold_count[pitch as usize];
+    let was_zero = *count == 0;
+    *count = count.saturating_add(1);
+
+    let n = voice_notes.len();
+    let slot = voice_notes.iter().position(|&v| v == Some(pitch))
+        .or_else(|| voice_notes.iter().position(|v| v.is_none()))
+        .unwrap_or_else(|| {
+            let s = *steal_idx % n;
+            *steal_idx += 1;
+            s
+        });
+
+    voice_notes[slot] = Some(pitch);
+    voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
+
+    if was_zero {
+        voice_gates[slot].set(1.0);
+        retrigger_countdown[slot] = 0;
+    } else {
+        // Retrigger: brief silence so the ADSR sees a real gate edge.
+        voice_gates[slot].set(0.0);
+        retrigger_countdown[slot] = 4; // ~90 µs at 44.1 kHz — inaudible gap
+    }
+}
+
+/// Decrement the hold count for `pitch` and kill its gate only when count reaches 0.
+fn release_note(
+    pitch: u8,
+    voice_notes: &mut [Option<u8>],
+    pitch_hold_count: &mut [u8; 128],
+    voice_gates: &[fundsp::prelude32::Shared],
+) {
+    let count = &mut pitch_hold_count[pitch as usize];
+    if *count > 0 { *count -= 1; }
+    if *count == 0 {
+        for (slot, note) in voice_notes.iter_mut().enumerate() {
+            if *note == Some(pitch) {
+                voice_gates[slot].set(0.0);
+                break;
+            }
+        }
+    }
+}
 
 pub struct AudioEngine {
     pub state: Arc<AudioState>,
@@ -22,10 +90,10 @@ pub struct AudioEngine {
 }
 
 impl AudioEngine {
-    pub fn new() -> anyhow::Result<Self> {
+    pub fn new(recorder_sink: RecorderSink) -> anyhow::Result<Self> {
         let state = Arc::new(AudioState::new());
         let (tx, rx) = make_control_channel(1024);
-        let stream = build_stream(Arc::clone(&state), rx)?;
+        let stream = build_stream(Arc::clone(&state), rx, recorder_sink)?;
         stream.play()?;
         Ok(Self {
             state,
@@ -39,7 +107,7 @@ impl AudioEngine {
 // cpal stream
 // ---------------------------------------------------------------------------
 
-fn build_stream(state: Arc<AudioState>, rx: ControlReceiver) -> anyhow::Result<Stream> {
+fn build_stream(state: Arc<AudioState>, rx: ControlReceiver, recorder_sink: RecorderSink) -> anyhow::Result<Stream> {
     let host = cpal::default_host();
     let device = host
         .default_output_device()
@@ -48,9 +116,9 @@ fn build_stream(state: Arc<AudioState>, rx: ControlReceiver) -> anyhow::Result<S
     let sr = config.sample_rate().0 as f64;
 
     let stream = match config.sample_format() {
-        cpal::SampleFormat::F32 => make_stream::<f32>(&device, &config.into(), state, sr, rx)?,
-        cpal::SampleFormat::I16 => make_stream::<i16>(&device, &config.into(), state, sr, rx)?,
-        cpal::SampleFormat::U16 => make_stream::<u16>(&device, &config.into(), state, sr, rx)?,
+        cpal::SampleFormat::F32 => make_stream::<f32>(&device, &config.into(), state, sr, rx, recorder_sink)?,
+        cpal::SampleFormat::I16 => make_stream::<i16>(&device, &config.into(), state, sr, rx, recorder_sink)?,
+        cpal::SampleFormat::U16 => make_stream::<u16>(&device, &config.into(), state, sr, rx, recorder_sink)?,
         _ => anyhow::bail!("Unsupported sample format"),
     };
     Ok(stream)
@@ -62,6 +130,7 @@ fn make_stream<T>(
     state: Arc<AudioState>,
     sr: f64,
     rx: ControlReceiver,
+    recorder_sink: RecorderSink,
 ) -> anyhow::Result<Stream>
 where
     T: SizedSample + FromSample<f32>,
@@ -96,6 +165,16 @@ where
     let mut voice_notes: [Option<u8>; VOICE_COUNT] = [None; VOICE_COUNT];
     let mut steal_idx: usize = 0;
 
+    // Reference count per MIDI pitch: how many sources are currently holding it.
+    // A gate is only killed when the count reaches 0, so keyboard and sequencer
+    // can't accidentally cut each other off on shared pitches.
+    let mut pitch_hold_count: [u8; 128] = [0; 128];
+
+    // Per-voice retrigger countdown (in samples). When > 0 the gate is forced to
+    // 0.0; when it hits 0 the gate is set to 1.0. This gives the ADSR a real
+    // 0→1 transition even when a NoteOn arrives while the note is already playing.
+    let mut retrigger_countdown: [u8; VOICE_COUNT] = [0; VOICE_COUNT];
+
     // Arpeggiator and scale walker internal state (audio thread only).
     // Config is read each tick from state.arp / state.walker (Shared atomics).
     let mut arp    = ArpState::new();
@@ -105,10 +184,14 @@ where
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             // --- Release cleanup: free slots whose envelopes have finished ---
+            // Skip voices that are mid-retrigger — their gate is briefly 0 by design.
             for (slot, note) in voice_notes.iter_mut().enumerate() {
-                if note.is_some() && state.voice_gates[slot].value() < 0.5
+                if note.is_some()
+                    && retrigger_countdown[slot] == 0
+                    && state.voice_gates[slot].value() < 0.5
                     && state.amp_cursors[slot].value() < 0.5
                 {
+                    pitch_hold_count[note.unwrap() as usize] = 0;
                     *note = None;
                 }
             }
@@ -120,22 +203,9 @@ where
                         if state.arp.enabled.load(std::sync::atomic::Ordering::Relaxed) {
                             arp.note_on(pitch);
                         } else {
-                            // Ignore key repeat
-                            if voice_notes.iter().enumerate().any(|(s, &n)| {
-                                n == Some(pitch) && state.voice_gates[s].value() > 0.5
-                            }) {
-                                continue;
-                            }
-                            let slot = voice_notes.iter().position(|&n| n == Some(pitch))
-                                .or_else(|| voice_notes.iter().position(|n| n.is_none()))
-                                .unwrap_or_else(|| {
-                                    let s = steal_idx % VOICE_COUNT;
-                                    steal_idx += 1;
-                                    s
-                                });
-                            voice_notes[slot] = Some(pitch);
-                            state.voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
-                            state.voice_gates[slot].set(1.0);
+                            trigger_note(pitch, &mut voice_notes, &mut steal_idx,
+                                &mut pitch_hold_count, &mut retrigger_countdown,
+                                &state.voice_freq_targets, &state.voice_gates);
                         }
                     }
                     ControlEvent::NoteOff { pitch, track: _ } => {
@@ -143,12 +213,8 @@ where
                             let hold = state.arp.hold.load(std::sync::atomic::Ordering::Relaxed);
                             arp.note_off(pitch, hold);
                         } else {
-                            for (slot, note) in voice_notes.iter_mut().enumerate() {
-                                if *note == Some(pitch) {
-                                    state.voice_gates[slot].set(0.0);
-                                    break;
-                                }
-                            }
+                            release_note(pitch, &mut voice_notes,
+                                &mut pitch_hold_count, &state.voice_gates);
                         }
                     }
                     ControlEvent::SetParam { param, value } => {
@@ -165,22 +231,14 @@ where
                     }
                     ControlEvent::ArpRestart { .. } => {
                         if let Some(pitch) = arp.restart() {
-                            for (slot, note) in voice_notes.iter_mut().enumerate() {
-                                if *note == Some(pitch) {
-                                    state.voice_gates[slot].set(0.0);
-                                    break;
-                                }
-                            }
+                            release_note(pitch, &mut voice_notes,
+                                &mut pitch_hold_count, &state.voice_gates);
                         }
                     }
                     ControlEvent::WalkerRestart { .. } => {
                         if let Some(pitch) = walker.restart() {
-                            for (slot, note) in voice_notes.iter_mut().enumerate() {
-                                if *note == Some(pitch) {
-                                    state.voice_gates[slot].set(0.0);
-                                    break;
-                                }
-                            }
+                            release_note(pitch, &mut voice_notes,
+                                &mut pitch_hold_count, &state.voice_gates);
                         }
                     }
                 }
@@ -193,28 +251,13 @@ where
 
             for ev in [arp_ev, walk_ev] {
                 if let Some(pitch) = ev.note_off {
-                    for (slot, note) in voice_notes.iter_mut().enumerate() {
-                        if *note == Some(pitch) {
-                            state.voice_gates[slot].set(0.0);
-                            break;
-                        }
-                    }
+                    release_note(pitch, &mut voice_notes,
+                        &mut pitch_hold_count, &state.voice_gates);
                 }
                 if let Some(pitch) = ev.note_on {
-                    if !voice_notes.iter().enumerate().any(|(s, &n)| {
-                        n == Some(pitch) && state.voice_gates[s].value() > 0.5
-                    }) {
-                        let slot = voice_notes.iter().position(|&n| n == Some(pitch))
-                            .or_else(|| voice_notes.iter().position(|n| n.is_none()))
-                            .unwrap_or_else(|| {
-                                let s = steal_idx % VOICE_COUNT;
-                                steal_idx += 1;
-                                s
-                            });
-                        voice_notes[slot] = Some(pitch);
-                        state.voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
-                        state.voice_gates[slot].set(1.0);
-                    }
+                    trigger_note(pitch, &mut voice_notes, &mut steal_idx,
+                        &mut pitch_hold_count, &mut retrigger_countdown,
+                        &state.voice_freq_targets, &state.voice_gates);
                 }
             }
 
@@ -304,6 +347,17 @@ where
                     }
                 }
 
+                // Retrigger countdown: hold gate=0 for N samples then flip to 1,
+                // giving the ADSR a real 0→1 transition for a clean attack.
+                for vi in 0..VOICE_COUNT {
+                    if retrigger_countdown[vi] > 0 {
+                        retrigger_countdown[vi] -= 1;
+                        if retrigger_countdown[vi] == 0 {
+                            state.voice_gates[vi].set(1.0);
+                        }
+                    }
+                }
+
                 let (mut raw_l, mut raw_r) = graph.get_stereo();
 
                 // Peak metering: track pre-clip level
@@ -349,6 +403,12 @@ where
                         let len = buf.len();
                         buf[osc_idx % len] = l;
                         osc_idx = osc_idx.wrapping_add(1);
+                    }
+                }
+
+                if let Ok(rec) = recorder_sink.try_lock() {
+                    if let Some(rec) = rec.as_ref() {
+                        rec.push(l, r_out);
                     }
                 }
 

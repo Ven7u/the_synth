@@ -3,6 +3,8 @@
 //! Enable the `bevy` feature to get the plugin implementation:
 //! `synth-bevy = { path = "../synth-bevy", features = ["bevy"] }`
 
+pub(crate) mod recorder;
+
 #[cfg(feature = "bevy")]
 mod plugin;
 

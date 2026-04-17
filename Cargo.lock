@@ -7178,6 +7178,7 @@ dependencies = [
  "bevy_egui",
  "cpal",
  "fundsp",
+ "hound",
  "synth-control",
  "synth-engine",
 ]
@@ -7288,6 +7289,7 @@ dependencies = [
  "egui",
  "egui_dock",
  "fundsp",
+ "hound",
  "midir",
  "rfd",
  "serde",

@@ -16,6 +16,10 @@ use synth_control::{make_control_channel, ControlEvent, ControlReceiver, Control
 use synth_engine::arp::{ArpState, ScaleWalker};
 use synth_engine::audio::{build_synth_graph, AudioState, VOICE_COUNT as SYNTH_VOICE_COUNT};
 
+/// Shared recorder sink: `Some(Recorder)` while recording, `None` otherwise.
+/// The audio callback holds an `Arc` clone and calls `try_lock` each sample.
+type RecorderSink = Arc<Mutex<Option<crate::recorder::Recorder>>>;
+
 /// How a `SceneTransition` blends from the current scene to the target.
 ///
 /// | Mode | Volume dip | Sound during transition |
@@ -189,6 +193,21 @@ pub struct SynthTempo {
     pub bpm: f32,
 }
 
+/// Bevy resource that controls WAV recording.
+/// Send `SynthEvent::StartRecording { path }` / `StopRecording` to use it.
+#[derive(Resource)]
+pub struct SynthRecorderResource {
+    sink: RecorderSink,
+    sample_rate: u32,
+}
+
+impl SynthRecorderResource {
+    /// `true` while a recording is in progress.
+    pub fn is_recording(&self) -> bool {
+        self.sink.lock().map(|g| g.is_some()).unwrap_or(false)
+    }
+}
+
 #[derive(Message, Debug, Clone)]
 pub enum SynthEvent {
     NoteOn { track: u8, pitch: u8, velocity: u8 },
@@ -204,6 +223,11 @@ pub enum SynthEvent {
     /// Immediately advance the timeline to the next section, ignoring remaining phrase count.
     /// The Bevy timeline resource (if any) handles the actual state update each frame.
     TimelineAdvance,
+    /// Begin recording the stereo output to a WAV file at `path`.
+    /// If a recording is already active it is stopped first.
+    StartRecording { path: String },
+    /// Stop the active recording and finalise the WAV file.
+    StopRecording,
 }
 
 pub struct SynthPlugin;
@@ -227,6 +251,7 @@ fn setup_synth_runtime(world: &mut World) {
     let mut tempo = world.resource_mut::<SynthTempo>();
     let actual_sr = detect_output_sample_rate().unwrap_or(cfg.sample_rate_hz);
     let (control_tx, control_rx) = make_control_channel(cfg.control_capacity);
+    let recorder_sink: RecorderSink = Arc::new(Mutex::new(None));
 
     let (backend, synth_param, stream_res, scene_transition, ambient_beat_clock) = match cfg.backend {
         SynthBackendKind::Ambient => {
@@ -259,6 +284,7 @@ fn setup_synth_runtime(world: &mut World) {
                 control_rx,
                 actual_sr,
                 cfg.initial_bpm,
+                Arc::clone(&recorder_sink),
             );
             let (stream_and_clock, ambient_clock) = match stream_res {
                 Ok((s, c)) => (Ok(s), Some(c)),
@@ -274,7 +300,7 @@ fn setup_synth_runtime(world: &mut World) {
         }
         SynthBackendKind::Mono => {
             let state = Arc::new(AudioState::new());
-            let stream_res = build_mono_stream(Arc::clone(&state), control_rx, actual_sr);
+            let stream_res = build_mono_stream(Arc::clone(&state), control_rx, actual_sr, Arc::clone(&recorder_sink));
             (SynthBackendRuntime::Mono(state), SynthParam::default(), stream_res, None, None)
         }
     };
@@ -303,6 +329,10 @@ fn setup_synth_runtime(world: &mut World) {
         scene_transition,
         ambient_beat_clock,
     });
+    world.insert_resource(SynthRecorderResource {
+        sink: recorder_sink,
+        sample_rate: actual_sr as u32,
+    });
     if let Some(stream) = stream_opt {
         world.insert_non_send_resource(SynthAudioStream(stream));
     }
@@ -315,9 +345,11 @@ fn bevy_bridge_system(
     params: Option<Res<SynthParam>>,
     mut pending: ResMut<PendingEngineActions>,
     mut tempo: ResMut<SynthTempo>,
+    recorder: Option<ResMut<SynthRecorderResource>>,
 ) {
     let Some(runtime) = runtime else { return; };
     let Some(params) = params else { return; };
+    let mut recorder = recorder;
 
     for ev in events.read() {
         match ev {
@@ -389,6 +421,40 @@ fn bevy_bridge_system(
             SynthEvent::TimelineAdvance => {
                 params.force_timeline_advance
                     .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            SynthEvent::StartRecording { path } => {
+                if let Some(rec_res) = recorder.as_mut() {
+                    // Stop any in-progress recording first.
+                    if let Ok(mut guard) = rec_res.sink.lock() {
+                        if let Some(old) = guard.take() {
+                            if let Err(e) = old.stop() {
+                                warn!("synth-bevy: failed to finalise previous recording: {e}");
+                            }
+                        }
+                    }
+                    match crate::recorder::Recorder::start(path.clone(), rec_res.sample_rate) {
+                        Ok(rec) => {
+                            if let Ok(mut guard) = rec_res.sink.lock() {
+                                *guard = Some(rec);
+                            }
+                        }
+                        Err(e) => error!("synth-bevy: failed to start recording to '{path}': {e}"),
+                    }
+                }
+            }
+            SynthEvent::StopRecording => {
+                if let Some(rec_res) = recorder.as_mut() {
+                    if let Ok(mut guard) = rec_res.sink.lock() {
+                        if let Some(rec) = guard.take() {
+                            let path = rec.path.clone();
+                            if let Err(e) = rec.stop() {
+                                error!("synth-bevy: recording stop error: {e}");
+                            } else {
+                                info!("synth-bevy: recording saved to '{path}'");
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -496,6 +562,7 @@ fn build_ambient_stream(
     rx: ControlReceiver,
     sr: f64,
     initial_bpm: f32,
+    recorder_sink: RecorderSink,
 ) -> anyhow::Result<(Stream, BeatClockShared)> {
     let host = cpal::default_host();
     let device = host
@@ -505,13 +572,13 @@ fn build_ambient_stream(
 
     match config.sample_format() {
         cpal::SampleFormat::F32 => {
-            make_ambient_stream::<f32>(&device, &config.into(), engine, transition_plan, rx, sr, initial_bpm)
+            make_ambient_stream::<f32>(&device, &config.into(), engine, transition_plan, rx, sr, initial_bpm, recorder_sink)
         }
         cpal::SampleFormat::I16 => {
-            make_ambient_stream::<i16>(&device, &config.into(), engine, transition_plan, rx, sr, initial_bpm)
+            make_ambient_stream::<i16>(&device, &config.into(), engine, transition_plan, rx, sr, initial_bpm, recorder_sink)
         }
         cpal::SampleFormat::U16 => {
-            make_ambient_stream::<u16>(&device, &config.into(), engine, transition_plan, rx, sr, initial_bpm)
+            make_ambient_stream::<u16>(&device, &config.into(), engine, transition_plan, rx, sr, initial_bpm, recorder_sink)
         }
         _ => anyhow::bail!("Unsupported sample format"),
     }
@@ -525,6 +592,7 @@ fn make_ambient_stream<T>(
     rx: ControlReceiver,
     sr: f64,
     initial_bpm: f32,
+    recorder_sink: RecorderSink,
 ) -> anyhow::Result<(Stream, BeatClockShared)>
 where
     T: SizedSample + FromSample<f32>,
@@ -894,6 +962,11 @@ where
                     }
                 }
 
+                if let Ok(rec) = recorder_sink.try_lock() {
+                    if let Some(rec) = rec.as_ref() {
+                        rec.push(l, r);
+                    }
+                }
                 let left = T::from_sample(l);
                 let right = T::from_sample(r);
                 for (i, smp) in frame.iter_mut().enumerate() {
@@ -907,16 +980,16 @@ where
     Ok((stream, beat_clock_shared_for_runtime))
 }
 
-fn build_mono_stream(state: Arc<AudioState>, rx: ControlReceiver, sr: f64) -> anyhow::Result<Stream> {
+fn build_mono_stream(state: Arc<AudioState>, rx: ControlReceiver, sr: f64, recorder_sink: RecorderSink) -> anyhow::Result<Stream> {
     let host = cpal::default_host();
     let device = host
         .default_output_device()
         .ok_or_else(|| anyhow::anyhow!("No output device"))?;
     let config = device.default_output_config()?;
     match config.sample_format() {
-        cpal::SampleFormat::F32 => make_mono_stream::<f32>(&device, &config.into(), state, rx, sr),
-        cpal::SampleFormat::I16 => make_mono_stream::<i16>(&device, &config.into(), state, rx, sr),
-        cpal::SampleFormat::U16 => make_mono_stream::<u16>(&device, &config.into(), state, rx, sr),
+        cpal::SampleFormat::F32 => make_mono_stream::<f32>(&device, &config.into(), state, rx, sr, recorder_sink),
+        cpal::SampleFormat::I16 => make_mono_stream::<i16>(&device, &config.into(), state, rx, sr, recorder_sink),
+        cpal::SampleFormat::U16 => make_mono_stream::<u16>(&device, &config.into(), state, rx, sr, recorder_sink),
         _ => anyhow::bail!("Unsupported sample format"),
     }
 }
@@ -927,6 +1000,7 @@ fn make_mono_stream<T>(
     state: Arc<AudioState>,
     rx: ControlReceiver,
     sr: f64,
+    recorder_sink: RecorderSink,
 ) -> anyhow::Result<Stream>
 where
     T: SizedSample + FromSample<f32>,
@@ -1123,6 +1197,11 @@ where
                 }
                 let l = l.tanh() * lfo_amp;
                 let r = r.tanh() * lfo_amp;
+                if let Ok(rec) = recorder_sink.try_lock() {
+                    if let Some(rec) = rec.as_ref() {
+                        rec.push(l, r);
+                    }
+                }
                 let left = T::from_sample(l);
                 let right = T::from_sample(r);
                 for (i, smp) in frame.iter_mut().enumerate() {

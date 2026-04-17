@@ -15,6 +15,7 @@ synth-control  = { path = "../synth-control" }
 fundsp = { version = "0.23", features = ["files", "fft"] }
 cpal = "0.15"
 anyhow = "1"
+hound = "3"
 bevy = { version = "0.18", optional = true, default-features = true }
 bevy_egui = { version = "0.31", optional = true }
 
