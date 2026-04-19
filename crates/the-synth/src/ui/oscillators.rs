@@ -251,7 +251,7 @@ impl SynthApp {
         ui.horizontal(|ui| {
             for i in 0..3 {
                 let label = format!("O{}", i + 1);
-                if super::widgets::knob(ui, &mut self.osc_vol[i], 0.0..=1.0, &label, &self.theme)
+                if super::widgets::knob(ui, &mut self.osc_vol[i], 0.0..=1.0, &label, &self.theme, false)
                     .on_hover_text(format!("OSC {} volume in the mix.", i + 1))
                     .changed()
                 {
@@ -260,7 +260,7 @@ impl SynthApp {
                     }
                 }
             }
-            if super::widgets::knob(ui, &mut self.noise_vol, 0.0..=1.0, "Noise", &self.theme)
+            if super::widgets::knob(ui, &mut self.noise_vol, 0.0..=1.0, "Noise", &self.theme, false)
                 .on_hover_text("White noise volume. Adds breathiness, air, or full noise textures.")
                 .changed()
             {
@@ -270,13 +270,13 @@ impl SynthApp {
 
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            if super::widgets::knob(ui, &mut self.master_vol, 0.0..=1.0, "Vol", &self.theme)
+            if super::widgets::knob(ui, &mut self.master_vol, 0.0..=1.0, "Vol", &self.theme, false)
                 .on_hover_text("Master output volume.")
                 .changed()
             {
                 self.state.master_vol.set(self.master_vol);
             }
-            if super::widgets::knob(ui, &mut self.glide_time, 0.0..=0.5, "Glide", &self.theme)
+            if super::widgets::knob(ui, &mut self.glide_time, 0.0..=0.5, "Glide", &self.theme, false)
                 .on_hover_text("Glide time in seconds. Higher = slower pitch slide between notes.")
                 .changed()
             {

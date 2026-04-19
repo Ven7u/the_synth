@@ -43,14 +43,14 @@ impl SynthApp {
                 // Rate knob — hidden when synced, shown when free
                 let sync_on = self.lfo_sync_active();
                 if !sync_on {
-                    if super::widgets::knob(ui, &mut self.lfo_rate, 0.1..=20.0, "Rate", &self.theme)
+                    if super::widgets::knob(ui, &mut self.lfo_rate, 0.1..=20.0, "Rate", &self.theme, false)
                         .on_hover_text("LFO speed in Hz. 0.1 = very slow. 5 = fast vibrato. 20 = audio range.")
                         .changed()
                     {
                         self.state.lfo_rate.set(self.lfo_rate);
                     }
                 }
-                if super::widgets::knob(ui, &mut self.lfo_depth, 0.0..=1.0, "Depth", &self.theme)
+                if super::widgets::knob(ui, &mut self.lfo_depth, 0.0..=1.0, "Depth", &self.theme, false)
                     .on_hover_text("How strongly the LFO modulates its destination. 0 = off, 1 = full.")
                     .changed()
                 {
@@ -154,19 +154,19 @@ impl SynthApp {
 
         ui.add_enabled_ui(self.filter_enabled, |ui| {
             ui.horizontal(|ui| {
-                if super::widgets::knob(ui, &mut self.filter_cutoff, 80.0..=18000.0, "Cut", &self.theme)
+                if super::widgets::knob(ui, &mut self.filter_cutoff, 80.0..=18000.0, "Cut", &self.theme, true)
                     .on_hover_text("Cutoff frequency. 80 Hz = dark, 18000 Hz = fully open.")
                     .changed()
                 {
                     self.state.cutoff.set(self.filter_cutoff);
                 }
-                if super::widgets::knob(ui, &mut self.filter_q, 0.0..=0.95, "Res", &self.theme)
+                if super::widgets::knob(ui, &mut self.filter_q, 0.0..=0.95, "Res", &self.theme, false)
                     .on_hover_text("Resonance. 0 = none. 0.9+ = self-oscillation.")
                     .changed()
                 {
                     self.state.resonance.set(self.filter_q);
                 }
-                if super::widgets::knob(ui, &mut self.filter_env_amount, 0.0..=1.0, "Env", &self.theme)
+                if super::widgets::knob(ui, &mut self.filter_env_amount, 0.0..=1.0, "Env", &self.theme, false)
                     .on_hover_text("Filter envelope amount. 0 = no effect, 1 = full sweep.")
                     .changed()
                 {
@@ -182,7 +182,10 @@ impl SynthApp {
                 let delta = response.drag_delta();
                 let dx = delta.x / rect.width();
                 let dy = -delta.y / rect.height(); // invert: up = increase
-                self.filter_cutoff = (self.filter_cutoff + dx * (18000.0 - 80.0)).clamp(80.0, 18000.0);
+                let log_min = 80.0_f32.ln();
+                let log_max = 18000.0_f32.ln();
+                let log_cur = self.filter_cutoff.ln();
+                self.filter_cutoff = ((log_cur + dx * (log_max - log_min)).clamp(log_min, log_max)).exp();
                 self.filter_q = (self.filter_q + dy * 0.95).clamp(0.0, 0.95);
                 self.state.cutoff.set(self.filter_cutoff);
                 self.state.resonance.set(self.filter_q);
@@ -208,7 +211,7 @@ impl SynthApp {
                         Color32::from_gray(60)
                     }));
 
-                let tx = (self.filter_cutoff - 80.0) / (18000.0 - 80.0);
+                let tx = (self.filter_cutoff.ln() - 80.0_f32.ln()) / (18000.0_f32.ln() - 80.0_f32.ln());
                 let ty = 1.0 - self.filter_q / 0.95; // invert for screen coords
                 let px = rect.left() + tx * rect.width();
                 let py = rect.top() + ty * rect.height();

@@ -1,5 +1,6 @@
 use crate::SynthApp;
-use crate::sequencer::{SeqMode, ScaleType, NOTE_NAMES, DEGREE_LABELS, chord_name, chord_quality};
+use crate::sequencer::{SeqMode, ScaleType, NOTE_NAMES, DEGREE_LABELS, chord_name, chord_quality,
+    CHORD_KB_ROWS, CHORD_KB_COLS, ChordType};
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, Rounding, Sense, Stroke, Vec2};
 
@@ -64,49 +65,62 @@ impl SynthApp {
         }
 
         if self.kb_chord_mode {
-            // Chord KB: A–G trigger chord degrees I–VII
-            let mut current_degrees = std::collections::HashSet::<usize>::new();
+            // 3 rows × 7 cols grid:
+            //   Row 0 (triads):  A S D F G H J
+            //   Row 1 (7ths):    Q W E R T Y U
+            //   Row 2 (sus/add): Z X C V B N M
+            const ROW_KEYS: [[egui::Key; 7]; 3] = [
+                [egui::Key::Q, egui::Key::W, egui::Key::E, egui::Key::R,
+                 egui::Key::T, egui::Key::Y, egui::Key::U],
+                [egui::Key::A, egui::Key::S, egui::Key::D, egui::Key::F,
+                 egui::Key::G, egui::Key::H, egui::Key::J],
+                [egui::Key::Z, egui::Key::X, egui::Key::C, egui::Key::V,
+                 egui::Key::B, egui::Key::N, egui::Key::M],
+            ];
+
+            let mut current_pads = std::collections::HashSet::<(usize, usize)>::new();
             ctx.input(|inp| {
-                for (degree, &key) in WHITE_KEYS.iter().enumerate() {
-                    if inp.key_down(key) { current_degrees.insert(degree); }
+                for (row, keys) in ROW_KEYS.iter().enumerate() {
+                    for (col, &key) in keys.iter().enumerate() {
+                        if inp.key_down(key) { current_pads.insert((row, col)); }
+                    }
                 }
             });
-            for &deg in &current_degrees {
-                if !self.chord_kb.kb_held.contains(&deg) {
-                    // New chord pressed: release frozen notes now, defer NoteOns to next frame
-                    // so the audio thread sees at least one buffer with gate=0.
+
+            for &pad in &current_pads {
+                if !self.chord_kb.kb_held.contains(&pad) {
+                    let (row, col) = pad;
                     if self.kb_freeze {
                         let frozen: Vec<u8> = self.frozen_notes.drain().collect();
                         for n in frozen { self.push_note_off(n); }
-                        for m in self.chord_kb.chord_notes(deg) {
+                        for m in self.chord_kb.chord_notes_for(row, col) {
                             self.pending_note_ons.push(m);
                         }
                     } else {
-                        for m in self.chord_kb.chord_notes(deg) { self.push_note_on(m); }
+                        for m in self.chord_kb.chord_notes_for(row, col) { self.push_note_on(m); }
                     }
                 }
             }
-            let released: Vec<usize> = self.chord_kb.kb_held.iter()
-                .filter(|&&d| !current_degrees.contains(&d))
+            let released: Vec<(usize, usize)> = self.chord_kb.kb_held.iter()
+                .filter(|p| !current_pads.contains(p))
                 .copied().collect();
-            for deg in released {
-                let notes = self.chord_kb.chord_notes(deg);
+            for (row, col) in released {
+                let notes = self.chord_kb.chord_notes_for(row, col);
                 if self.kb_freeze {
                     for m in notes { self.frozen_notes.insert(m); }
                 } else {
                     for m in notes { self.push_note_off(m); }
                 }
             }
-            self.chord_kb.kb_held = current_degrees;
-            // Release any piano notes that were held before switching mode
+            self.chord_kb.kb_held = current_pads;
             let prev_midi: Vec<u8> = self.piano_held_midi.drain().collect();
             for m in prev_midi { self.push_note_off(m); }
         } else {
             // Piano mode — release chord notes if mode just switched
             if !self.chord_kb.kb_held.is_empty() {
-                let held: Vec<usize> = self.chord_kb.kb_held.drain().collect();
-                for deg in held {
-                    for m in self.chord_kb.chord_notes(deg) { self.push_note_off(m); }
+                let held: Vec<(usize, usize)> = self.chord_kb.kb_held.drain().collect();
+                for (row, col) in held {
+                    for m in self.chord_kb.chord_notes_for(row, col) { self.push_note_off(m); }
                 }
             }
             // ChordSeq live transpose: any key press sets the root note
@@ -206,8 +220,7 @@ impl SynthApp {
             ui.separator();
 
             if self.kb_chord_mode {
-                // Key + scale selectors for chord KB
-                ui.label("Key:").on_hover_text("Root note for the chord scale.");
+                ui.label("Key:");
                 egui::ComboBox::from_id_salt("chord_kb_root")
                     .selected_text(NOTE_NAMES[self.chord_kb.root as usize])
                     .show_ui(ui, |ui| {
@@ -222,7 +235,28 @@ impl SynthApp {
                         .color(if active { self.theme.c(&self.theme.accent_dim) } else { Color32::GRAY });
                     if ui.button(label).clicked() { self.chord_kb.scale = sc; }
                 }
-                ui.label(egui::RichText::new("  a s d f g h j = I–VII").weak().small());
+                ui.separator();
+                // Edit toggle
+                let edit_color = if self.chord_kb.edit_mode {
+                    Color32::from_rgb(240, 180, 60)
+                } else {
+                    Color32::GRAY
+                };
+                let edit_label = egui::RichText::new("✏ Edit").color(edit_color).strong();
+                if ui.button(edit_label)
+                    .on_hover_text("Edit mode: click any pad to change its chord type.")
+                    .clicked()
+                {
+                    self.chord_kb.edit_mode = !self.chord_kb.edit_mode;
+                    self.chord_kb.editing_pad = None;
+                }
+                let preview_label = egui::RichText::new(
+                    if self.chord_kb.show_piano_preview { "🎹 ▾" } else { "🎹 ▸" }
+                ).small();
+                if ui.button(preview_label).on_hover_text("Toggle piano preview").clicked() {
+                    self.chord_kb.show_piano_preview = !self.chord_kb.show_piano_preview;
+                }
+                ui.label(egui::RichText::new("  A–J / Q–U / Z–M = rows 1–3").weak().small());
             } else {
                 // Octave controls for piano
                 ui.label("Oct:").on_hover_text("Keyboard octave (1–7).");
@@ -244,75 +278,237 @@ impl SynthApp {
 
         if self.kb_chord_mode {
             self.draw_chord_pads(ui);
+            if self.chord_kb.show_piano_preview {
+                self.draw_chord_piano_preview(ui);
+            }
         } else {
             self.draw_piano_88(ui);
         }
     }
 
     fn draw_chord_pads(&mut self, ui: &mut egui::Ui) {
+        const KEY_HINTS: [[&str; CHORD_KB_COLS]; CHORD_KB_ROWS] = [
+            ["Q", "W", "E", "R", "T", "Y", "U"],
+            ["A", "S", "D", "F", "G", "H", "J"],
+            ["Z", "X", "C", "V", "B", "N", "M"],
+        ];
+        const ROW_LABELS: [&str; CHORD_KB_ROWS] = ["7ths", "Triads", "Sus/Add"];
+
+        let label_w = 48.0_f32;
         let spacing = ui.spacing().item_spacing.x;
-        let btn_w = ((ui.available_width() - spacing * 6.0) / 7.0).max(40.0);
-        let btn_h = 64.0;
+        let btn_w = ((ui.available_width() - label_w - spacing * 7.0) / 7.0).max(40.0);
+        let btn_h = 52.0;
 
-        ui.horizontal(|ui| {
-            for degree in 0..7 {
-                let (resp, painter) = ui.allocate_painter(
-                    Vec2::new(btn_w, btn_h), Sense::click_and_drag());
-                let r = resp.rect;
+        // Collect held state snapshot before mutable borrows below
+        let held_pad = self.chord_kb.held_pad;
+        let edit_mode = self.chord_kb.edit_mode;
+        let editing_pad = self.chord_kb.editing_pad;
 
-                let is_held_mouse = self.chord_kb.held_degree == Some(degree);
-                let is_held_kb    = self.chord_kb.kb_held.contains(&degree);
-                let is_held = is_held_mouse || is_held_kb;
-                let quality = chord_quality(self.chord_kb.scale, degree);
-                let bg = if is_held { self.theme.c(&self.theme.seq_current) }
-                    else if quality == "m" { self.theme.c(&self.theme.seq_kb_minor) }
-                    else if quality == "°" { self.theme.c(&self.theme.seq_kb_dim) }
-                    else { self.theme.c(&self.theme.seq_kb_major) };
-                painter.rect_filled(r, Rounding::same(8.0), bg);
-                painter.rect_stroke(r, Rounding::same(8.0),
-                    Stroke::new(if is_held { 2.0 } else { 1.0 },
-                    if is_held { Color32::WHITE } else { Color32::from_gray(80) }));
+        egui::Grid::new("chord_kb_grid")
+            .num_columns(CHORD_KB_COLS + 1)
+            .spacing([spacing, 2.0])
+            .show(ui, |ui| {
+        for row in 0..CHORD_KB_ROWS {
+            // Fixed-width row label cell
+            ui.allocate_ui_with_layout(
+                Vec2::new(label_w, btn_h),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    ui.label(egui::RichText::new(ROW_LABELS[row])
+                        .weak().small()
+                        .color(Color32::from_gray(120)));
+                },
+            );
 
-                let cname = chord_name(self.chord_kb.root, self.chord_kb.scale, degree);
-                painter.text(egui::pos2(r.center().x, r.center().y - 8.0),
-                    egui::Align2::CENTER_CENTER, &cname,
-                    egui::FontId::proportional(13.0), Color32::WHITE);
-                painter.text(egui::pos2(r.center().x, r.center().y + 10.0),
-                    egui::Align2::CENTER_CENTER, DEGREE_LABELS[degree],
-                    egui::FontId::monospace(9.0), Color32::from_gray(180));
+                for col in 0..CHORD_KB_COLS {
+                    let (resp, painter) = ui.allocate_painter(
+                        Vec2::new(btn_w, btn_h), Sense::click_and_drag());
+                    let r = resp.rect;
 
-                if resp.is_pointer_button_down_on() && !is_held_mouse {
-                    if self.kb_freeze {
-                        // Release the frozen set now; defer NoteOns to next frame.
-                        let frozen: Vec<u8> = self.frozen_notes.drain().collect();
-                        for n in frozen { self.push_note_off(n); }
-                        if let Some(prev) = self.chord_kb.held_degree {
-                            for m in self.chord_kb.chord_notes(prev) {
-                                self.frozen_notes.insert(m);
+                    let is_held_mouse = held_pad == Some((row, col));
+                    let is_held_kb = self.chord_kb.kb_held.contains(&(row, col));
+                    let is_held = is_held_mouse || is_held_kb;
+                    let is_editing = editing_pad == Some((row, col));
+
+                    let quality = chord_quality(self.chord_kb.scale, col);
+                    let bg = if is_held { self.theme.c(&self.theme.seq_current) }
+                        else if is_editing { Color32::from_rgb(80, 60, 20) }
+                        else if quality == "m" { self.theme.c(&self.theme.seq_kb_minor) }
+                        else if quality == "°" { self.theme.c(&self.theme.seq_kb_dim) }
+                        else { self.theme.c(&self.theme.seq_kb_major) };
+                    painter.rect_filled(r, Rounding::same(6.0), bg);
+                    let stroke_color = if is_held { Color32::WHITE }
+                        else if is_editing { Color32::from_rgb(240, 180, 60) }
+                        else { Color32::from_gray(80) };
+                    painter.rect_stroke(r, Rounding::same(6.0),
+                        Stroke::new(if is_held || is_editing { 2.0 } else { 1.0 }, stroke_color));
+
+                    // Chord name
+                    let cname = chord_name(self.chord_kb.root, self.chord_kb.scale, col);
+                    let chord_type = self.chord_kb.pads[row][col].chord_type;
+                    let display = if chord_type == ChordType::Triad {
+                        cname
+                    } else {
+                        format!("{} {}", cname, chord_type.label())
+                    };
+                    painter.text(egui::pos2(r.center().x, r.top() + 14.0),
+                        egui::Align2::CENTER_CENTER, &display,
+                        egui::FontId::proportional(11.0), Color32::WHITE);
+
+                    // Degree label
+                    painter.text(egui::pos2(r.center().x, r.top() + 28.0),
+                        egui::Align2::CENTER_CENTER, DEGREE_LABELS[col],
+                        egui::FontId::monospace(9.0), Color32::from_gray(160));
+
+                    // Key hint (bottom right corner)
+                    painter.text(egui::pos2(r.right() - 5.0, r.bottom() - 4.0),
+                        egui::Align2::RIGHT_BOTTOM, KEY_HINTS[row][col],
+                        egui::FontId::monospace(8.0), Color32::from_gray(110));
+
+                    // Interaction
+                    if edit_mode {
+                        if resp.clicked() {
+                            self.chord_kb.editing_pad = if is_editing { None } else { Some((row, col)) };
+                        }
+                    } else {
+                        if resp.is_pointer_button_down_on() && !is_held_mouse {
+                            if self.kb_freeze {
+                                let frozen: Vec<u8> = self.frozen_notes.drain().collect();
+                                for n in frozen { self.push_note_off(n); }
+                                if let Some((pr, pc)) = self.chord_kb.held_pad {
+                                    for m in self.chord_kb.chord_notes_for(pr, pc) {
+                                        self.frozen_notes.insert(m);
+                                    }
+                                }
+                                for m in self.chord_kb.chord_notes_for(row, col) {
+                                    self.pending_note_ons.push(m);
+                                }
+                            } else {
+                                if let Some((pr, pc)) = self.chord_kb.held_pad {
+                                    for m in self.chord_kb.chord_notes_for(pr, pc) { self.push_note_off(m); }
+                                }
+                                for m in self.chord_kb.chord_notes_for(row, col) { self.push_note_on(m); }
+                            }
+                            self.chord_kb.held_pad = Some((row, col));
+                        }
+                        if !resp.is_pointer_button_down_on() && is_held_mouse {
+                            self.chord_kb.held_pad = None;
+                            let notes = self.chord_kb.chord_notes_for(row, col);
+                            if self.kb_freeze {
+                                for m in notes { self.frozen_notes.insert(m); }
+                            } else {
+                                for m in notes { self.push_note_off(m); }
                             }
                         }
-                        for m in self.chord_kb.chord_notes(degree) {
-                            self.pending_note_ons.push(m);
-                        }
-                    } else {
-                        if let Some(prev) = self.chord_kb.held_degree {
-                            for m in self.chord_kb.chord_notes(prev) { self.push_note_off(m); }
-                        }
-                        for m in self.chord_kb.chord_notes(degree) { self.push_note_on(m); }
-                    }
-                    self.chord_kb.held_degree = Some(degree);
-                }
-                if !resp.is_pointer_button_down_on() && is_held_mouse {
-                    self.chord_kb.held_degree = None;
-                    let notes = self.chord_kb.chord_notes(degree);
-                    if self.kb_freeze {
-                        for m in notes { self.frozen_notes.insert(m); }
-                    } else {
-                        for m in notes { self.push_note_off(m); }
                     }
                 }
+            ui.end_row();
+        }
+        }); // end Grid
+
+        // Edit popover
+        if let Some((row, col)) = self.chord_kb.editing_pad {
+            egui::Window::new("Chord type")
+                .id(egui::Id::new("chord_kb_edit_popover"))
+                .collapsible(false)
+                .resizable(false)
+                .show(ui.ctx(), |ui| {
+                    ui.label(format!("{} — {}", DEGREE_LABELS[col], ROW_LABELS[row]));
+                    ui.separator();
+                    for &ct in ChordType::all() {
+                        let active = self.chord_kb.pads[row][col].chord_type == ct;
+                        let label = egui::RichText::new(ct.label())
+                            .color(if active { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
+                        if ui.button(label).clicked() {
+                            self.chord_kb.pads[row][col].chord_type = ct;
+                            self.chord_kb.editing_pad = None;
+                            self.chord_kb.edit_mode = false;
+                        }
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.chord_kb.editing_pad = None;
+                        self.chord_kb.edit_mode = false;
+                    }
+                });
+        }
+    }
+
+    /// Read-only piano strip showing which MIDI notes are currently active in chord KB mode.
+    fn draw_chord_piano_preview(&mut self, ui: &mut egui::Ui) {
+        // Collect active notes: frozen + currently held pads
+        let mut active: std::collections::HashSet<u8> = self.frozen_notes.clone();
+        if let Some((row, col)) = self.chord_kb.held_pad {
+            for m in self.chord_kb.chord_notes_for(row, col) { active.insert(m); }
+        }
+        for &(row, col) in &self.chord_kb.kb_held.clone() {
+            for m in self.chord_kb.chord_notes_for(row, col) { active.insert(m); }
+        }
+
+        let num_white = count_white_keys();
+        let available_w = ui.available_width();
+        let white_w = (available_w / num_white as f32).max(6.0).min(20.0);
+        let white_h = 36.0_f32;
+        let black_w = white_w * 0.62;
+        let black_h = white_h * 0.60;
+        let total_width = white_w * num_white as f32;
+
+        let (resp, painter) = ui.allocate_painter(
+            Vec2::new(total_width, white_h + 2.0),
+            Sense::hover(),
+        );
+        let origin = resp.rect.left_top();
+        let accent = self.theme.c(&self.theme.accent);
+
+        let mut white_key_x: [f32; 128] = [0.0; 128];
+        let mut white_x = 0.0_f32;
+
+        // Pass 1: white keys
+        for midi in PIANO_FIRST_MIDI..=PIANO_LAST_MIDI {
+            if !is_white_key(midi) { continue; }
+            let x = white_x;
+            white_key_x[midi as usize] = x;
+            white_x += white_w;
+
+            let rect = Rect::from_min_size(
+                origin + Vec2::new(x + 0.5, 1.0),
+                Vec2::new(white_w - 1.0, white_h - 2.0),
+            );
+            let pressed = active.contains(&midi);
+            let fill = if pressed { accent } else { Color32::from_rgb(230, 230, 230) };
+            painter.rect_filled(rect, Rounding::same(2.0), fill);
+            painter.rect_stroke(rect, Rounding::same(2.0),
+                Stroke::new(0.5, Color32::from_rgb(160, 160, 160)));
+
+            if midi % 12 == 0 {
+                let octave = (midi / 12) as i32 - 1;
+                painter.text(
+                    Pos2::new(rect.center().x, rect.bottom() - 3.0),
+                    egui::Align2::CENTER_BOTTOM,
+                    format!("C{octave}"),
+                    egui::FontId::proportional(if white_w > 12.0 { 7.0 } else { 6.0 }),
+                    Color32::from_rgb(120, 120, 120),
+                );
             }
-        });
+        }
+
+        // Pass 2: black keys
+        for midi in PIANO_FIRST_MIDI..=PIANO_LAST_MIDI {
+            if is_white_key(midi) { continue; }
+            let white_below = midi - 1;
+            if !is_white_key(white_below) { continue; }
+            let x = white_key_x[white_below as usize] + white_w * 0.6;
+            let rect = Rect::from_min_size(
+                origin + Vec2::new(x, 1.0),
+                Vec2::new(black_w, black_h),
+            );
+            let pressed = active.contains(&midi);
+            let fill = if pressed {
+                Color32::from_rgba_premultiplied(accent.r(), accent.g(), accent.b(), 220)
+            } else {
+                Color32::from_rgb(25, 25, 25)
+            };
+            painter.rect_filled(rect, Rounding::same(1.5), fill);
+        }
     }
 
     /// Draw a full 88-key piano (A0–C8) with the active keyboard range highlighted.

@@ -17,6 +17,7 @@ pub fn knob(
     range: std::ops::RangeInclusive<f32>,
     label: &str,
     theme: &SynthTheme,
+    logarithmic: bool,
 ) -> Response {
     let desired_size = Vec2::new(44.0, 56.0);
     let (rect, mut response) = ui.allocate_exact_size(desired_size, Sense::click_and_drag());
@@ -26,17 +27,32 @@ pub fn knob(
 
     let old_value = *value;
 
+    let log_t = |v: f32| -> f32 {
+        if logarithmic && *range.start() > 0.0 {
+            (v / *range.start()).ln() / (*range.end() / *range.start()).ln()
+        } else {
+            (v - *range.start()) / (*range.end() - *range.start())
+        }
+    };
+    let log_v = |t: f32| -> f32 {
+        if logarithmic && *range.start() > 0.0 {
+            *range.start() * (*range.end() / *range.start()).powf(t)
+        } else {
+            *range.start() + t * (*range.end() - *range.start())
+        }
+    };
+
     // Handle drag input.
     if response.dragged() {
         let delta = -response.drag_delta().y; // up = increase
         let speed = if ui.input(|i| i.modifiers.shift) { 0.001 } else { 0.005 };
-        let range_span = *range.end() - *range.start();
-        *value = (*value + delta * speed * range_span).clamp(*range.start(), *range.end());
+        let t = (log_t(*value) + delta * speed).clamp(0.0, 1.0);
+        *value = log_v(t).clamp(*range.start(), *range.end());
     }
 
     // Double-click to reset to midpoint.
     if response.double_clicked() {
-        *value = (*range.start() + *range.end()) * 0.5;
+        *value = log_v(0.5);
     }
 
     if (*value - old_value).abs() > f32::EPSILON {
@@ -48,11 +64,7 @@ pub fn knob(
 
         // Normalize value to 0..1.
         let range_span = *range.end() - *range.start();
-        let t = if range_span > 0.0 {
-            (*value - *range.start()) / range_span
-        } else {
-            0.0
-        };
+        let t = if range_span > 0.0 { log_t(*value) } else { 0.0 };
 
         // Arc geometry: 270 degrees, starting from bottom-left going clockwise.
         let start_angle = PI * 0.75;    // 135 degrees (bottom-left)
