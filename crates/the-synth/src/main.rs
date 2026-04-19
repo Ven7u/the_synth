@@ -127,14 +127,21 @@ pub(crate) struct SynthApp {
     // Noise
     pub(crate) noise_vol: f32,
 
-    // LFO
+    // LFO 1
     pub(crate) lfo_enabled: bool,
     pub(crate) lfo_rate: f32,
     pub(crate) lfo_depth: f32,
     pub(crate) lfo_shape: usize,    // 0=sin 1=tri 2=saw
     pub(crate) lfo_dest: usize,     // 0=pitch 1=filter 2=amp
-    pub(crate) lfo_sync: bool,      // per-component sync toggle
-    pub(crate) lfo_division: usize, // index into LFO_SYNC_DIVISIONS
+    pub(crate) lfo_sync: bool,
+    pub(crate) lfo_division: usize,
+
+    // LFO 2
+    pub(crate) lfo2_enabled: bool,
+    pub(crate) lfo2_rate: f32,
+    pub(crate) lfo2_depth: f32,
+    pub(crate) lfo2_shape: usize,
+    pub(crate) lfo2_dest: usize,
 
     pub(crate) filter_enabled: bool,
 
@@ -249,6 +256,7 @@ pub(crate) struct SynthApp {
     pub(crate) fx_reverb_size: f32,
     pub(crate) fx_reverb_damp: f32,
     pub(crate) fx_reverb_mix: f32,
+    pub(crate) fx_reverb_predelay: f32,
 
     // Shimmer reverb (independent from plain reverb)
     pub(crate) fx_shimmer_on: bool,
@@ -316,7 +324,12 @@ impl SynthApp {
             lfo_shape: 0,
             lfo_dest: 1,
             lfo_sync: false,
-            lfo_division: 4, // default: 1/4 note
+            lfo_division: 4,
+            lfo2_enabled: false,
+            lfo2_rate: 0.3,
+            lfo2_depth: 0.0,
+            lfo2_shape: 0,
+            lfo2_dest: 2, // amp (tremolo)
             filter_enabled: true,
             filter_cutoff: 3000.0,
             filter_q: 0.3,
@@ -398,6 +411,7 @@ impl SynthApp {
             fx_reverb_size: 0.6,
             fx_reverb_damp: 0.5,
             fx_reverb_mix: 0.4,
+            fx_reverb_predelay: 0.0,
             fx_shimmer_on: false,
             fx_shimmer_size: 0.7,
             fx_shimmer_damp: 0.4,
@@ -901,6 +915,11 @@ impl SynthApp {
             lfo_depth:          self.lfo_depth,
             lfo_shape:          self.lfo_shape,
             lfo_dest:           self.lfo_dest,
+            lfo2_enabled:       self.lfo2_enabled,
+            lfo2_rate:          self.lfo2_rate,
+            lfo2_depth:         self.lfo2_depth,
+            lfo2_shape:         self.lfo2_shape,
+            lfo2_dest:          self.lfo2_dest,
             filter_enabled:     self.filter_enabled,
             filter_cutoff:      self.filter_cutoff,
             filter_q:           self.filter_q,
@@ -932,6 +951,7 @@ impl SynthApp {
             fx_reverb_size:     self.fx_reverb_size,
             fx_reverb_damp:     self.fx_reverb_damp,
             fx_reverb_mix:      self.fx_reverb_mix,
+            fx_reverb_predelay: self.fx_reverb_predelay,
             fx_shimmer_on:      self.fx_shimmer_on,
             fx_shimmer_size:    self.fx_shimmer_size,
             fx_shimmer_damp:    self.fx_shimmer_damp,
@@ -973,6 +993,11 @@ impl SynthApp {
         self.lfo_depth          = p.lfo_depth;
         self.lfo_shape          = p.lfo_shape;
         self.lfo_dest           = p.lfo_dest;
+        self.lfo2_enabled       = p.lfo2_enabled;
+        self.lfo2_rate          = p.lfo2_rate;
+        self.lfo2_depth         = p.lfo2_depth;
+        self.lfo2_shape         = p.lfo2_shape;
+        self.lfo2_dest          = p.lfo2_dest;
         self.filter_enabled     = p.filter_enabled;
         self.filter_cutoff      = p.filter_cutoff;
         self.filter_q           = p.filter_q;
@@ -999,6 +1024,10 @@ impl SynthApp {
         s.lfo_depth.set(if self.lfo_enabled { self.lfo_depth } else { 0.0 });
         s.lfo_shape.store(self.lfo_shape as u8, std::sync::atomic::Ordering::Relaxed);
         s.lfo_dest.store(self.lfo_dest as u8, std::sync::atomic::Ordering::Relaxed);
+        s.lfo2_rate.set(self.lfo2_rate);
+        s.lfo2_depth.set(if self.lfo2_enabled { self.lfo2_depth } else { 0.0 });
+        s.lfo2_shape.store(self.lfo2_shape as u8, std::sync::atomic::Ordering::Relaxed);
+        s.lfo2_dest.store(self.lfo2_dest as u8, std::sync::atomic::Ordering::Relaxed);
         s.cutoff.set(if self.filter_enabled { self.filter_cutoff } else { 18000.0 });
         s.resonance.set(if self.filter_enabled { self.filter_q } else { 0.0 });
         s.filter_env_amount.set(self.filter_env_amount);
@@ -1037,6 +1066,7 @@ impl SynthApp {
             self.fx_reverb_size     = p.fx_reverb_size;
             self.fx_reverb_damp     = p.fx_reverb_damp;
             self.fx_reverb_mix      = p.fx_reverb_mix;
+            self.fx_reverb_predelay = p.fx_reverb_predelay;
             self.fx_shimmer_on      = p.fx_shimmer_on;
             self.fx_shimmer_size    = p.fx_shimmer_size;
             self.fx_shimmer_damp    = p.fx_shimmer_damp;
@@ -1069,6 +1099,7 @@ impl SynthApp {
             s.fx_reverb_size.set_value(self.fx_reverb_size);
             s.fx_reverb_damp.set_value(self.fx_reverb_damp);
             s.fx_reverb_mix.set_value(if self.fx_reverb_on { self.fx_reverb_mix } else { 0.0 });
+            s.fx_reverb_predelay.set_value(self.fx_reverb_predelay);
             s.fx_shimmer.size.set_value(self.fx_shimmer_size);
             s.fx_shimmer.damp.set_value(self.fx_shimmer_damp);
             s.fx_shimmer.shimmer.set_value(if self.fx_shimmer_on { self.fx_shimmer_amt } else { 0.0 });

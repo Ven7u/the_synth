@@ -99,11 +99,12 @@ impl<'a> TabViewer for SynthTabViewer<'a> {
                 });
             }
             Tab::Modulation => {
-                ui.columns(4, |cols| {
+                ui.columns(5, |cols| {
                     self.app.ui_lfo_panel(&mut cols[0]);
-                    self.app.ui_filter_panel(&mut cols[1]);
-                    self.app.ui_adsr_panel(&mut cols[2], "Filter Env", &mut [0usize, 1, 2, 3], true);
-                    self.app.ui_adsr_panel(&mut cols[3], "Amp Env", &mut [0usize, 1, 2, 3], false);
+                    self.app.ui_lfo2_panel(&mut cols[1]);
+                    self.app.ui_filter_panel(&mut cols[2]);
+                    self.app.ui_adsr_panel(&mut cols[3], "Filter Env", &mut [0usize, 1, 2, 3], true);
+                    self.app.ui_adsr_panel(&mut cols[4], "Amp Env", &mut [0usize, 1, 2, 3], false);
                 });
             }
             Tab::Sequencer => {

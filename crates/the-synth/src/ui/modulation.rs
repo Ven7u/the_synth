@@ -131,6 +131,56 @@ impl SynthApp {
         });
     }
 
+    pub fn ui_lfo2_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            let on = self.lfo2_enabled;
+            let label = egui::RichText::new("LFO 2").strong()
+                .color(if on { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
+            if ui.button(label)
+                .on_hover_text("Second LFO — runs independently of LFO 1. Useful for simultaneous tremolo + filter wobble.")
+                .clicked()
+            {
+                self.lfo2_enabled = !on;
+                self.state.lfo2_depth.set(if self.lfo2_enabled { self.lfo2_depth } else { 0.0 });
+            }
+        });
+
+        ui.add_enabled_ui(self.lfo2_enabled, |ui| {
+            ui.horizontal(|ui| {
+                if super::widgets::knob(ui, &mut self.lfo2_rate, 0.01..=20.0, "Rate", &self.theme, true)
+                    .on_hover_text("LFO 2 rate in Hz. Go as slow as 0.01 Hz (100 s cycle) for epic breathing swells.")
+                    .changed()
+                {
+                    self.state.lfo2_rate.set(self.lfo2_rate);
+                }
+                if super::widgets::knob(ui, &mut self.lfo2_depth, 0.0..=1.0, "Depth", &self.theme, false)
+                    .on_hover_text("LFO 2 modulation depth.")
+                    .changed()
+                {
+                    self.state.lfo2_depth.set(self.lfo2_depth);
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Shape:");
+                for (s, label) in [(0usize, "Sin"), (1, "Tri"), (2, "Saw")] {
+                    if ui.selectable_label(self.lfo2_shape == s, label).clicked() {
+                        self.lfo2_shape = s;
+                        self.state.lfo2_shape.store(s as u8, Ordering::Relaxed);
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("→");
+                for (d, label) in [(0usize, "Pitch"), (1, "Filter"), (2, "Amp")] {
+                    if ui.selectable_label(self.lfo2_dest == d, label).clicked() {
+                        self.lfo2_dest = d;
+                        self.state.lfo2_dest.store(d as u8, Ordering::Relaxed);
+                    }
+                }
+            });
+        });
+    }
+
     pub fn ui_filter_panel(&mut self, ui: &mut egui::Ui) {
         // Header toggle
         ui.horizontal(|ui| {
@@ -267,7 +317,7 @@ impl SynthApp {
             "Release — time to fade out after key is released.",
         ];
         let ranges: [std::ops::RangeInclusive<f32>; 4] =
-            [0.001..=2.0, 0.001..=2.0, 0.0..=1.0, 0.001..=4.0];
+            [0.001..=10.0, 0.001..=5.0, 0.0..=1.0, 0.001..=15.0];
 
         ui.horizontal(|ui| {
             for i in 0..4 {

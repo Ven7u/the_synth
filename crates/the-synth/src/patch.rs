@@ -39,12 +39,19 @@ pub struct Patch {
     // Noise
     pub noise_vol: f32,
 
-    // LFO
+    // LFO 1
     pub lfo_enabled: bool,
     pub lfo_rate:    f32,
     pub lfo_depth:   f32,
     pub lfo_shape:   usize,
     pub lfo_dest:    usize,
+
+    // LFO 2
+    #[serde(default)] pub lfo2_enabled: bool,
+    #[serde(default = "default_lfo2_rate")]  pub lfo2_rate:  f32,
+    #[serde(default)] pub lfo2_depth:  f32,
+    #[serde(default)] pub lfo2_shape:  usize,
+    #[serde(default = "default_lfo2_dest")]  pub lfo2_dest:  usize,
 
     // Filter
     pub filter_enabled:    bool,
@@ -80,9 +87,10 @@ pub struct Patch {
     #[serde(default = "default_delay_fb")]    pub fx_delay_feedback: f32,
     #[serde(default)] pub fx_delay_mix:       f32,
     #[serde(default)] pub fx_reverb_on:       bool,
-    #[serde(default = "default_reverb_size")] pub fx_reverb_size:    f32,
-    #[serde(default = "default_reverb_damp")] pub fx_reverb_damp:    f32,
+    #[serde(default = "default_reverb_size")] pub fx_reverb_size:     f32,
+    #[serde(default = "default_reverb_damp")] pub fx_reverb_damp:     f32,
     #[serde(default)] pub fx_reverb_mix:      f32,
+    #[serde(default)] pub fx_reverb_predelay: f32,
 
     // Shimmer reverb (independent from plain reverb)
     #[serde(default)] pub fx_shimmer_on:    bool,
@@ -102,6 +110,8 @@ pub struct Patch {
     #[serde(default = "default_crystal_pitch")] pub fx_crystal_pitch: u8,
 }
 
+fn default_lfo2_rate() -> f32 { 0.3 }
+fn default_lfo2_dest() -> usize { 2 }
 fn default_overdrive_drive()  -> f32 { 3.0 }
 fn default_distortion_drive() -> f32 { 8.0 }
 fn default_tone()             -> f32 { 0.8 }

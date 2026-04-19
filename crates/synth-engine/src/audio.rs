@@ -56,7 +56,7 @@ pub struct AudioState {
     pub fenv_sustain: Shared,
     pub fenv_release: Shared,
 
-    // LFO
+    // LFO 1
     pub lfo_rate: Shared,         // 0.1..20 Hz (free mode) or computed from division (synced)
     pub lfo_depth: Shared,        // 0.0..1.0
     pub lfo_shape: Arc<AtomicU8>, // 0=sin 1=tri 2=saw
@@ -67,6 +67,12 @@ pub struct AudioState {
     pub lfo_division: Arc<AtomicU8>,
     // Written by callback each buffer; read by graph
     pub lfo_pitch_mult: Shared,   // frequency multiplier (1.0 = no pitch mod)
+
+    // LFO 2
+    pub lfo2_rate: Shared,         // 0.01..20 Hz
+    pub lfo2_depth: Shared,        // 0.0..1.0
+    pub lfo2_shape: Arc<AtomicU8>, // 0=sin 1=tri 2=saw
+    pub lfo2_dest: Arc<AtomicU8>,  // 0=pitch 1=filter 2=amp
 
     // Voice target frequencies — UI writes here; callback smooths to voice_freqs for glide
     pub voice_freq_targets: Vec<Shared>,
@@ -145,9 +151,10 @@ pub struct AudioState {
     /// Written by the audio callback each buffer when sync is active;
     /// FxChain reads this instead of fx_delay_time. Units: seconds.
     pub fx_delay_synced_time: Shared,
-    pub fx_reverb_size:    Shared, // 0.0..1.0 (room size)
-    pub fx_reverb_damp:    Shared, // 0.0..1.0 (high-freq damping)
-    pub fx_reverb_mix:     Shared,
+    pub fx_reverb_size:     Shared, // 0.0..1.0 (room size)
+    pub fx_reverb_damp:     Shared, // 0.0..1.0 (high-freq damping)
+    pub fx_reverb_mix:      Shared,
+    pub fx_reverb_predelay: Shared, // 0.0..0.1 (seconds, 0–100 ms)
 
     // Shimmer reverb (extends the standard reverb with pitch-shifted feedback)
     pub fx_shimmer:        ShimmerShared,
@@ -228,6 +235,10 @@ impl AudioState {
             lfo_sync: Arc::new(AtomicU8::new(0)),
             lfo_division: Arc::new(AtomicU8::new(ClockDivision::Quarter.to_u8())),
             lfo_pitch_mult: shared(1.0),
+            lfo2_rate: shared(0.3),
+            lfo2_depth: shared(0.0),
+            lfo2_shape: Arc::new(AtomicU8::new(0)),
+            lfo2_dest: Arc::new(AtomicU8::new(2)), // amp (tremolo)
             voice_freq_targets: (0..VOICE_COUNT).map(|_| shared(440.0)).collect(),
             adsr_attack: shared(0.01),
             adsr_decay: shared(0.15),
@@ -274,9 +285,10 @@ impl AudioState {
             fx_delay_sync:     Arc::new(AtomicU8::new(0)),
             fx_delay_division: Arc::new(AtomicU8::new(synth_common::ClockDivision::DottedEighth.to_u8())),
             fx_delay_synced_time: shared(0.375), // dotted 8th at 120 BPM
-            fx_reverb_size:    shared(0.6),
-            fx_reverb_damp:    shared(0.5),
-            fx_reverb_mix:     shared(0.0),
+            fx_reverb_size:     shared(0.6),
+            fx_reverb_damp:     shared(0.5),
+            fx_reverb_mix:      shared(0.0),
+            fx_reverb_predelay: shared(0.0),
             fx_shimmer:        ShimmerShared::new(),
             fx_crystal:        CrystallizerShared::new(),
         }
@@ -486,9 +498,12 @@ struct FxChain {
     del_synced_time_smooth: SmoothedParam, // 20 ms — synced mode
     del_mix:  SmoothedParam, // 5 ms
     // Reverb params (plain reverb, shimmer_amt always 0)
-    rev_size: SmoothedParam, // 50 ms
-    rev_damp: SmoothedParam, // 50 ms
-    rev_mix:  SmoothedParam, // 5 ms
+    rev_size:     SmoothedParam, // 50 ms
+    rev_damp:     SmoothedParam, // 50 ms
+    rev_mix:      SmoothedParam, // 5 ms
+    rev_predelay: Shared,        // seconds (0–0.1)
+    rev_pre_buf:  Vec<f32>,      // ring buffer for pre-delay (max 100 ms at 48 kHz = 4800 samples)
+    rev_pre_pos:  usize,
     // Shimmer params (independent instance — own size/damp/shimmer/pitch/mix)
     shim_size:  SmoothedParam,
     shim_damp:  SmoothedParam,
@@ -544,9 +559,12 @@ impl FxChain {
             del_time: SmoothedParam::new(state.fx_delay_time.clone(),           DEL_TAU, sr),
             del_synced_time_smooth: SmoothedParam::new(state.fx_delay_synced_time.clone(), DEL_TAU, sr),
             del_mix:  SmoothedParam::new(state.fx_delay_mix.clone(),            MIX_TAU, sr),
-            rev_size:   SmoothedParam::new(state.fx_reverb_size.clone(),     REV_TAU, sr),
-            rev_damp:   SmoothedParam::new(state.fx_reverb_damp.clone(),     REV_TAU, sr),
-            rev_mix:    SmoothedParam::new(state.fx_reverb_mix.clone(),      MIX_TAU, sr),
+            rev_size:     SmoothedParam::new(state.fx_reverb_size.clone(),     REV_TAU, sr),
+            rev_damp:     SmoothedParam::new(state.fx_reverb_damp.clone(),     REV_TAU, sr),
+            rev_mix:      SmoothedParam::new(state.fx_reverb_mix.clone(),      MIX_TAU, sr),
+            rev_predelay: state.fx_reverb_predelay.clone(),
+            rev_pre_buf:  vec![0.0_f32; (sr * 0.105) as usize], // 105 ms max
+            rev_pre_pos:  0,
             shim_size:  SmoothedParam::new(state.fx_shimmer.size.clone(),    REV_TAU, sr),
             shim_damp:  SmoothedParam::new(state.fx_shimmer.damp.clone(),    REV_TAU, sr),
             shim_mix:   SmoothedParam::new(state.fx_shimmer.mix.clone(),     MIX_TAU, sr),
@@ -719,6 +737,15 @@ impl AudioNode for FxChain {
         let size_spread = 0.5 * shim_spread;
         let damp_spread = 0.5 * shim_spread;
 
+        // ── Reverb pre-delay ────────────────────────────────────────────────
+        let pre_secs = self.rev_predelay.value().clamp(0.0, 0.1);
+        let pre_len  = self.rev_pre_buf.len();
+        let pre_samples = std::cmp::min((pre_secs * self.sr) as usize, pre_len.saturating_sub(1));
+        self.rev_pre_buf[self.rev_pre_pos] = s4;
+        let read_pos = (self.rev_pre_pos + pre_len - pre_samples) % pre_len;
+        let s4_predelayed = self.rev_pre_buf[read_pos];
+        self.rev_pre_pos = (self.rev_pre_pos + 1) % pre_len;
+
         // ── Reverb (stereo-decorrelated) ────────────────────────────────────
         let rev_mix  = self.rev_mix.next();
         let rev_size = self.rev_size.next();
@@ -729,8 +756,8 @@ impl AudioNode for FxChain {
             let damp_l = (rev_damp + damp_spread).clamp(0.0, 1.0);
             let damp_r = (rev_damp - damp_spread).clamp(0.0, 1.0);
             (
-                self.rev_l.tick(s4, size_l, damp_l, 0.0, 0),
-                self.rev_r.tick(s4, size_r, damp_r, 0.0, 0),
+                self.rev_l.tick(s4_predelayed, size_l, damp_l, 0.0, 0),
+                self.rev_r.tick(s4_predelayed, size_r, damp_r, 0.0, 0),
             )
         } else { (0.0, 0.0) };
 

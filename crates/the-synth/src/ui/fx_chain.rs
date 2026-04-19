@@ -184,6 +184,10 @@ impl SynthApp {
                         *on = !*on;
                         self.state.fx_reverb_mix.set_value(if *on { self.fx_reverb_mix } else { 0.0 });
                     }
+                    ui.add(egui::Slider::new(&mut self.fx_reverb_predelay, 0.0_f32..=0.1)
+                        .text("Pre").suffix(" s").clamp_to_range(true)
+                        .custom_formatter(|v, _| format!("{:.0} ms", v * 1000.0)))
+                        .on_hover_text("Pre-delay: silence before the reverb tail starts. 20–80 ms separates the dry note from the wash, giving cinematic depth.");
                     ui.add(egui::Slider::new(&mut self.fx_reverb_size, 0.0_f32..=1.0)
                         .text("Size").clamp_to_range(true))
                         .on_hover_text("Room size — controls reverb decay time.");
@@ -193,6 +197,7 @@ impl SynthApp {
                     ui.add(egui::Slider::new(&mut self.fx_reverb_mix, 0.0_f32..=1.0)
                         .text("Mix").clamp_to_range(true))
                         .on_hover_text("Wet/dry mix.");
+                    self.state.fx_reverb_predelay.set_value(self.fx_reverb_predelay);
                     self.state.fx_reverb_size.set_value(self.fx_reverb_size);
                     self.state.fx_reverb_damp.set_value(self.fx_reverb_damp);
                     if self.fx_reverb_on {

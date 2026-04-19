@@ -152,8 +152,9 @@ where
     let mut env_l: f32 = 0.0;
     let mut env_r: f32 = 0.0;
 
-    // LFO phase accumulator (0..1, advances per buffer)
+    // LFO phase accumulators (0..1, advance per sample)
     let mut lfo_phase: f32 = 0.0;
+    let mut lfo2_phase: f32 = 0.25; // offset by 90° so LFO1 and LFO2 don't start in sync
 
     // Per-voice smoothed frequencies for glide (callback writes to voice_freqs from these)
     let mut smoothed_freqs: Vec<f32> = vec![440.0; VOICE_COUNT];
@@ -277,7 +278,12 @@ where
             let lfo_depth = state.lfo_depth.value();
             let lfo_shape = state.lfo_shape.load(std::sync::atomic::Ordering::Relaxed);
             let lfo_dest  = state.lfo_dest.load(std::sync::atomic::Ordering::Relaxed);
-            let lfo_dt    = lfo_rate / sr_f; // phase increment per sample
+            let lfo_dt    = lfo_rate / sr_f;
+            let lfo2_rate  = state.lfo2_rate.value();
+            let lfo2_depth = state.lfo2_depth.value();
+            let lfo2_shape = state.lfo2_shape.load(std::sync::atomic::Ordering::Relaxed);
+            let lfo2_dest  = state.lfo2_dest.load(std::sync::atomic::Ordering::Relaxed);
+            let lfo2_dt    = lfo2_rate / sr_f;
             let base_cutoff = state.cutoff.value().clamp(80.0, 18000.0);
 
             // --- Glide: smooth voice_freq_targets → voice_freqs once per buffer ---
@@ -316,7 +322,7 @@ where
             let mut peak_r_local: f32 = 0.0;
 
             for (frame_i, frame) in data.chunks_mut(channels).enumerate() {
-                // --- LFO: advance phase and write Shared params every sample ---
+                // --- LFO 1 & 2: advance phases and combine modulation ---
                 lfo_phase += lfo_dt;
                 if lfo_phase >= 1.0 { lfo_phase -= 1.0; }
                 let lfo_raw = match lfo_shape {
@@ -324,28 +330,34 @@ where
                     2 => 2.0 * lfo_phase - 1.0,
                     _ => (lfo_phase * std::f32::consts::TAU).sin(),
                 };
-                let lfo_out = lfo_raw * lfo_depth;
-                // lfo_amp is applied directly to output samples below (not via graph)
-                // so it is truly sample-accurate and bypasses BlockRateAdapter quantisation.
-                let lfo_amp = match lfo_dest {
-                    2 => 1.0 - lfo_depth * (1.0 - lfo_raw) * 0.5, // tremolo: 1-depth … 1.0
-                    _ => 1.0,
+                lfo2_phase += lfo2_dt;
+                if lfo2_phase >= 1.0 { lfo2_phase -= 1.0; }
+                let lfo2_raw = match lfo2_shape {
+                    1 => if lfo2_phase < 0.5 { 4.0*lfo2_phase-1.0 } else { 3.0-4.0*lfo2_phase },
+                    2 => 2.0 * lfo2_phase - 1.0,
+                    _ => (lfo2_phase * std::f32::consts::TAU).sin(),
                 };
-                match lfo_dest {
-                    0 => {
-                        state.lfo_pitch_mult.set(2_f32.powf(lfo_out * 2.0 / 12.0));
-                        state.effective_cutoff.set(base_cutoff);
-                    }
-                    2 => {
-                        state.lfo_pitch_mult.set(1.0);
-                        state.effective_cutoff.set(base_cutoff);
-                    }
-                    _ => {
-                        state.lfo_pitch_mult.set(1.0);
-                        state.effective_cutoff.set(
-                            (base_cutoff + lfo_out * base_cutoff * 0.5).clamp(80.0, 18000.0));
+
+                // Accumulate pitch, filter, and amp contributions from both LFOs
+                let mut pitch_mod: f32 = 0.0;  // additive semitones * 2
+                let mut filter_mod: f32 = 0.0; // additive cutoff multiplier
+                let mut amp_mod: f32 = 1.0;    // multiplicative
+
+                for (raw, depth, dest) in [
+                    (lfo_raw, lfo_depth, lfo_dest),
+                    (lfo2_raw, lfo2_depth, lfo2_dest),
+                ] {
+                    match dest {
+                        0 => pitch_mod  += raw * depth,
+                        2 => amp_mod    *= 1.0 - depth * (1.0 - raw) * 0.5,
+                        _ => filter_mod += raw * depth,
                     }
                 }
+
+                state.lfo_pitch_mult.set(2_f32.powf(pitch_mod * 2.0 / 12.0));
+                state.effective_cutoff.set(
+                    (base_cutoff + filter_mod * base_cutoff * 0.5).clamp(80.0, 18000.0));
+                let lfo_amp = amp_mod;
 
                 // Retrigger countdown: hold gate=0 for N samples then flip to 1,
                 // giving the ADSR a real 0→1 transition for a clean attack.
