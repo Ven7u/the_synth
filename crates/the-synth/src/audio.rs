@@ -406,8 +406,8 @@ where
 
                 // Gentle soft clip for occasional overshoots.
                 // Apply tremolo after limiter so the limiter doesn't fight the modulation.
-                let l = raw_l.tanh() * lfo_amp;
-                let r_out = raw_r.tanh() * lfo_amp;
+                let l = if raw_l.is_finite() { raw_l.tanh() } else { 0.0 } * lfo_amp;
+                let r_out = if raw_r.is_finite() { raw_r.tanh() } else { 0.0 } * lfo_amp;
 
                 if let Some(buf) = scope_buf.as_mut() {
                     // Downsample scope writes to reduce callback pressure.

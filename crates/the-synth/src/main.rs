@@ -977,6 +977,20 @@ impl SynthApp {
     }
 
     pub(crate) fn apply_patch(&mut self, p: Patch) {
+        // Silence all voices before changing parameters.
+        // The Moog filter blows up if cutoff/resonance change abruptly while the
+        // filter has energy — zeroing gates lets the ADSR release and the filter
+        // drain before the new patch params arrive.
+        for g in &self.state.voice_gates { g.set(0.0); }
+        self.seq_prev_notes.clear();
+        self.piano_held_midi.clear();
+        self.frozen_notes.clear();
+        self.pending_note_ons.clear();
+        if let Some((row, col)) = self.chord_kb.held_pad.take() {
+            let _ = (row, col); // notes already silenced via voice_gates above
+        }
+        self.chord_kb.kb_held.clear();
+
         self.patch_name         = p.name;
         self.osc_wave           = p.osc_wave;
         self.osc_octave         = p.osc_octave;
