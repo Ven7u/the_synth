@@ -91,6 +91,8 @@ pub struct Patch {
     #[serde(default = "default_reverb_damp")] pub fx_reverb_damp:     f32,
     #[serde(default)] pub fx_reverb_mix:      f32,
     #[serde(default)] pub fx_reverb_predelay: f32,
+    #[serde(default)] pub stereo_spread: f32,
+    #[serde(default = "default_stereo_width")] pub stereo_width: f32,
 
     // Shimmer reverb (independent from plain reverb)
     #[serde(default)] pub fx_shimmer_on:    bool,
@@ -110,6 +112,7 @@ pub struct Patch {
     #[serde(default = "default_crystal_pitch")] pub fx_crystal_pitch: u8,
 }
 
+fn default_stereo_width() -> f32 { 1.0 }
 fn default_lfo2_rate() -> f32 { 0.3 }
 fn default_lfo2_dest() -> usize { 2 }
 fn default_overdrive_drive()  -> f32 { 3.0 }

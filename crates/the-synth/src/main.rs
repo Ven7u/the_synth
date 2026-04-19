@@ -257,6 +257,8 @@ pub(crate) struct SynthApp {
     pub(crate) fx_reverb_damp: f32,
     pub(crate) fx_reverb_mix: f32,
     pub(crate) fx_reverb_predelay: f32,
+    pub(crate) stereo_spread: f32,
+    pub(crate) stereo_width: f32,
 
     // Shimmer reverb (independent from plain reverb)
     pub(crate) fx_shimmer_on: bool,
@@ -412,6 +414,8 @@ impl SynthApp {
             fx_reverb_damp: 0.5,
             fx_reverb_mix: 0.4,
             fx_reverb_predelay: 0.0,
+            stereo_spread: 0.0,
+            stereo_width: 1.0,
             fx_shimmer_on: false,
             fx_shimmer_size: 0.7,
             fx_shimmer_damp: 0.4,
@@ -952,6 +956,8 @@ impl SynthApp {
             fx_reverb_damp:     self.fx_reverb_damp,
             fx_reverb_mix:      self.fx_reverb_mix,
             fx_reverb_predelay: self.fx_reverb_predelay,
+            stereo_spread: self.stereo_spread,
+            stereo_width:  self.stereo_width,
             fx_shimmer_on:      self.fx_shimmer_on,
             fx_shimmer_size:    self.fx_shimmer_size,
             fx_shimmer_damp:    self.fx_shimmer_damp,
@@ -1067,6 +1073,8 @@ impl SynthApp {
             self.fx_reverb_damp     = p.fx_reverb_damp;
             self.fx_reverb_mix      = p.fx_reverb_mix;
             self.fx_reverb_predelay = p.fx_reverb_predelay;
+            self.stereo_spread = p.stereo_spread;
+            self.stereo_width  = p.stereo_width;
             self.fx_shimmer_on      = p.fx_shimmer_on;
             self.fx_shimmer_size    = p.fx_shimmer_size;
             self.fx_shimmer_damp    = p.fx_shimmer_damp;
@@ -1100,6 +1108,8 @@ impl SynthApp {
             s.fx_reverb_damp.set_value(self.fx_reverb_damp);
             s.fx_reverb_mix.set_value(if self.fx_reverb_on { self.fx_reverb_mix } else { 0.0 });
             s.fx_reverb_predelay.set_value(self.fx_reverb_predelay);
+            s.stereo_spread.set_value(self.stereo_spread);
+            s.stereo_width.set_value(self.stereo_width);
             s.fx_shimmer.size.set_value(self.fx_shimmer_size);
             s.fx_shimmer.damp.set_value(self.fx_shimmer_damp);
             s.fx_shimmer.shimmer.set_value(if self.fx_shimmer_on { self.fx_shimmer_amt } else { 0.0 });

@@ -156,6 +156,10 @@ pub struct AudioState {
     pub fx_reverb_mix:      Shared,
     pub fx_reverb_predelay: Shared, // 0.0..0.1 (seconds, 0–100 ms)
 
+    // Stereo widener
+    pub stereo_spread: Shared, // 0.0..0.012 seconds (Haas delay on R channel)
+    pub stereo_width:  Shared, // 0.0..2.0 (M/S width multiplier, 1.0 = unchanged)
+
     // Shimmer reverb (extends the standard reverb with pitch-shifted feedback)
     pub fx_shimmer:        ShimmerShared,
     // Crystallizer (granular pitch-shift delay)
@@ -289,6 +293,8 @@ impl AudioState {
             fx_reverb_damp:     shared(0.5),
             fx_reverb_mix:      shared(0.0),
             fx_reverb_predelay: shared(0.0),
+            stereo_spread: shared(0.0),
+            stereo_width:  shared(1.0),
             fx_shimmer:        ShimmerShared::new(),
             fx_crystal:        CrystallizerShared::new(),
         }
@@ -504,6 +510,11 @@ struct FxChain {
     rev_predelay: Shared,        // seconds (0–0.1)
     rev_pre_buf:  Vec<f32>,      // ring buffer for pre-delay (max 100 ms at 48 kHz = 4800 samples)
     rev_pre_pos:  usize,
+    // Stereo widener
+    stereo_spread: SmoothedParam,
+    stereo_width:  SmoothedParam,
+    haas_buf:  Vec<f32>,         // ring buffer for Haas delay on R (max 12 ms)
+    haas_pos:  usize,
     // Shimmer params (independent instance — own size/damp/shimmer/pitch/mix)
     shim_size:  SmoothedParam,
     shim_damp:  SmoothedParam,
@@ -565,6 +576,10 @@ impl FxChain {
             rev_predelay: state.fx_reverb_predelay.clone(),
             rev_pre_buf:  vec![0.0_f32; (sr * 0.105) as usize], // 105 ms max
             rev_pre_pos:  0,
+            stereo_spread: SmoothedParam::new(state.stereo_spread.clone(), MIX_TAU, sr),
+            stereo_width:  SmoothedParam::new(state.stereo_width.clone(),  MIX_TAU, sr),
+            haas_buf:  vec![0.0_f32; (sr * 0.015) as usize], // 15 ms max
+            haas_pos:  0,
             shim_size:  SmoothedParam::new(state.fx_shimmer.size.clone(),    REV_TAU, sr),
             shim_damp:  SmoothedParam::new(state.fx_shimmer.damp.clone(),    REV_TAU, sr),
             shim_mix:   SmoothedParam::new(state.fx_shimmer.mix.clone(),     MIX_TAU, sr),
@@ -821,8 +836,31 @@ impl AudioNode for FxChain {
         let wet_wide_l = wet_mid + wet_side * shim_width;
         let wet_wide_r = wet_mid - wet_side * shim_width;
 
-        let out_l = dry_bal + wet_wide_l + crys_mix * crys_wet_l;
-        let out_r = dry_bal + wet_wide_r + crys_mix * crys_wet_r;
+        // ── Stereo widener ──────────────────────────────────────────────────
+        // Haas: write current dry into ring buffer, read with fractional delay for R.
+        // Fractional interpolation prevents clicks when spread changes — reading between
+        // two adjacent samples gives a smooth Doppler-like transition instead of a step.
+        let spread_secs = self.stereo_spread.next().clamp(0.0, 0.012);
+        let haas_len = self.haas_buf.len();
+        let spread_f = (spread_secs * self.sr).clamp(0.0, (haas_len - 2) as f32);
+        self.haas_buf[self.haas_pos] = dry_bal;
+        let read_f   = self.haas_pos as f32 - spread_f;
+        let read_int = read_f.floor() as isize;
+        let frac     = read_f - read_int as f32;
+        let i0 = ((read_int).rem_euclid(haas_len as isize)) as usize;
+        let i1 = ((read_int + 1).rem_euclid(haas_len as isize)) as usize;
+        let dry_r = self.haas_buf[i0] * (1.0 - frac) + self.haas_buf[i1] * frac;
+        self.haas_pos = (self.haas_pos + 1) % haas_len;
+
+        let raw_l = dry_bal   + wet_wide_l + crys_mix * crys_wet_l;
+        let raw_r = dry_r     + wet_wide_r + crys_mix * crys_wet_r;
+
+        // M/S width on final output
+        let width = self.stereo_width.next().clamp(0.0, 2.0);
+        let mid  = 0.5 * (raw_l + raw_r);
+        let side = 0.5 * (raw_l - raw_r);
+        let out_l = mid + side * width;
+        let out_r = mid - side * width;
 
         Frame::from([out_l, out_r])
     }

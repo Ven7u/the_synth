@@ -299,6 +299,25 @@ impl SynthApp {
                         if self.fx_crystal_on { self.fx_crystal_mix } else { 0.0 });
                 });
             });
+            // ---- Stereo Width ----
+            ui.group(|ui| {
+                ui.set_min_width(120.0);
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new("STEREO").small().strong()
+                        .color(self.theme.c(&self.theme.accent)));
+                    ui.add(egui::Slider::new(&mut self.stereo_spread, 0.0_f32..=0.012)
+                        .text("Spread")
+                        .clamp_to_range(true)
+                        .custom_formatter(|v, _| format!("{:.1} ms", v * 1000.0)))
+                        .on_hover_text("Haas spread: delays R channel by 0–12 ms. Creates stereo width from mono unison voices. Keep under 10 ms to avoid comb filtering.");
+                    ui.add(egui::Slider::new(&mut self.stereo_width, 0.0_f32..=2.0)
+                        .text("Width")
+                        .clamp_to_range(true))
+                        .on_hover_text("M/S width on the final output. 0 = mono, 1 = unchanged, 2 = maximum stereo expansion.");
+                    self.state.stereo_spread.set_value(self.stereo_spread);
+                    self.state.stereo_width.set_value(self.stereo_width);
+                });
+            });
         });
     }
 }
