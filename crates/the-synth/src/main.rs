@@ -728,18 +728,35 @@ impl eframe::App for SynthApp {
             .frame(SynthFrame::transport(&self.theme))
             .show(ctx, |ui| { self.ui_fx_mini_strip(ui); });
 
-        // ── Zone 4: viz slot (right side panel, always visible) ───────────────
-        egui::SidePanel::right("viz_slot")
-            .resizable(true)
-            .min_width(220.0)
-            .default_width(280.0)
-            .frame(SynthFrame::app_bg(&self.theme))
-            .show(ctx, |ui| { self.ui_viz_slot(ui); });
-
-        // ── Zones 2 + 3: central editing area ────────────────────────────────
+        // ── Zones 2 + 3: central editing area (dock in Studio, placeholder in Live) ──
         egui::CentralPanel::default()
             .frame(SynthFrame::app_bg(&self.theme))
-            .show(ctx, |ui| { self.ui_studio_area(ui); });
+            .show(ctx, |ui| {
+                match self.app_mode {
+                    AppMode::Studio => {
+                        if self.reset_layout_pending {
+                            self.dock_state = ui::dock::default_dock_state();
+                            self.reset_layout_pending = false;
+                        }
+                        let mut dock_state = std::mem::replace(
+                            &mut self.dock_state,
+                            egui_dock::DockState::new(vec![]),
+                        );
+                        egui_dock::DockArea::new(&mut dock_state)
+                            .show_inside(ui, &mut ui::dock::SynthTabViewer { app: self });
+                        self.dock_state = dock_state;
+                    }
+                    AppMode::Live => {
+                        ui.centered_and_justified(|ui| {
+                            ui.label(
+                                egui::RichText::new("LIVE MODE — coming soon.")
+                                    .size(18.0)
+                                    .color(self.theme.c(&self.theme.text_secondary)),
+                            );
+                        });
+                    }
+                }
+            });
 
         ctx.request_repaint();
     }
@@ -1145,6 +1162,27 @@ impl SynthApp {
                         }
                     });
 
+                    ui.menu_button("View", |ui| {
+                        for &tab in ui::dock::Tab::ALL {
+                            let open = self.dock_state.find_tab(&tab).is_some();
+                            if ui.selectable_label(open, tab.title()).clicked() {
+                                if open {
+                                    self.dock_state.remove_tab(
+                                        self.dock_state.find_tab(&tab).unwrap(),
+                                    );
+                                } else {
+                                    self.dock_state.push_to_focused_leaf(tab);
+                                }
+                                ui.close_menu();
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("Reset Layout").clicked() {
+                            self.reset_layout_pending = true;
+                            ui.close_menu();
+                        }
+                    });
+
                     ui.separator();
                     if ui.button("Sync Now")
                        .on_hover_text("Reset phases for sequencer, arpeggiator, and walker.")
@@ -1246,9 +1284,7 @@ impl SynthApp {
         });
     }
 
-    /// Zone 5a: FX mini strip — always-visible compact FX enable row.
-    ///
-    /// Clicking any chip navigates to the FX tab.
+    /// Zone 5a: FX mini strip — always-visible compact FX toggle row.
     fn ui_fx_mini_strip(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(
@@ -1258,128 +1294,65 @@ impl SynthApp {
             );
             ui.separator();
 
-            // (label, is_on, theme color key)
-            let fx = [
-                ("OD",    self.fx_overdrive_on,   self.theme.fx_overdrive),
-                ("DIST",  self.fx_distortion_on,  self.theme.fx_distortion),
-                ("CHOR",  self.fx_chorus_on,       self.theme.fx_chorus),
-                ("DLY",   self.fx_delay_on,        self.theme.fx_delay),
-                ("REV",   self.fx_reverb_on,       self.theme.fx_reverb),
-                ("SHIM",  self.fx_shimmer_on,      self.theme.fx_shimmer),
-                ("CRYST", self.fx_crystal_on,      self.theme.fx_crystallizer),
-            ];
-
-            let mut go_to_fx = false;
-            for (label, on, color) in &fx {
-                let col = if *on { self.theme.c(color) }
-                          else   { self.theme.c(&self.theme.text_disabled) };
-                if ui.add(
-                    egui::Button::new(egui::RichText::new(*label).size(11.0).color(col))
-                        .frame(*on),
-                ).on_hover_text("Click to open FX tab.")
-                 .clicked()
-                {
-                    go_to_fx = true;
-                }
+            macro_rules! fx_chip {
+                ($ui:expr, $label:expr, $on:expr, $color:expr, $toggle:expr) => {{
+                    let col = if $on {
+                        self.theme.c(&$color)
+                    } else {
+                        self.theme.c(&self.theme.text_disabled)
+                    };
+                    if $ui
+                        .add(egui::Button::new(egui::RichText::new($label).size(11.0).color(col)).frame($on))
+                        .clicked()
+                    {
+                        $toggle;
+                    }
+                }};
             }
-            if go_to_fx {
-                self.studio_tab = StudioTab::Fx;
-            }
-        });
-    }
 
-    /// Zone 4: viz slot — scope with slot header (future: type picker, pop-out).
-    fn ui_viz_slot(&mut self, ui: &mut egui::Ui) {
-        let sp_sm = self.theme.sp_sm;
-        let sp_xs = self.theme.sp_xs;
-        SynthFrame::section(&self.theme).show(ui, |ui| {
-            // Slot header
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("VIZ · SCOPE")
-                        .size(10.0)
-                        .color(self.theme.c(&self.theme.text_secondary)),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        egui::RichText::new("◎")
-                            .size(10.0)
-                            .color(self.theme.c(&self.theme.text_disabled)),
-                    ).on_hover_text("Pop-out visualizer — coming soon.");
-                });
+            let on = self.fx_overdrive_on;
+            fx_chip!(ui, "OD", on, self.theme.fx_overdrive, {
+                self.fx_overdrive_on = !on;
+                self.state.fx_overdrive_mix.set_value(if !on { self.fx_overdrive_mix } else { 0.0 });
             });
-            ui.add_space(sp_xs);
-            self.ui_oscilloscope(ui);
-            ui.add_space(sp_sm);
-        });
-    }
 
-    /// Zones 2+3: studio editing area — tab bar + tab content.
-    fn ui_studio_area(&mut self, ui: &mut egui::Ui) {
-        let sp_xs = self.theme.sp_xs;
-        let sp_sm = self.theme.sp_sm;
-
-        // ── Tab bar ───────────────────────────────────────────────────────
-        ui.add_space(sp_xs);
-        ui.horizontal(|ui| {
-            ui.add_space(sp_sm);
-            for &tab in StudioTab::ALL {
-                let active = self.studio_tab == tab;
-                let col = if active { self.theme.c(&self.theme.accent) }
-                          else      { self.theme.c(&self.theme.text_secondary) };
-                if ui.add(egui::SelectableLabel::new(
-                    active,
-                    egui::RichText::new(tab.label()).size(12.0).color(col),
-                )).clicked() {
-                    self.studio_tab = tab;
-                }
-            }
-        });
-        ui.add_space(sp_xs);
-        ui.separator();
-        ui.add_space(sp_xs);
-
-        // ── Tab content (padded) ──────────────────────────────────────────
-        egui::Frame::none()
-            .inner_margin(egui::Margin::same(sp_sm))
-            .show(ui, |ui| {
-                match self.studio_tab {
-                    StudioTab::Voice => {
-                        ui.columns(4, |cols| {
-                            self.ui_osc_panel(&mut cols[0], 0);
-                            self.ui_osc_panel(&mut cols[1], 1);
-                            self.ui_osc_panel(&mut cols[2], 2);
-                            self.ui_mixer_panel(&mut cols[3]);
-                        });
-                    }
-                    StudioTab::Shape => {
-                        ui.columns(5, |cols| {
-                            self.ui_lfo_panel(&mut cols[0]);
-                            self.ui_lfo2_panel(&mut cols[1]);
-                            self.ui_filter_panel(&mut cols[2]);
-                            self.ui_adsr_panel(&mut cols[3], "Filter Env", &mut [0, 1, 2, 3], true);
-                            self.ui_adsr_panel(&mut cols[4], "Amp Env",    &mut [0, 1, 2, 3], false);
-                        });
-                    }
-                    StudioTab::Fx => {
-                        self.ui_fx_chain(ui);
-                    }
-                    StudioTab::Sequencer => {
-                        ui.columns(2, |cols| {
-                            self.ui_arp_panel(&mut cols[0]);
-                            self.ui_walker_panel(&mut cols[1]);
-                        });
-                        ui.add_space(sp_sm);
-                        self.ui_sequencer_panel(ui);
-                    }
-                    StudioTab::Settings => {
-                        self.ui_midi_panel(ui);
-                        ui.separator();
-                        ui::scope::draw_latency_bar(
-                            ui, &self.state, self.amp_adsr[0], &self.theme,
-                        );
-                    }
-                }
+            let on = self.fx_distortion_on;
+            fx_chip!(ui, "DIST", on, self.theme.fx_distortion, {
+                self.fx_distortion_on = !on;
+                self.state.fx_distortion_mix.set_value(if !on { self.fx_distortion_mix } else { 0.0 });
             });
+
+            let on = self.fx_chorus_on;
+            fx_chip!(ui, "CHOR", on, self.theme.fx_chorus, {
+                self.fx_chorus_on = !on;
+                self.state.fx_chorus_mix.set_value(if !on { self.fx_chorus_mix } else { 0.0 });
+            });
+
+            let on = self.fx_delay_on;
+            fx_chip!(ui, "DLY", on, self.theme.fx_delay, {
+                self.fx_delay_on = !on;
+                self.state.fx_delay_mix.set_value(if !on { self.fx_delay_mix } else { 0.0 });
+            });
+
+            let on = self.fx_reverb_on;
+            fx_chip!(ui, "REV", on, self.theme.fx_reverb, {
+                self.fx_reverb_on = !on;
+                self.state.fx_reverb_mix.set_value(if !on { self.fx_reverb_mix } else { 0.0 });
+            });
+
+            let on = self.fx_shimmer_on;
+            fx_chip!(ui, "SHIM", on, self.theme.fx_shimmer, {
+                self.fx_shimmer_on = !on;
+                self.state.fx_shimmer.shimmer.set_value(if !on { self.fx_shimmer_amt } else { 0.0 });
+                self.state.fx_shimmer.mix.set_value(if !on { self.fx_shimmer_mix } else { 0.0 });
+            });
+
+            let on = self.fx_crystal_on;
+            fx_chip!(ui, "CRYST", on, self.theme.fx_crystallizer, {
+                self.fx_crystal_on = !on;
+                self.state.fx_crystal.mix.set_value(if !on { self.fx_crystal_mix } else { 0.0 });
+            });
+        });
     }
+
 }

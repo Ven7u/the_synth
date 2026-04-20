@@ -55,19 +55,19 @@ pub fn default_dock_state() -> DockState<Tab> {
     let mut state = DockState::new(vec![Tab::Oscillators]);
     let surface = state.main_surface_mut();
 
-    // 1. Split bottom from root: Sequencer — bottom 35%.
-    let [top, bottom] = surface.split_below(
-        NodeIndex::root(), 0.65,
-        vec![Tab::Sequencer],
+    // 1. Split bottom from root: Sequencer + ArpWalker tabbed — bottom 32%.
+    let [top, _bottom] = surface.split_below(
+        NodeIndex::root(), 0.68,
+        vec![Tab::Sequencer, Tab::ArpWalker],
     );
 
-    // 2. In top area, split right: Oscilloscope — right takes 42%.
-    let [top_left, top_right] = surface.split_right(top, 0.58, vec![Tab::Scope]);
+    // 2. In top area, split right: Oscilloscope — right takes 40%.
+    let [top_left, top_right] = surface.split_right(top, 0.60, vec![Tab::Scope]);
 
-    // 3. Split top-left vertically: Modulation + Arp (tabbed) below Oscillators.
+    // 3. Split top-left vertically: Modulation below Oscillators.
     let [_osc, _mod] = surface.split_below(
-        top_left, 0.50,
-        vec![Tab::Modulation, Tab::ArpWalker],
+        top_left, 0.55,
+        vec![Tab::Modulation],
     );
 
     // 4. Split top-right vertically: FX Chain below Oscilloscope.
