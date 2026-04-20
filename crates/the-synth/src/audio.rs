@@ -372,18 +372,10 @@ where
 
                 let (mut raw_l, mut raw_r) = graph.get_stereo();
 
-                // Peak metering: track pre-clip level
-                let abs_l = raw_l.abs();
-                let abs_r = raw_r.abs();
-                if abs_l > peak_l_local {
-                    peak_l_local = abs_l;
-                }
-                if abs_r > peak_r_local {
-                    peak_r_local = abs_r;
-                }
-
                 // Optional envelope-follower limiter (before soft clip)
                 if limiter_on {
+                    let abs_l = raw_l.abs();
+                    let abs_r = raw_r.abs();
                     // Fast attack, slow release envelope follower
                     env_l = if abs_l > env_l {
                         attack_coeff * env_l + (1.0 - attack_coeff) * abs_l
@@ -408,6 +400,10 @@ where
                 // Apply tremolo after limiter so the limiter doesn't fight the modulation.
                 let l = if raw_l.is_finite() { raw_l.tanh() } else { 0.0 } * lfo_amp;
                 let r_out = if raw_r.is_finite() { raw_r.tanh() } else { 0.0 } * lfo_amp;
+
+                // Peak metering: track true output level (post-limiter, post-tanh)
+                if l.abs() > peak_l_local { peak_l_local = l.abs(); }
+                if r_out.abs() > peak_r_local { peak_r_local = r_out.abs(); }
 
                 if let Some(buf) = scope_buf.as_mut() {
                     // Downsample scope writes to reduce callback pressure.

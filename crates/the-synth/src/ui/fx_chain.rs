@@ -180,10 +180,21 @@ impl SynthApp {
                     let on = &mut self.fx_reverb_on;
                     let label = egui::RichText::new("REVERB").small().strong()
                         .color(if *on { col_rev } else { Color32::GRAY });
-                    if ui.button(label).on_hover_text("Toggle reverb (Schroeder plate-style reverb).").clicked() {
+                    if ui.button(label).on_hover_text("Toggle reverb.").clicked() {
                         *on = !*on;
                         self.state.fx_reverb_mix.set_value(if *on { self.fx_reverb_mix } else { 0.0 });
                     }
+                    ui.horizontal(|ui| {
+                        for (i, name) in ["Free", "Plate", "Hall"].iter().enumerate() {
+                            let selected = self.fx_reverb_type == i as u8;
+                            let label = egui::RichText::new(*name).small()
+                                .color(if selected { col_rev } else { Color32::GRAY });
+                            if ui.selectable_label(selected, label).clicked() {
+                                self.fx_reverb_type = i as u8;
+                                self.state.fx_reverb_type.store(i as u8, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                    });
                     ui.add(egui::Slider::new(&mut self.fx_reverb_predelay, 0.0_f32..=0.1)
                         .text("Pre").suffix(" s").clamp_to_range(true)
                         .custom_formatter(|v, _| format!("{:.0} ms", v * 1000.0)))

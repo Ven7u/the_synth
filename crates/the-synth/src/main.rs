@@ -179,6 +179,7 @@ pub(crate) struct SynthApp {
     // Limiter
     pub(crate) limiter_enabled: bool,
     pub(crate) limiter_threshold: f32,
+    pub(crate) window_focused: bool,
 
     // Global tempo / sync
     pub(crate) global_bpm: u32,     // master tempo — source of truth when components are synced
@@ -257,6 +258,7 @@ pub(crate) struct SynthApp {
     pub(crate) fx_reverb_damp: f32,
     pub(crate) fx_reverb_mix: f32,
     pub(crate) fx_reverb_predelay: f32,
+    pub(crate) fx_reverb_type: u8,
     pub(crate) stereo_spread: f32,
     pub(crate) stereo_width: f32,
 
@@ -352,6 +354,7 @@ impl SynthApp {
             peak_hold_timer: 0.0,
             limiter_enabled: true,
             limiter_threshold: 0.95,
+            window_focused: true,
             global_bpm: 120,
             global_sync: false,
             arp_sync: true,
@@ -414,6 +417,7 @@ impl SynthApp {
             fx_reverb_damp: 0.5,
             fx_reverb_mix: 0.4,
             fx_reverb_predelay: 0.0,
+            fx_reverb_type: 0,
             stereo_spread: 0.0,
             stereo_width: 1.0,
             fx_shimmer_on: false,
@@ -525,6 +529,22 @@ impl SynthApp {
     /// Push a NoteOff event into the audio thread's control queue.
     pub(crate) fn push_note_off(&mut self, midi: u8) {
         let _ = self.control.try_send(ControlEvent::NoteOff { pitch: midi, track: 0 });
+    }
+
+    /// Silence all voices, reset all FX tails, and clear all note-tracking state.
+    pub(crate) fn all_notes_off(&mut self) {
+        // Zero all voice gates — kills currently-playing voices via ADSR release
+        for g in &self.state.voice_gates { g.set(0.0); }
+        // Send NoteOff for every MIDI note that might be held
+        let held: Vec<u8> = self.piano_held_midi.drain().collect();
+        for n in held { self.push_note_off(n); }
+        let prev: Vec<u8> = self.seq_prev_notes.drain(..).collect();
+        for n in prev { self.push_note_off(n); }
+        let frozen: Vec<u8> = self.frozen_notes.drain().collect();
+        for n in frozen { self.push_note_off(n); }
+        self.pending_note_ons.clear();
+        self.chord_kb.held_pad = None;
+        self.chord_kb.kb_held.clear();
     }
 }
 
@@ -660,6 +680,14 @@ impl eframe::App for SynthApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Release all notes when the window loses focus so keys/MIDI can't get stuck.
+        if ctx.input(|i| i.focused) != self.window_focused {
+            self.window_focused = ctx.input(|i| i.focused);
+            if !self.window_focused {
+                self.all_notes_off();
+            }
+        }
+
         self.tick_midi();
         self.apply_clock_sync();
         self.tick_sequencer(ctx);
@@ -766,6 +794,20 @@ impl eframe::App for SynthApp {
                     .changed()
                 {
                     self.apply_clock_sync();
+                }
+
+                ui.separator();
+
+                ui.label(egui::RichText::new("Vol:").strong())
+                    .on_hover_text("Master output volume.");
+                if ui.add(
+                    egui::Slider::new(&mut self.master_vol, 0.0f32..=1.0)
+                        .clamp_to_range(true)
+                        .fixed_decimals(2)
+                ).on_hover_text("Master output volume (0–1).")
+                .changed()
+                {
+                    self.state.master_vol.set(self.master_vol);
                 }
 
                 ui.separator();
@@ -956,6 +998,7 @@ impl SynthApp {
             fx_reverb_damp:     self.fx_reverb_damp,
             fx_reverb_mix:      self.fx_reverb_mix,
             fx_reverb_predelay: self.fx_reverb_predelay,
+            fx_reverb_type:     self.fx_reverb_type,
             stereo_spread: self.stereo_spread,
             stereo_width:  self.stereo_width,
             fx_shimmer_on:      self.fx_shimmer_on,
@@ -977,19 +1020,8 @@ impl SynthApp {
     }
 
     pub(crate) fn apply_patch(&mut self, p: Patch) {
-        // Silence all voices before changing parameters.
-        // The Moog filter blows up if cutoff/resonance change abruptly while the
-        // filter has energy — zeroing gates lets the ADSR release and the filter
-        // drain before the new patch params arrive.
-        for g in &self.state.voice_gates { g.set(0.0); }
-        self.seq_prev_notes.clear();
-        self.piano_held_midi.clear();
-        self.frozen_notes.clear();
-        self.pending_note_ons.clear();
-        if let Some((row, col)) = self.chord_kb.held_pad.take() {
-            let _ = (row, col); // notes already silenced via voice_gates above
-        }
-        self.chord_kb.kb_held.clear();
+        // Silence all voices before changing parameters to prevent Moog filter blowup.
+        self.all_notes_off();
 
         self.patch_name         = p.name;
         self.osc_wave           = p.osc_wave;
@@ -1087,6 +1119,7 @@ impl SynthApp {
             self.fx_reverb_damp     = p.fx_reverb_damp;
             self.fx_reverb_mix      = p.fx_reverb_mix;
             self.fx_reverb_predelay = p.fx_reverb_predelay;
+            self.fx_reverb_type     = p.fx_reverb_type;
             self.stereo_spread = p.stereo_spread;
             self.stereo_width  = p.stereo_width;
             self.fx_shimmer_on      = p.fx_shimmer_on;
@@ -1122,6 +1155,7 @@ impl SynthApp {
             s.fx_reverb_damp.set_value(self.fx_reverb_damp);
             s.fx_reverb_mix.set_value(if self.fx_reverb_on { self.fx_reverb_mix } else { 0.0 });
             s.fx_reverb_predelay.set_value(self.fx_reverb_predelay);
+            s.fx_reverb_type.store(self.fx_reverb_type, std::sync::atomic::Ordering::Relaxed);
             s.stereo_spread.set_value(self.stereo_spread);
             s.stereo_width.set_value(self.stereo_width);
             s.fx_shimmer.size.set_value(self.fx_shimmer_size);

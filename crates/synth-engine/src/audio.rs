@@ -155,6 +155,8 @@ pub struct AudioState {
     pub fx_reverb_damp:     Shared, // 0.0..1.0 (high-freq damping)
     pub fx_reverb_mix:      Shared,
     pub fx_reverb_predelay: Shared, // 0.0..0.1 (seconds, 0–100 ms)
+    /// 0 = Freeverb, 1 = Plate, 2 = FDN Hall
+    pub fx_reverb_type: Arc<AtomicU8>,
 
     // Stereo widener
     pub stereo_spread: Shared, // 0.0..0.012 seconds (Haas delay on R channel)
@@ -293,6 +295,7 @@ impl AudioState {
             fx_reverb_damp:     shared(0.5),
             fx_reverb_mix:      shared(0.0),
             fx_reverb_predelay: shared(0.0),
+            fx_reverb_type: Arc::new(AtomicU8::new(0)),
             stereo_spread: shared(0.0),
             stereo_width:  shared(1.0),
             fx_shimmer:        ShimmerShared::new(),
@@ -507,9 +510,10 @@ struct FxChain {
     rev_size:     SmoothedParam, // 50 ms
     rev_damp:     SmoothedParam, // 50 ms
     rev_mix:      SmoothedParam, // 5 ms
-    rev_predelay: Shared,        // seconds (0–0.1)
-    rev_pre_buf:  Vec<f32>,      // ring buffer for pre-delay (max 100 ms at 48 kHz = 4800 samples)
+    rev_predelay: Shared,
+    rev_pre_buf:  Vec<f32>,
     rev_pre_pos:  usize,
+    rev_type:     std::sync::Arc<std::sync::atomic::AtomicU8>,
     // Stereo widener
     stereo_spread: SmoothedParam,
     stereo_width:  SmoothedParam,
@@ -574,6 +578,7 @@ impl FxChain {
             rev_damp:     SmoothedParam::new(state.fx_reverb_damp.clone(),     REV_TAU, sr),
             rev_mix:      SmoothedParam::new(state.fx_reverb_mix.clone(),      MIX_TAU, sr),
             rev_predelay: state.fx_reverb_predelay.clone(),
+            rev_type: std::sync::Arc::clone(&state.fx_reverb_type),
             rev_pre_buf:  vec![0.0_f32; (sr * 0.105) as usize], // 105 ms max
             rev_pre_pos:  0,
             stereo_spread: SmoothedParam::new(state.stereo_spread.clone(), MIX_TAU, sr),
@@ -765,14 +770,15 @@ impl AudioNode for FxChain {
         let rev_mix  = self.rev_mix.next();
         let rev_size = self.rev_size.next();
         let rev_damp = self.rev_damp.next();
+        let rev_type = self.rev_type.load(std::sync::atomic::Ordering::Relaxed);
         let (rev_wet_l, rev_wet_r) = if rev_mix > 0.0001 {
             let size_l = (rev_size * (1.0 - size_spread)).clamp(0.0, 1.0);
             let size_r = (rev_size * (1.0 + size_spread)).clamp(0.0, 1.0);
             let damp_l = (rev_damp + damp_spread).clamp(0.0, 1.0);
             let damp_r = (rev_damp - damp_spread).clamp(0.0, 1.0);
             (
-                self.rev_l.tick(s4_predelayed, size_l, damp_l, 0.0, 0),
-                self.rev_r.tick(s4_predelayed, size_r, damp_r, 0.0, 0),
+                self.rev_l.tick(s4_predelayed, size_l, damp_l, 0.0, 0, rev_type),
+                self.rev_r.tick(s4_predelayed, size_r, damp_r, 0.0, 0, rev_type),
             )
         } else { (0.0, 0.0) };
 
@@ -788,8 +794,8 @@ impl AudioNode for FxChain {
             let damp_l = (shim_damp + damp_spread).clamp(0.0, 1.0);
             let damp_r = (shim_damp - damp_spread).clamp(0.0, 1.0);
             (
-                self.shim_l.tick(s4, size_l, damp_l, shim_amt, shim_pitch),
-                self.shim_r.tick(s4, size_r, damp_r, shim_amt, shim_pitch),
+                self.shim_l.tick(s4, size_l, damp_l, shim_amt, shim_pitch, rev_type),
+                self.shim_r.tick(s4, size_r, damp_r, shim_amt, shim_pitch, rev_type),
             )
         } else { (0.0, 0.0) };
 

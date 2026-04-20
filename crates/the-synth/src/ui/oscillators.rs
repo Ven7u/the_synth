@@ -270,12 +270,6 @@ impl SynthApp {
 
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            if super::widgets::knob(ui, &mut self.master_vol, 0.0..=1.0, "Vol", &self.theme, false)
-                .on_hover_text("Master output volume.")
-                .changed()
-            {
-                self.state.master_vol.set(self.master_vol);
-            }
             if super::widgets::knob(ui, &mut self.glide_time, 0.0..=0.5, "Glide", &self.theme, false)
                 .on_hover_text("Glide time in seconds. Higher = slower pitch slide between notes.")
                 .changed()
@@ -310,22 +304,5 @@ impl SynthApp {
             }
         });
 
-        // --- Peak meter ---
-        ui.add_space(4.0);
-        let peak_raw = f32::from_bits(self.state.peak_l.load(Ordering::Relaxed));
-        self.peak_display = (self.peak_display * 0.85 + peak_raw * 0.15).max(peak_raw * 0.3);
-
-        let dt = 1.0 / 60.0_f32;
-        if peak_raw > self.peak_hold {
-            self.peak_hold = peak_raw;
-            self.peak_hold_timer = 0.0;
-        } else {
-            self.peak_hold_timer += dt;
-            if self.peak_hold_timer > 1.0 {
-                self.peak_hold *= 0.95;
-            }
-        }
-
-        super::scope::draw_peak_meter(ui, self.peak_display, self.peak_hold, &self.theme);
     }
 }

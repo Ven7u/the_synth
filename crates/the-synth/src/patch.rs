@@ -91,6 +91,7 @@ pub struct Patch {
     #[serde(default = "default_reverb_damp")] pub fx_reverb_damp:     f32,
     #[serde(default)] pub fx_reverb_mix:      f32,
     #[serde(default)] pub fx_reverb_predelay: f32,
+    #[serde(default)] pub fx_reverb_type:    u8,  // 0=Freeverb, 1=Plate, 2=FDN Hall
     #[serde(default)] pub stereo_spread: f32,
     #[serde(default = "default_stereo_width")] pub stereo_width: f32,
 

@@ -427,6 +427,7 @@ impl MultiTrackEngine {
                 self.shimmer.damp.value(),
                 self.shimmer.shimmer.value(),
                 self.shimmer.pitch.load(std::sync::atomic::Ordering::Relaxed),
+                0, // multi-track always uses Freeverb
             )
         } else {
             0.0

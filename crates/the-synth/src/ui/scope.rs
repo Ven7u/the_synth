@@ -36,12 +36,36 @@ impl SynthApp {
         let buf = self.state.osc_buffer.lock().unwrap().clone();
         let width = ui.available_width();
 
-        // Main scope area
-        let (resp, painter) =
-            ui.allocate_painter(Vec2::new(width, self.scope_height), Sense::hover());
-        let rect = resp.rect;
+        // Update peak meter state (L channel drives display; R tracked separately)
+        use std::sync::atomic::Ordering;
+        let peak_raw_l = f32::from_bits(self.state.peak_l.load(Ordering::Relaxed));
+        let peak_raw_r = f32::from_bits(self.state.peak_r.load(Ordering::Relaxed));
+        let dt = 1.0 / 60.0_f32;
+        self.peak_display = (self.peak_display * 0.85 + peak_raw_l * 0.15).max(peak_raw_l * 0.3);
+        let peak_raw_max = peak_raw_l.max(peak_raw_r);
+        if peak_raw_max > self.peak_hold {
+            self.peak_hold = peak_raw_max;
+            self.peak_hold_timer = 0.0;
+        } else {
+            self.peak_hold_timer += dt;
+            if self.peak_hold_timer > 1.5 {
+                self.peak_hold *= 0.97;
+            }
+        }
 
-        // CRT background
+        // Allocate the full row (scope + meter side by side) as one rect, then split.
+        const METER_W: f32 = 18.0;
+        const METER_GAP: f32 = 4.0;
+        let (row_resp, painter) =
+            ui.allocate_painter(Vec2::new(width, self.scope_height), Sense::hover());
+        let row = row_resp.rect;
+        let meter_rect = Rect::from_min_size(
+            Pos2::new(row.right() - METER_W, row.top()),
+            Vec2::new(METER_W, row.height()),
+        );
+        let rect = Rect::from_min_max(row.min, Pos2::new(row.right() - METER_W - METER_GAP, row.max.y));
+
+        // CRT background (scope only)
         painter.rect_filled(rect, Rounding::same(4.0), self.theme.c(&self.theme.scope_bg));
 
         if !buf.is_empty() {
@@ -88,6 +112,70 @@ impl SynthApp {
                 for w in points.windows(2) {
                     painter.line_segment([w[0], w[1]], Stroke::new(stroke_w, color));
                 }
+            }
+        }
+
+        // Vertical stereo peak meter — drawn into the right strip using the same painter
+        {
+            let ch_w = (METER_W - 1.0) / 2.0;
+            painter.rect_filled(meter_rect, Rounding::same(2.0), self.theme.c(&self.theme.meter_bg));
+
+            for (ci, peak_raw) in [peak_raw_l, peak_raw_r].iter().enumerate() {
+                let x_left = meter_rect.left() + ci as f32 * (ch_w + 1.0);
+                let ch_rect = Rect::from_min_size(
+                    Pos2::new(x_left, meter_rect.top()),
+                    Vec2::new(ch_w, meter_rect.height()),
+                );
+
+                let level = peak_raw.clamp(0.0, 1.0);
+                let bar_h = ch_rect.height() * level;
+                if bar_h > 0.5 {
+                    let color = if *peak_raw < 0.7 {
+                        self.theme.c(&self.theme.meter_green)
+                    } else if *peak_raw < 1.0 {
+                        let t = (*peak_raw - 0.7) / 0.3;
+                        let g = self.theme.meter_green;
+                        let c = self.theme.meter_clip;
+                        Color32::from_rgb(
+                            (g[0] as f32 + (c[0] as f32 - g[0] as f32) * t) as u8,
+                            (g[1] as f32 + (c[1] as f32 - g[1] as f32) * t) as u8,
+                            (g[2] as f32 + (c[2] as f32 - g[2] as f32) * t) as u8,
+                        )
+                    } else {
+                        self.theme.c(&self.theme.meter_clip)
+                    };
+                    let bar_rect = Rect::from_min_size(
+                        Pos2::new(ch_rect.left(), ch_rect.bottom() - bar_h),
+                        Vec2::new(ch_w, bar_h),
+                    );
+                    painter.rect_filled(bar_rect, Rounding::ZERO, color);
+                }
+
+                // Peak hold tick
+                let hold_frac = self.peak_hold.clamp(0.0, 1.0);
+                let hold_y = ch_rect.bottom() - ch_rect.height() * hold_frac;
+                let hold_color = if self.peak_hold >= 1.0 {
+                    self.theme.c(&self.theme.meter_clip)
+                } else {
+                    Color32::WHITE
+                };
+                painter.line_segment(
+                    [Pos2::new(ch_rect.left(), hold_y), Pos2::new(ch_rect.right(), hold_y)],
+                    Stroke::new(1.5, hold_color),
+                );
+            }
+
+            // L / R labels at the bottom
+            let ch_w = (METER_W - 1.0) / 2.0;
+            for (ci, label) in ["L", "R"].iter().enumerate() {
+                let lx = meter_rect.left() + ci as f32 * (ch_w + 1.0) + ch_w * 0.5;
+                painter.text(
+                    Pos2::new(lx, meter_rect.bottom() - 2.0),
+                    egui::Align2::CENTER_BOTTOM,
+                    label,
+                    egui::FontId::proportional(8.0),
+                    Color32::from_rgba_premultiplied(200, 200, 200, 120),
+                );
             }
         }
 
