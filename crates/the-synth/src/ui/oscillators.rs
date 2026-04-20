@@ -266,6 +266,13 @@ impl SynthApp {
             {
                 self.state.noise_vol.set(self.noise_vol);
             }
+            ui.separator();
+            if super::widgets::knob(ui, &mut self.master_vol, 0.0..=1.0, "Master", &self.theme, false)
+                .on_hover_text("Master output volume — applied after all FX.")
+                .changed()
+            {
+                self.state.master_vol.set(self.master_vol);
+            }
         });
 
         ui.add_space(4.0);

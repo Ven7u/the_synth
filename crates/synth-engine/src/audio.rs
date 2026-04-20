@@ -92,7 +92,8 @@ pub struct AudioState {
     pub glide_time: Shared, // 0.0..0.5 s
 
     // Master
-    pub master_vol: Shared,
+    pub master_vol: Shared,  // OSC mix level — pre-FX
+    pub global_vol: Shared,  // Final output — post all FX and tanh
 
     // Polyphonic voice pool
     pub voice_freqs: Vec<Shared>,
@@ -254,6 +255,7 @@ impl AudioState {
             fenv_cursors: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
             glide_time: shared(0.0),
             master_vol: shared(0.8),
+            global_vol: shared(0.8),
             hard_sync_enabled: Arc::new(AtomicBool::new(false)),
             hard_sync_gen: (0..VOICE_COUNT).map(|_| Arc::new(AtomicU8::new(0))).collect(),
             fm_depth: shared(0.0),

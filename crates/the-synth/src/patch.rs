@@ -46,6 +46,9 @@ pub struct Patch {
     pub lfo_shape:   usize,
     pub lfo_dest:    usize,
 
+    #[serde(default)] pub lfo_sync:     bool,
+    #[serde(default = "default_lfo_division")] pub lfo_division: usize,
+
     // LFO 2
     #[serde(default)] pub lfo2_enabled: bool,
     #[serde(default = "default_lfo2_rate")]  pub lfo2_rate:  f32,
@@ -66,6 +69,9 @@ pub struct Patch {
     // Global
     pub glide_time: f32,
     pub master_vol: f32,
+    #[serde(default = "default_global_vol")] pub global_vol: f32,
+    #[serde(default = "default_limiter_enabled")] pub limiter_enabled:    bool,
+    #[serde(default = "default_limiter_threshold")] pub limiter_threshold: f32,
 
     // FX chain (all default to bypass)
     #[serde(default)] pub fx_overdrive_on:    bool,
@@ -86,6 +92,8 @@ pub struct Patch {
     #[serde(default = "default_delay_time")]  pub fx_delay_time:     f32,
     #[serde(default = "default_delay_fb")]    pub fx_delay_feedback: f32,
     #[serde(default)] pub fx_delay_mix:       f32,
+    #[serde(default)] pub fx_delay_sync:      bool,
+    #[serde(default = "default_delay_division")] pub fx_delay_division: usize,
     #[serde(default)] pub fx_reverb_on:       bool,
     #[serde(default = "default_reverb_size")] pub fx_reverb_size:     f32,
     #[serde(default = "default_reverb_damp")] pub fx_reverb_damp:     f32,
@@ -114,8 +122,13 @@ pub struct Patch {
 }
 
 fn default_stereo_width() -> f32 { 1.0 }
+fn default_lfo_division() -> usize { 4 }
 fn default_lfo2_rate() -> f32 { 0.3 }
 fn default_lfo2_dest() -> usize { 2 }
+fn default_global_vol() -> f32 { 0.8 }
+fn default_limiter_enabled() -> bool { true }
+fn default_limiter_threshold() -> f32 { 0.95 }
+fn default_delay_division() -> usize { 2 }
 fn default_overdrive_drive()  -> f32 { 3.0 }
 fn default_distortion_drive() -> f32 { 8.0 }
 fn default_tone()             -> f32 { 0.8 }

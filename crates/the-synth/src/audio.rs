@@ -152,6 +152,10 @@ where
     let mut env_l: f32 = 0.0;
     let mut env_r: f32 = 0.0;
 
+    // Smoothed global volume — 10ms one-pole to prevent clicks on slider moves
+    let global_vol_coeff = (-1.0_f64 / (0.010 * sr)).exp() as f32;
+    let mut global_vol_smooth: f32 = state.global_vol.value() as f32;
+
     // LFO phase accumulators (0..1, advance per sample)
     let mut lfo_phase: f32 = 0.0;
     let mut lfo2_phase: f32 = 0.25; // offset by 90° so LFO1 and LFO2 don't start in sync
@@ -398,8 +402,10 @@ where
 
                 // Gentle soft clip for occasional overshoots.
                 // Apply tremolo after limiter so the limiter doesn't fight the modulation.
-                let l = if raw_l.is_finite() { raw_l.tanh() } else { 0.0 } * lfo_amp;
-                let r_out = if raw_r.is_finite() { raw_r.tanh() } else { 0.0 } * lfo_amp;
+                let target_global = state.global_vol.value() as f32;
+                global_vol_smooth = target_global + global_vol_coeff * (global_vol_smooth - target_global);
+                let l = if raw_l.is_finite() { raw_l.tanh() } else { 0.0 } * lfo_amp * global_vol_smooth;
+                let r_out = if raw_r.is_finite() { raw_r.tanh() } else { 0.0 } * lfo_amp * global_vol_smooth;
 
                 // Peak metering: track true output level (post-limiter, post-tanh)
                 if l.abs() > peak_l_local { peak_l_local = l.abs(); }

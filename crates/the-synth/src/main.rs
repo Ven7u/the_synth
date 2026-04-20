@@ -156,7 +156,8 @@ pub(crate) struct SynthApp {
 
     // Glide + master
     pub(crate) glide_time: f32,
-    pub(crate) master_vol: f32,
+    pub(crate) master_vol: f32,  // OSC mix level — pre-FX
+    pub(crate) global_vol: f32,  // Final output — post all FX
 
     // Keyboard
     pub(crate) piano_octave: i32,
@@ -342,6 +343,7 @@ impl SynthApp {
             amp_adsr: [0.01, 0.15, 0.7, 0.4],
             glide_time: 0.0,
             master_vol: 0.8,
+            global_vol: 0.8,
             piano_octave: 4,
             kb_chord_mode: false,
             kb_freeze: false,
@@ -799,15 +801,13 @@ impl eframe::App for SynthApp {
                 ui.separator();
 
                 ui.label(egui::RichText::new("Vol:").strong())
-                    .on_hover_text("Master output volume.");
+                    .on_hover_text("Global output volume — applied after all FX.");
                 if ui.add(
-                    egui::Slider::new(&mut self.master_vol, 0.0f32..=1.0)
+                    egui::Slider::new(&mut self.global_vol, 0.0f32..=1.0)
                         .clamp_to_range(true)
                         .fixed_decimals(2)
-                ).on_hover_text("Master output volume (0–1).")
-                .changed()
-                {
-                    self.state.master_vol.set(self.master_vol);
+                ).changed() {
+                    self.state.global_vol.set(self.global_vol);
                 }
 
                 ui.separator();
@@ -961,6 +961,8 @@ impl SynthApp {
             lfo_depth:          self.lfo_depth,
             lfo_shape:          self.lfo_shape,
             lfo_dest:           self.lfo_dest,
+            lfo_sync:           self.lfo_sync,
+            lfo_division:       self.lfo_division,
             lfo2_enabled:       self.lfo2_enabled,
             lfo2_rate:          self.lfo2_rate,
             lfo2_depth:         self.lfo2_depth,
@@ -974,6 +976,9 @@ impl SynthApp {
             amp_adsr:           self.amp_adsr,
             glide_time:         self.glide_time,
             master_vol:         self.master_vol,
+            global_vol:         self.global_vol,
+            limiter_enabled:    self.limiter_enabled,
+            limiter_threshold:  self.limiter_threshold,
             synth_model:        String::new(),
             fx_overdrive_on:    self.fx_overdrive_on,
             fx_overdrive_drive: self.fx_overdrive_drive,
@@ -993,6 +998,8 @@ impl SynthApp {
             fx_delay_time:      self.fx_delay_time,
             fx_delay_feedback:  self.fx_delay_feedback,
             fx_delay_mix:       self.fx_delay_mix,
+            fx_delay_sync:      self.fx_delay_sync,
+            fx_delay_division:  self.fx_delay_division,
             fx_reverb_on:       self.fx_reverb_on,
             fx_reverb_size:     self.fx_reverb_size,
             fx_reverb_damp:     self.fx_reverb_damp,
@@ -1045,6 +1052,8 @@ impl SynthApp {
         self.lfo_depth          = p.lfo_depth;
         self.lfo_shape          = p.lfo_shape;
         self.lfo_dest           = p.lfo_dest;
+        self.lfo_sync           = p.lfo_sync;
+        self.lfo_division       = p.lfo_division;
         self.lfo2_enabled       = p.lfo2_enabled;
         self.lfo2_rate          = p.lfo2_rate;
         self.lfo2_depth         = p.lfo2_depth;
@@ -1058,6 +1067,9 @@ impl SynthApp {
         self.amp_adsr           = p.amp_adsr;
         self.glide_time         = p.glide_time;
         self.master_vol         = p.master_vol;
+        self.global_vol         = p.global_vol;
+        self.limiter_enabled    = p.limiter_enabled;
+        self.limiter_threshold  = p.limiter_threshold;
 
         // Push everything to AudioState Shareds
         let s = &self.state;
@@ -1093,6 +1105,9 @@ impl SynthApp {
         s.adsr_release.set(self.amp_adsr[3]);
         s.glide_time.set(self.glide_time);
         s.master_vol.set(self.master_vol);
+        s.global_vol.set(self.global_vol);
+        s.limiter_enabled.store(self.limiter_enabled, std::sync::atomic::Ordering::Relaxed);
+        s.limiter_threshold.set(self.limiter_threshold);
 
         // FX chain — only applied when "Load FX" is enabled in the patch browser
         if self.patch_load_fx {
@@ -1114,6 +1129,8 @@ impl SynthApp {
             self.fx_delay_time      = p.fx_delay_time;
             self.fx_delay_feedback  = p.fx_delay_feedback;
             self.fx_delay_mix       = p.fx_delay_mix;
+            self.fx_delay_sync      = p.fx_delay_sync;
+            self.fx_delay_division  = p.fx_delay_division;
             self.fx_reverb_on       = p.fx_reverb_on;
             self.fx_reverb_size     = p.fx_reverb_size;
             self.fx_reverb_damp     = p.fx_reverb_damp;
@@ -1171,6 +1188,8 @@ impl SynthApp {
             s.fx_crystal.delay_ms.set_value(self.fx_crystal_delay_ms);
             s.fx_crystal.pitch.store(self.fx_crystal_pitch, std::sync::atomic::Ordering::Relaxed);
             s.fx_crystal.mix.set_value(if self.fx_crystal_on { self.fx_crystal_mix } else { 0.0 });
+            // Propagate delay sync state (reads fx_delay_sync / fx_delay_division)
+            self.apply_clock_sync();
         }
     }
 }
