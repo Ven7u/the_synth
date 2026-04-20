@@ -94,6 +94,9 @@ pub struct AudioState {
     // Master
     pub master_vol: Shared,  // OSC mix level — pre-FX
     pub global_vol: Shared,  // Final output — post all FX and tanh
+    // 1/sqrt(active_voices) gain scaling — prevents polyphonic chords from
+    // being louder than single notes. Smoothed by callback, read by graph.
+    pub voice_gain_scale: Shared,
 
     // Polyphonic voice pool
     pub voice_freqs: Vec<Shared>,
@@ -256,6 +259,7 @@ impl AudioState {
             glide_time: shared(0.0),
             master_vol: shared(0.8),
             global_vol: shared(0.8),
+            voice_gain_scale: shared(1.0),
             hard_sync_enabled: Arc::new(AtomicBool::new(false)),
             hard_sync_gen: (0..VOICE_COUNT).map(|_| Arc::new(AtomicU8::new(0))).collect(),
             fm_depth: shared(0.0),
@@ -436,7 +440,8 @@ pub fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Sen
 
     let voice_mix = v0 + v1 + v2 + v3 + v4 + v5;
 
-    let chain = (voice_mix * var(&state.master_vol)) >> An(FxChain::new(state, sr as f32));
+    let chain = (voice_mix * var(&state.master_vol) * var(&state.voice_gain_scale))
+        >> An(FxChain::new(state, sr as f32));
 
     let mut g: Box<dyn AudioUnit + Send> = Box::new(chain);
     g.set_sample_rate(sr);
@@ -685,7 +690,9 @@ impl AudioNode for FxChain {
             self.od_tone_z = (1.0 - lp_coeff) * clipped + lp_coeff * self.od_tone_z;
             self.od_tone_z
         } else { dry };
-        let s1 = dry + od_mix * (od_wet - dry);
+        // Equal-power crossfade: cos(θ)·dry + sin(θ)·wet where θ = mix·π/2
+        let od_theta = od_mix * std::f32::consts::FRAC_PI_2;
+        let s1 = od_theta.cos() * dry + od_theta.sin() * od_wet;
 
         // ── Distortion (hard clip) ──────────────────────────────────────────
         let dist_drive = self.dist_drive.next().max(1.0);
@@ -707,7 +714,8 @@ impl AudioNode for FxChain {
             self.dist_tone_z = (1.0 - lp_coeff) * clipped + lp_coeff * self.dist_tone_z;
             self.dist_tone_z
         } else { s1 };
-        let s2 = s1 + dist_mix * (dist_wet - s1);
+        let dist_theta = dist_mix * std::f32::consts::FRAC_PI_2;
+        let s2 = dist_theta.cos() * s1 + dist_theta.sin() * dist_wet;
 
         // ── Chorus (LFO-modulated short delay) ─────────────────────────────
         let cho_mix = self.cho_mix.next();
@@ -725,7 +733,8 @@ impl AudioNode for FxChain {
             let i1 = (i0 + 1) % buf_len;
             self.del_buf[i0] * (1.0 - read.fract()) + self.del_buf[i1] * read.fract()
         } else { s2 };
-        let s3 = s2 + cho_mix * (cho_wet - s2);
+        let cho_theta = cho_mix * std::f32::consts::FRAC_PI_2;
+        let s3 = cho_theta.cos() * s2 + cho_theta.sin() * cho_wet;
 
         // ── Delay ──────────────────────────────────────────────────────────
         let del_mix      = self.del_mix.next();
@@ -829,14 +838,16 @@ impl AudioNode for FxChain {
             )
         } else { (0.0, 0.0) };
 
-        // Wet balance:
-        // keep output level stable as wet is increased so "more mix" means
-        // more space/halo, not mostly more gain into downstream saturation.
+        // Equal-power wet balance: cos(θ)·dry so total energy stays constant
+        // when wet is increased. θ = total_wet · π/2.
         let wet_total = (rev_mix + shim_mix + crys_mix).clamp(0.0, 1.0);
-        let dry_bal = s4 * (1.0 - wet_total);
+        let dry_bal = s4 * (wet_total * std::f32::consts::FRAC_PI_2).cos();
 
-        let wet_l = rev_mix * rev_wet_l + shim_mix * shim_wet_l;
-        let wet_r = rev_mix * rev_wet_r + shim_mix * shim_wet_r;
+        // Wet side gain: sin(θ) completes the equal-power pair with cos(θ) dry.
+        let wet_gain = (wet_total * std::f32::consts::FRAC_PI_2).sin();
+        let wet_scale = if wet_total > 0.0001 { wet_gain / wet_total } else { 1.0 };
+        let wet_l = (rev_mix * rev_wet_l + shim_mix * shim_wet_l) * wet_scale;
+        let wet_r = (rev_mix * rev_wet_r + shim_mix * shim_wet_r) * wet_scale;
 
         // Extra width in the wet field only, leaving dry center stable.
         let wet_mid = 0.5 * (wet_l + wet_r);
@@ -860,8 +871,9 @@ impl AudioNode for FxChain {
         let dry_r = self.haas_buf[i0] * (1.0 - frac) + self.haas_buf[i1] * frac;
         self.haas_pos = (self.haas_pos + 1) % haas_len;
 
-        let raw_l = dry_bal   + wet_wide_l + crys_mix * crys_wet_l;
-        let raw_r = dry_r     + wet_wide_r + crys_mix * crys_wet_r;
+        let crys_theta = crys_mix * std::f32::consts::FRAC_PI_2;
+        let raw_l = dry_bal   + wet_wide_l + crys_theta.sin() * crys_wet_l;
+        let raw_r = dry_r     + wet_wide_r + crys_theta.sin() * crys_wet_r;
 
         // M/S width on final output
         let width = self.stereo_width.next().clamp(0.0, 2.0);

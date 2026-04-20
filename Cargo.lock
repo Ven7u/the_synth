@@ -7169,6 +7169,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "synth-bench"
+version = "0.1.0"
+dependencies = [
+ "synth-dsp",
+]
+
+[[package]]
 name = "synth-bevy"
 version = "0.1.0"
 dependencies = [

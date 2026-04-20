@@ -1,0 +1,11 @@
+[package]
+name = "synth-bench"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "synth-bench"
+path = "src/main.rs"
+
+[dependencies]
+synth-dsp = { path = "../synth-dsp" }

@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use synth_engine::audio::build_synth_graph;
 use synth_engine::arp::{ArpState, ScaleWalker};
 use synth_control::{make_control_channel, ControlSender, ControlReceiver, ControlEvent, ParamId};
+use synth_dsp::LookaheadLimiter;
 use crate::recorder::Recorder;
 
 type RecorderSink = Arc<Mutex<Option<Recorder>>>;
@@ -148,13 +149,26 @@ where
     let mut osc_idx: usize = 0;
     let mut buffer_size_captured = false;
 
-    // Limiter envelope state (lives across callbacks)
-    let mut env_l: f32 = 0.0;
-    let mut env_r: f32 = 0.0;
+    // Lookahead true-peak limiter: 1.5ms lookahead, 80ms release
+    let mut lookahead_lim = LookaheadLimiter::new(sr as f32, 1.5, 80.0);
 
     // Smoothed global volume — 10ms one-pole to prevent clicks on slider moves
     let global_vol_coeff = (-1.0_f64 / (0.010 * sr)).exp() as f32;
     let mut global_vol_smooth: f32 = state.global_vol.value() as f32;
+
+    // DC blocker: 1-pole high-pass at ~20 Hz. Removes low-frequency bias that
+    // builds up from FX chains (reverb, chorus, delay) and eats headroom.
+    // y[n] = x[n] - x[n-1] + coeff * y[n-1]  (coeff ≈ 1 - 2π·20/sr)
+    let dc_coeff = 1.0_f32 - (std::f32::consts::TAU * 20.0 / sr as f32);
+    let mut dc_x_prev_l: f32 = 0.0;
+    let mut dc_x_prev_r: f32 = 0.0;
+    let mut dc_y_prev_l: f32 = 0.0;
+    let mut dc_y_prev_r: f32 = 0.0;
+
+    // Voice gain staging: smooth 1/sqrt(active_voices) to prevent polyphonic
+    // passages from sounding louder than monophonic notes.
+    let vgs_coeff = (-1.0_f64 / (0.020 * sr)).exp() as f32; // 20ms smoothing
+    let mut voice_gain_smooth: f32 = 1.0;
 
     // LFO phase accumulators (0..1, advance per sample)
     let mut lfo_phase: f32 = 0.0;
@@ -162,8 +176,6 @@ where
 
     // Per-voice smoothed frequencies for glide (callback writes to voice_freqs from these)
     let mut smoothed_freqs: Vec<f32> = vec![440.0; VOICE_COUNT];
-    let attack_coeff = (-1.0_f64 / (0.0001 * sr)).exp() as f32; // ~0.1ms attack
-    let release_coeff = (-1.0_f64 / (0.05 * sr)).exp() as f32; // ~50ms release
 
     // Voice allocation state — moved from UI thread to audio callback.
     // slot → Option<MIDI pitch> for each of VOICE_COUNT voices.
@@ -276,6 +288,17 @@ where
                 buffer_size_captured = true;
             }
 
+            // Voice gain staging: count sounding voices, smooth 1/sqrt(n) gain
+            {
+                let n_active = state.amp_cursors.iter()
+                    .filter(|c| c.value() > 0.01)
+                    .count();
+                let n_active = if n_active < 1 { 1 } else { n_active };
+                let target_scale = 1.0_f32 / (n_active as f32).sqrt();
+                voice_gain_smooth = target_scale + vgs_coeff * (voice_gain_smooth - target_scale);
+                state.voice_gain_scale.set(voice_gain_smooth);
+            }
+
             // Read per-buffer params once (cheap; avoids repeated atomic loads per sample)
             let sr_f = sr as f32;
             let lfo_rate  = state.lfo_rate.value();
@@ -374,30 +397,20 @@ where
                     }
                 }
 
-                let (mut raw_l, mut raw_r) = graph.get_stereo();
+                let (raw_l_pre, raw_r_pre) = graph.get_stereo();
 
-                // Optional envelope-follower limiter (before soft clip)
+                // DC blocker applied before limiter so limiter sees clean signal
+                let dc_l = raw_l_pre - dc_x_prev_l + dc_coeff * dc_y_prev_l;
+                let dc_r = raw_r_pre - dc_x_prev_r + dc_coeff * dc_y_prev_r;
+                dc_x_prev_l = raw_l_pre; dc_y_prev_l = dc_l;
+                dc_x_prev_r = raw_r_pre; dc_y_prev_r = dc_r;
+                let (mut raw_l, mut raw_r) = (dc_l, dc_r);
+
+                // Lookahead true-peak limiter: applies gain before the peak arrives
                 if limiter_on {
-                    let abs_l = raw_l.abs();
-                    let abs_r = raw_r.abs();
-                    // Fast attack, slow release envelope follower
-                    env_l = if abs_l > env_l {
-                        attack_coeff * env_l + (1.0 - attack_coeff) * abs_l
-                    } else {
-                        release_coeff * env_l + (1.0 - release_coeff) * abs_l
-                    };
-                    env_r = if abs_r > env_r {
-                        attack_coeff * env_r + (1.0 - attack_coeff) * abs_r
-                    } else {
-                        release_coeff * env_r + (1.0 - release_coeff) * abs_r
-                    };
-
-                    if env_l > threshold {
-                        raw_l *= threshold / env_l;
-                    }
-                    if env_r > threshold {
-                        raw_r *= threshold / env_r;
-                    }
+                    let (lim_l, lim_r) = lookahead_lim.process_stereo(raw_l, raw_r, threshold);
+                    raw_l = lim_l;
+                    raw_r = lim_r;
                 }
 
                 // Gentle soft clip for occasional overshoots.
