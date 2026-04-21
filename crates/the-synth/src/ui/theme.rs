@@ -200,7 +200,9 @@ impl SynthTheme {
         // Background layers
         vis.panel_fill       = bg_app;
         vis.window_fill      = bg_surface;
-        vis.extreme_bg_color = bg_sunken;
+        // Slider rails use extreme_bg_color — must be visibly distinct from bg_surface.
+        // bg_sunken is often darker than bg_surface, making rails invisible; use a lightened surface instead.
+        vis.extreme_bg_color = lighten(bg_surface, 22);
         vis.code_bg_color    = bg_sunken;
         vis.faint_bg_color   = bg_sunken;
 
@@ -222,11 +224,12 @@ impl SynthTheme {
         vis.hyperlink_color  = accent;
 
         // Widget states
+        // inactive.bg_fill is used by Slider as the rail color — must be distinct from bg_surface.
         vis.widgets.noninteractive = wv(bg_surface,                   text_secondary, border,       self.stroke_ui);
-        vis.widgets.inactive       = wv(bg_surface,                   text_primary,   border,       self.stroke_ui);
-        vis.widgets.hovered        = wv(lighten(bg_surface, 12),      text_primary,   border_focus, self.stroke_focus);
+        vis.widgets.inactive       = wv(lighten(bg_surface, 28),      text_primary,   border,       self.stroke_ui);
+        vis.widgets.hovered        = wv(lighten(bg_surface, 40),      text_primary,   border_focus, self.stroke_focus);
         vis.widgets.active         = wv(accent_fill,                  accent,         accent,       self.stroke_focus);
-        vis.widgets.open           = wv(lighten(bg_surface, 8),       text_primary,   border_focus, self.stroke_ui);
+        vis.widgets.open           = wv(lighten(bg_surface, 22),      text_primary,   border_focus, self.stroke_ui);
 
         ctx.set_visuals(vis);
 
