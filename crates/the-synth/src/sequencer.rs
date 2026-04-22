@@ -428,6 +428,7 @@ pub fn spawn_sequencer(
 
             let mut prev_notes: Vec<u8> = Vec::new();
             let mut was_playing = false;
+            let mut first_tick = true;
             let mut next_tick = Instant::now();
 
             loop {
@@ -441,6 +442,7 @@ pub fn spawn_sequencer(
                             });
                         }
                         was_playing = false;
+                        first_tick = true;
                     }
                     std::thread::sleep(Duration::from_millis(10));
                     continue;
@@ -469,15 +471,16 @@ pub fn spawn_sequencer(
                 let step_dur = Duration::from_millis(60_000 / bpm as u64 / 2);
                 next_tick += step_dur;
 
-                // NoteOff previous notes; keep a copy for same-note retrigger detection.
-                let just_released: Vec<u8> = prev_notes.drain(..).collect();
-                for m in &just_released {
+                // NoteOff previous notes.
+                for m in prev_notes.drain(..) {
                     let _ = control.try_send(synth_control::ControlEvent::NoteOff {
-                        pitch: *m, track: 0,
+                        pitch: m, track: 0,
                     });
                 }
 
-                // Advance step.
+                // Advance step. On the very first tick after Play we play the
+                // stored current_step as-is so step 0 isn't skipped; subsequent
+                // ticks advance by one.
                 let mode = SeqMode::from_u8(handle.mode.load(Ordering::Relaxed));
                 let seq_length = match mode {
                     SeqMode::NoteSeq  => handle.note_seq.lock().map(|g| g.length).unwrap_or(8),
@@ -485,7 +488,12 @@ pub fn spawn_sequencer(
                     SeqMode::ChordKb  => continue,
                 };
 
-                let current = (handle.current_step.load(Ordering::Relaxed) + 1) % seq_length;
+                let current = if first_tick {
+                    first_tick = false;
+                    handle.current_step.load(Ordering::Relaxed) % seq_length
+                } else {
+                    (handle.current_step.load(Ordering::Relaxed) + 1) % seq_length
+                };
                 handle.current_step.store(current, Ordering::Relaxed);
                 let bar_boundary = current == 0;
 
@@ -513,13 +521,10 @@ pub fn spawn_sequencer(
                     SeqMode::ChordKb => vec![],
                 };
 
-                // Send NoteOns, handling same-note retrigger with a brief sleep.
+                // Send NoteOns. The audio thread's trigger_note guarantees a
+                // clean attack even when NoteOff + NoteOn for the same pitch
+                // arrive in the same buffer, so no inter-event delay is needed.
                 for m in notes_to_play {
-                    if just_released.contains(&m) {
-                        // Give the audio callback at least a few ms at gate=0 before the
-                        // retrigger NoteOn, so the ADSR sees a real 0→1 transition.
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
                     if let Ok(mut t) = note_on_time.lock() {
                         *t = Some(Instant::now());
                     }

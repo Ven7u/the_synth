@@ -26,10 +26,14 @@ pub use synth_engine::audio::{AudioState, VOICE_COUNT};
 /// Trigger or retrigger a voice for `pitch`.
 ///
 /// - Increments the pitch's hold count.
-/// - If the count was 0 (fresh note): allocates a slot and sets gate=1.0 immediately.
-/// - If the count was >0 (retrigger): sets gate=0.0 and starts a 4-sample countdown;
-///   the sample loop will flip the gate back to 1.0 once it expires, giving the ADSR
-///   a real 0→1 transition without a same-buffer NoteOff+NoteOn collision.
+/// - Allocates (or reuses) a slot.
+/// - If the target slot is audibly playing (gate held OR envelope still above
+///   the idle threshold): sets gate=0.0 and starts a 4-sample countdown; the
+///   sample loop flips the gate back to 1.0 once it expires, guaranteeing the
+///   ADSR sees a real 0→1 transition. Covers both polyphonic retriggers and
+///   the same-buffer NoteOff+NoteOn sequence emitted by the sequencer on
+///   repeated notes.
+/// - Otherwise (fresh / silent slot): sets gate=1.0 immediately.
 fn trigger_note(
     pitch: u8,
     voice_notes: &mut [Option<u8>],
@@ -38,9 +42,9 @@ fn trigger_note(
     retrigger_countdown: &mut [u8],
     voice_freq_targets: &[fundsp::prelude32::Shared],
     voice_gates: &[fundsp::prelude32::Shared],
+    amp_cursors: &[fundsp::prelude32::Shared],
 ) {
     let count = &mut pitch_hold_count[pitch as usize];
-    let was_zero = *count == 0;
     *count = count.saturating_add(1);
 
     let n = voice_notes.len();
@@ -52,16 +56,21 @@ fn trigger_note(
             s
         });
 
+    // Audible if the gate is still held, or the amp envelope hasn't gone
+    // idle yet (cursor > 0.5 means attack/decay/sustain/release — i.e. still
+    // producing sound). Amp_cursor encoding: 0=idle, 1.x=A, 2.x=D, 3=S, 4.x=R.
+    let audible = voice_gates[slot].value() > 0.5 || amp_cursors[slot].value() > 0.5;
+
     voice_notes[slot] = Some(pitch);
     voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
 
-    if was_zero {
-        voice_gates[slot].set(1.0);
-        retrigger_countdown[slot] = 0;
-    } else {
-        // Retrigger: brief silence so the ADSR sees a real gate edge.
+    if audible {
+        // Force a brief gap so the ADSR sees a real 0→1 edge on attack.
         voice_gates[slot].set(0.0);
         retrigger_countdown[slot] = 4; // ~90 µs at 44.1 kHz — inaudible gap
+    } else {
+        voice_gates[slot].set(1.0);
+        retrigger_countdown[slot] = 0;
     }
 }
 
@@ -222,7 +231,8 @@ where
                         } else {
                             trigger_note(pitch, &mut voice_notes, &mut steal_idx,
                                 &mut pitch_hold_count, &mut retrigger_countdown,
-                                &state.voice_freq_targets, &state.voice_gates);
+                                &state.voice_freq_targets, &state.voice_gates,
+                                &state.amp_cursors);
                         }
                     }
                     ControlEvent::NoteOff { pitch, track: _ } => {
@@ -274,7 +284,8 @@ where
                 if let Some(pitch) = ev.note_on {
                     trigger_note(pitch, &mut voice_notes, &mut steal_idx,
                         &mut pitch_hold_count, &mut retrigger_countdown,
-                        &state.voice_freq_targets, &state.voice_gates);
+                        &state.voice_freq_targets, &state.voice_gates,
+                        &state.amp_cursors);
                 }
             }
 
