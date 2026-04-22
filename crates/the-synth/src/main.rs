@@ -129,6 +129,7 @@ pub(crate) struct SynthApp {
     pub(crate) fm_depth: f32,                // FM depth (0 = off, ~1 = strong)
     pub(crate) ring_enabled: bool,           // ring modulation OSC 1 × OSC 2
     pub(crate) ring_depth: f32,              // ring mod depth
+    pub(crate) osc1_mod_view: bool,          // OSC 1 card flipped to MOD back face
 
     // Noise
     pub(crate) noise_vol: f32,
@@ -332,6 +333,7 @@ impl SynthApp {
             fm_depth: 1.0,
             ring_enabled: false,
             ring_depth: 1.0,
+            osc1_mod_view: false,
             noise_vol: 0.0,
             lfo_enabled: false,
             lfo_rate: 2.0,
