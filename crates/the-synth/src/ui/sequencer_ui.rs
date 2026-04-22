@@ -5,6 +5,7 @@ use crate::sequencer::{
 use synth_control::ControlEvent;
 use eframe::egui;
 use egui::{Color32, Rounding, Sense, Stroke, Vec2};
+use std::sync::atomic::Ordering;
 
 const SEQ_CHROMATIC: &[u8] = &[
     36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
@@ -16,11 +17,14 @@ const SEQ_CHROMATIC: &[u8] = &[
 
 impl SynthApp {
     pub fn ui_sequencer_panel(&mut self, ui: &mut egui::Ui) {
+        let seq_mode = SeqMode::from_u8(self.seq.mode.load(Ordering::Relaxed));
+        let seq_playing = self.seq.playing.load(Ordering::Relaxed);
+
         // --- Shared toolbar ---
         ui.horizontal(|ui| {
             // Mode tabs
             for &mode in &[SeqMode::NoteSeq, SeqMode::ChordSeq] {
-                let active = self.seq_mode == mode;
+                let active = seq_mode == mode;
                 let label = egui::RichText::new(mode.label())
                     .color(if active { self.theme.c(&self.theme.accent) } else { Color32::GRAY })
                     .strong();
@@ -30,11 +34,9 @@ impl SynthApp {
                     SeqMode::ChordKb  => unreachable!(),
                 };
                 if ui.button(label).on_hover_text(tip).clicked() && !active {
-                    let prev: Vec<u8> = self.seq_prev_notes.drain(..).collect();
-                    for m in prev { self.push_note_off(m); }
-                    self.seq_playing = false;
-                    self.seq_current_step = 0;
-                    self.seq_mode = mode;
+                    self.seq.playing.store(false, Ordering::Relaxed);
+                    self.seq.current_step.store(0, Ordering::Relaxed);
+                    self.seq.mode.store(mode.to_u8(), Ordering::Relaxed);
                 }
             }
 
@@ -42,38 +44,39 @@ impl SynthApp {
 
             // Play/Stop
             {
-                let btn = if self.seq_playing { "⏹ Stop" } else { "▶ Play" };
+                let btn = if seq_playing { "⏹ Stop" } else { "▶ Play" };
                 if ui.button(btn).on_hover_text("Start or stop the sequencer.").clicked() {
-                    self.seq_playing = !self.seq_playing;
-                    if self.seq_playing {
-                        self.seq_last_tick = std::time::Instant::now();
-                        if self.seq_bar_quantize_start && self.seq_current_step == 0 {
-                            if self.arp_restart_pending {
+                    let new_playing = !seq_playing;
+                    self.seq.playing.store(new_playing, Ordering::Relaxed);
+                    if new_playing {
+                        let bar_quantize = self.seq.bar_quantize.load(Ordering::Relaxed);
+                        let current_step = self.seq.current_step.load(Ordering::Relaxed);
+                        if bar_quantize && current_step == 0 {
+                            if self.seq.arp_restart.load(Ordering::Relaxed) {
                                 let _ = self.control.try_send(ControlEvent::ArpRestart { track: 0 });
-                                self.arp_restart_pending = false;
+                                self.seq.arp_restart.store(false, Ordering::Relaxed);
                             }
-                            if self.walker_restart_pending {
+                            if self.seq.walker_restart.load(Ordering::Relaxed) {
                                 let _ = self.control.try_send(ControlEvent::WalkerRestart { track: 0 });
-                                self.walker_restart_pending = false;
+                                self.seq.walker_restart.store(false, Ordering::Relaxed);
                             }
                         }
-                    } else {
-                        let prev: Vec<u8> = self.seq_prev_notes.drain(..).collect();
-                        for m in prev { self.push_note_off(m); }
                     }
                 }
+
                 // Sequencer BPM — locked to global when seq_sync is active
                 let seq_sync_on = self.seq_sync_active();
                 if seq_sync_on {
-                    self.seq_bpm = self.global_bpm;
+                    self.seq.bpm.store(self.global_bpm, Ordering::Relaxed);
                 }
+                let mut bpm_val = self.seq.bpm.load(Ordering::Relaxed);
                 ui.label("BPM:").on_hover_text("Sequencer tempo. Follows Global BPM when Sync is enabled.");
                 ui.add_enabled_ui(!seq_sync_on, |ui| {
-                    if ui.add(egui::Slider::new(&mut self.seq_bpm, 40..=600))
+                    if ui.add(egui::Slider::new(&mut bpm_val, 40..=600))
                         .on_hover_text("Sequencer tempo (40–600 BPM).")
                         .changed()
                     {
-                        // seq has its own BPM while unsynced — no clock sync propagation needed
+                        self.seq.bpm.store(bpm_val, Ordering::Relaxed);
                     }
                 });
                 ui.add_enabled_ui(!self.global_sync, |ui| {
@@ -89,19 +92,26 @@ impl SynthApp {
                 });
 
                 // Step length selector
-                let cur_length = match self.seq_mode {
-                    SeqMode::NoteSeq  => &mut self.note_seq.length,
-                    SeqMode::ChordSeq => &mut self.chord_seq.length,
+                let cur_length = match seq_mode {
+                    SeqMode::NoteSeq  => self.seq.note_seq.lock().unwrap().length,
+                    SeqMode::ChordSeq => self.seq.chord_seq.lock().unwrap().length,
                     SeqMode::ChordKb  => unreachable!(),
                 };
                 ui.label("Steps:").on_hover_text("Number of steps in the sequencer pattern.");
                 for &len in &[8usize, 16, 24] {
-                    let active = *cur_length == len;
+                    let active = cur_length == len;
                     let label = egui::RichText::new(format!("{len}"))
                         .color(if active { self.theme.c(&self.theme.accent_dim) } else { Color32::GRAY });
                     if ui.button(label).on_hover_text(format!("Set pattern length to {len} steps.")).clicked() {
-                        *cur_length = len;
-                        if self.seq_current_step >= len { self.seq_current_step = 0; }
+                        match seq_mode {
+                            SeqMode::NoteSeq  => self.seq.note_seq.lock().unwrap().length = len,
+                            SeqMode::ChordSeq => self.seq.chord_seq.lock().unwrap().length = len,
+                            SeqMode::ChordKb  => {}
+                        }
+                        let current = self.seq.current_step.load(Ordering::Relaxed);
+                        if current >= len {
+                            self.seq.current_step.store(0, Ordering::Relaxed);
+                        }
                     }
                 }
 
@@ -112,22 +122,24 @@ impl SynthApp {
                     let mut h = DefaultHasher::new();
                     std::time::SystemTime::now().hash(&mut h);
                     let seed = h.finish();
-                    match self.seq_mode {
+                    match seq_mode {
                         SeqMode::NoteSeq => {
-                            let len = self.note_seq.length;
+                            let mut ns = self.seq.note_seq.lock().unwrap();
+                            let len = ns.length;
                             for i in 0..len {
-                                self.note_seq.steps[i] = seed.wrapping_shr(i as u32) & 1 == 1;
-                                self.note_seq.notes[i] = SEQ_CHROMATIC[
+                                ns.steps[i] = seed.wrapping_shr(i as u32) & 1 == 1;
+                                ns.notes[i] = SEQ_CHROMATIC[
                                     (seed.wrapping_shr((i * 3) as u32) & 0xff) as usize
                                     % SEQ_CHROMATIC.len()
                                 ];
                             }
                         }
                         SeqMode::ChordSeq => {
-                            let len = self.chord_seq.length;
+                            let mut cs = self.seq.chord_seq.lock().unwrap();
+                            let len = cs.length;
                             for i in 0..len {
-                                self.chord_seq.steps[i] = seed.wrapping_shr(i as u32) & 1 == 1;
-                                self.chord_seq.degrees[i] =
+                                cs.steps[i] = seed.wrapping_shr(i as u32) & 1 == 1;
+                                cs.degrees[i] =
                                     (seed.wrapping_shr((i * 4) as u32) & 0xff) as usize % 7;
                             }
                         }
@@ -137,32 +149,39 @@ impl SynthApp {
             }
 
             // Chord key/scale selector (ChordSeq only)
-            if self.seq_mode == SeqMode::ChordSeq {
+            if seq_mode == SeqMode::ChordSeq {
                 ui.separator();
                 ui.label("Key:").on_hover_text("Root note for the chord scale.");
+                let cur_root = self.seq.chord_seq.lock().unwrap().root;
                 egui::ComboBox::from_id_salt("chord_root")
-                    .selected_text(NOTE_NAMES[self.chord_seq.root as usize])
+                    .selected_text(NOTE_NAMES[cur_root as usize])
                     .show_ui(ui, |ui| {
+                        let mut root = cur_root;
                         for (i, name) in NOTE_NAMES.iter().enumerate() {
-                            ui.selectable_value(&mut self.chord_seq.root, i as u8, *name);
+                            if ui.selectable_value(&mut root, i as u8, *name).changed() {
+                                self.seq.chord_seq.lock().unwrap().root = root;
+                            }
                         }
                     });
                 ui.label("Scale:");
+                let cur_scale = self.seq.chord_seq.lock().unwrap().scale;
                 for &sc in &[ScaleType::Major, ScaleType::Minor] {
-                    let active = self.chord_seq.scale == sc;
+                    let active = cur_scale == sc;
                     let label = egui::RichText::new(sc.label())
                         .color(if active { self.theme.c(&self.theme.accent_dim) } else { Color32::GRAY });
                     if ui.button(label).on_hover_text(match sc {
                         ScaleType::Major => "Major scale — bright, happy feel.",
                         ScaleType::Minor => "Minor scale — dark, moody feel.",
-                    }).clicked() { self.chord_seq.scale = sc; }
+                    }).clicked() {
+                        self.seq.chord_seq.lock().unwrap().scale = sc;
+                    }
                 }
             }
         });
 
         ui.add_space(4.0);
 
-        match self.seq_mode {
+        match seq_mode {
             SeqMode::NoteSeq  => self.ui_note_seq(ui),
             SeqMode::ChordSeq => self.ui_chord_seq(ui),
             SeqMode::ChordKb  => {} // handled in keyboard strip
@@ -171,26 +190,35 @@ impl SynthApp {
 
     fn ui_note_seq(&mut self, ui: &mut egui::Ui) {
         let bar_area_h = 64.0;
-        let n = self.note_seq.length as f32;
+        let seq_playing = self.seq.playing.load(Ordering::Relaxed);
+        let seq_current_step = self.seq.current_step.load(Ordering::Relaxed);
+
+        let (length, midi_min, midi_max) = {
+            let ns = self.seq.note_seq.lock().unwrap();
+            (ns.length, *SEQ_CHROMATIC.first().unwrap() as f32, *SEQ_CHROMATIC.last().unwrap() as f32)
+        };
+
+        let n = length as f32;
         let spacing = ui.spacing().item_spacing.x;
         let step_w = ((ui.available_width() - spacing * (n - 1.0)) / n).max(28.0);
-        let midi_min = *SEQ_CHROMATIC.first().unwrap() as f32;
-        let midi_max = *SEQ_CHROMATIC.last().unwrap() as f32;
 
         ui.horizontal(|ui| {
-            for i in 0..self.note_seq.length {
+            for i in 0..length {
                 ui.vertical(|ui| {
                     ui.set_width(step_w);
-                    let is_current = self.seq_playing && self.seq_current_step == i;
-                    let is_on = self.note_seq.steps[i];
-                    let note = self.note_seq.notes[i] as f32;
+                    let (is_on, note) = {
+                        let ns = self.seq.note_seq.lock().unwrap();
+                        (ns.steps[i], ns.notes[i])
+                    };
+                    let is_current = seq_playing && seq_current_step == i;
+                    let note_f = note as f32;
 
                     // Pitch bar
                     let (bar_resp, painter) = ui.allocate_painter(
                         Vec2::new(step_w, bar_area_h), Sense::click_and_drag());
                     let r = bar_resp.rect;
                     painter.rect_filled(r, Rounding::same(4.0), self.theme.c(&self.theme.bg_seq_bar));
-                    let t = (note - midi_min) / (midi_max - midi_min);
+                    let t = (note_f - midi_min) / (midi_max - midi_min);
                     let bar_h = (t * (bar_area_h - 4.0)).max(4.0);
                     let bar_rect = egui::Rect::from_min_size(
                         egui::pos2(r.min.x + 2.0, r.max.y - bar_h - 2.0),
@@ -201,22 +229,25 @@ impl SynthApp {
                         else { self.theme.c(&self.theme.seq_note_bar_off) };
                     painter.rect_filled(bar_rect, Rounding::same(3.0), bar_color);
                     painter.text(r.center(), egui::Align2::CENTER_CENTER,
-                        super::midi_note_name(self.note_seq.notes[i]),
+                        super::midi_note_name(note),
                         egui::FontId::monospace(10.0),
                         if is_on { Color32::WHITE } else { Color32::GRAY });
 
                     if bar_resp.dragged() {
-                        self.note_seq.drag_accum[i] -= bar_resp.drag_delta().y;
-                        let steps = self.note_seq.drag_accum[i] as i32;
+                        let mut ns = self.seq.note_seq.lock().unwrap();
+                        ns.drag_accum[i] -= bar_resp.drag_delta().y;
+                        let steps = ns.drag_accum[i] as i32;
                         if steps != 0 {
-                            self.note_seq.drag_accum[i] -= steps as f32;
+                            ns.drag_accum[i] -= steps as f32;
                             let pos = SEQ_CHROMATIC.iter()
-                                .position(|&n| n == self.note_seq.notes[i]).unwrap_or(0) as i32;
+                                .position(|&n| n == ns.notes[i]).unwrap_or(0) as i32;
                             let new_pos = (pos + steps).clamp(0, SEQ_CHROMATIC.len() as i32 - 1) as usize;
-                            self.note_seq.notes[i] = SEQ_CHROMATIC[new_pos];
+                            ns.notes[i] = SEQ_CHROMATIC[new_pos];
                         }
                     }
-                    if bar_resp.drag_stopped() { self.note_seq.drag_accum[i] = 0.0; }
+                    if bar_resp.drag_stopped() {
+                        self.seq.note_seq.lock().unwrap().drag_accum[i] = 0.0;
+                    }
 
                     // Step button
                     let fill = if is_current { self.theme.c(&self.theme.seq_current) }
@@ -226,7 +257,10 @@ impl SynthApp {
                     painter.rect_filled(r.rect, Rounding::same(5.0), fill);
                     painter.rect_stroke(r.rect, Rounding::same(5.0),
                         Stroke::new(1.0, if is_current { Color32::WHITE } else { Color32::GRAY }));
-                    if r.clicked() { self.note_seq.steps[i] = !self.note_seq.steps[i]; }
+                    if r.clicked() {
+                        let mut ns = self.seq.note_seq.lock().unwrap();
+                        ns.steps[i] = !ns.steps[i];
+                    }
                 });
             }
         });
@@ -234,17 +268,27 @@ impl SynthApp {
 
     fn ui_chord_seq(&mut self, ui: &mut egui::Ui) {
         let bar_area_h = 64.0;
-        let n = self.chord_seq.length as f32;
+        let seq_playing = self.seq.playing.load(Ordering::Relaxed);
+        let seq_current_step = self.seq.current_step.load(Ordering::Relaxed);
+
+        let (length, scale, root) = {
+            let cs = self.seq.chord_seq.lock().unwrap();
+            (cs.length, cs.scale, cs.root)
+        };
+
+        let n = length as f32;
         let spacing = ui.spacing().item_spacing.x;
         let step_w = ((ui.available_width() - spacing * (n - 1.0)) / n).max(28.0);
 
         ui.horizontal(|ui| {
-            for i in 0..self.chord_seq.length {
+            for i in 0..length {
                 ui.vertical(|ui| {
                     ui.set_width(step_w);
-                    let is_current = self.seq_playing && self.seq_current_step == i;
-                    let is_on = self.chord_seq.steps[i];
-                    let degree = self.chord_seq.degrees[i];
+                    let (is_on, degree) = {
+                        let cs = self.seq.chord_seq.lock().unwrap();
+                        (cs.steps[i], cs.degrees[i])
+                    };
+                    let is_current = seq_playing && seq_current_step == i;
 
                     let (bar_resp, painter) = ui.allocate_painter(
                         Vec2::new(step_w, bar_area_h), Sense::click_and_drag());
@@ -256,7 +300,7 @@ impl SynthApp {
                         egui::pos2(r.min.x + 2.0, r.max.y - bar_h - 2.0),
                         Vec2::new(step_w - 4.0, bar_h),
                     );
-                    let quality = chord_quality(self.chord_seq.scale, degree);
+                    let quality = chord_quality(scale, degree);
                     let bar_color = if is_current { self.theme.c(&self.theme.seq_current) }
                         else if !is_on { self.theme.c(&self.theme.seq_note_bar_off) }
                         else if quality == "m" { self.theme.c(&self.theme.seq_chord_minor) }
@@ -264,7 +308,7 @@ impl SynthApp {
                         else { self.theme.c(&self.theme.seq_chord_major) };
                     painter.rect_filled(bar_rect, Rounding::same(3.0), bar_color);
 
-                    let cname = chord_name(self.chord_seq.root, self.chord_seq.scale, degree);
+                    let cname = chord_name(root, scale, degree);
                     painter.text(egui::pos2(r.center().x, r.center().y - 6.0),
                         egui::Align2::CENTER_CENTER, &cname,
                         egui::FontId::monospace(9.0),
@@ -275,15 +319,17 @@ impl SynthApp {
                         if is_on { Color32::from_rgb(180, 180, 180) } else { Color32::from_rgb(80,80,80) });
 
                     if bar_resp.dragged() {
-                        self.chord_seq.drag_accum[i] -= bar_resp.drag_delta().y;
-                        let steps = self.chord_seq.drag_accum[i] as i32;
+                        let mut cs = self.seq.chord_seq.lock().unwrap();
+                        cs.drag_accum[i] -= bar_resp.drag_delta().y;
+                        let steps = cs.drag_accum[i] as i32;
                         if steps != 0 {
-                            self.chord_seq.drag_accum[i] -= steps as f32;
-                            self.chord_seq.degrees[i] =
-                                (degree as i32 + steps).clamp(0, 6) as usize;
+                            cs.drag_accum[i] -= steps as f32;
+                            cs.degrees[i] = (degree as i32 + steps).clamp(0, 6) as usize;
                         }
                     }
-                    if bar_resp.drag_stopped() { self.chord_seq.drag_accum[i] = 0.0; }
+                    if bar_resp.drag_stopped() {
+                        self.seq.chord_seq.lock().unwrap().drag_accum[i] = 0.0;
+                    }
 
                     let fill = if is_current { self.theme.c(&self.theme.seq_current) }
                         else if is_on { self.theme.c(&self.theme.seq_step_on) }
@@ -292,7 +338,10 @@ impl SynthApp {
                     painter.rect_filled(r.rect, Rounding::same(5.0), fill);
                     painter.rect_stroke(r.rect, Rounding::same(5.0),
                         Stroke::new(1.0, if is_current { Color32::WHITE } else { Color32::GRAY }));
-                    if r.clicked() { self.chord_seq.steps[i] = !self.chord_seq.steps[i]; }
+                    if r.clicked() {
+                        let mut cs = self.seq.chord_seq.lock().unwrap();
+                        cs.steps[i] = !cs.steps[i];
+                    }
                 });
             }
         });

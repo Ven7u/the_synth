@@ -15,8 +15,9 @@ use synth_control::{ControlEvent, ControlSender};
 use patch::{Patch, default_patches};
 use eframe::egui;
 use sequencer::{
-    ChordKbState, ChordSeqState, NoteSeqState, SeqMode,
+    ChordKbState, SequencerHandle, spawn_sequencer,
 };
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use ui::layout::{AppMode, StudioTab};
 use ui::frame::SynthFrame;
@@ -175,9 +176,6 @@ pub(crate) struct SynthApp {
     pub(crate) kb_freeze: bool,
     /// MIDI notes currently sustained by freeze (key lifted but NoteOff suppressed).
     pub(crate) frozen_notes: std::collections::HashSet<u8>,
-    /// NoteOns deferred by one frame so the audio callback sees at least one buffer
-    /// with gate=0 before the retrigger — prevents same-buffer NoteOff+NoteOn killing the attack.
-    pub(crate) pending_note_ons: Vec<u8>,
 
     // Peak meter
     pub(crate) peak_display: f32,
@@ -196,20 +194,10 @@ pub(crate) struct SynthApp {
     pub(crate) walker_sync: bool,   // per-component sync toggle for scale walker
     pub(crate) seq_sync: bool,      // per-component sync toggle for sequencer
 
-    // Sequencer — shared timing
-    pub(crate) seq_playing: bool,
-    pub(crate) seq_bpm: u32,        // sequencer's own BPM (follows global_bpm when seq_sync is active)
-    pub(crate) seq_bar_quantize_start: bool,
-    pub(crate) arp_restart_pending: bool,
-    pub(crate) walker_restart_pending: bool,
-    pub(crate) seq_current_step: usize,
-    pub(crate) seq_last_tick: std::time::Instant,
-    pub(crate) seq_prev_notes: Vec<u8>, // notes playing from last step (supports chords)
+    // Sequencer — handle shared with the dedicated sequencer thread
+    pub(crate) seq: Arc<SequencerHandle>,
 
-    // Sequencer — mode + per-mode state
-    pub(crate) seq_mode: SeqMode,
-    pub(crate) note_seq: NoteSeqState,
-    pub(crate) chord_seq: ChordSeqState,
+    // Sequencer — chord keyboard (live, not threaded)
     pub(crate) chord_kb: ChordKbState,
 
     // Arpeggiator UI state
@@ -307,6 +295,13 @@ impl SynthApp {
         let app_mode   = saved.app_mode;
         let studio_tab = saved.studio_tab;
 
+        let seq = Arc::new(SequencerHandle::new());
+        spawn_sequencer(
+            Arc::clone(&seq),
+            control.clone(),
+            Arc::clone(&state.note_on_time),
+        );
+
         Self {
             _audio: audio,
             state,
@@ -360,7 +355,6 @@ impl SynthApp {
             kb_chord_mode: false,
             kb_freeze: false,
             frozen_notes: std::collections::HashSet::new(),
-            pending_note_ons: Vec::new(),
             piano_held_midi: std::collections::HashSet::new(),
             piano_mouse_midi: None,
             peak_display: 0.0,
@@ -374,17 +368,7 @@ impl SynthApp {
             arp_sync: true,
             walker_sync: true,
             seq_sync: true,
-            seq_playing: false,
-            seq_bpm: 120,
-            seq_bar_quantize_start: false,
-            arp_restart_pending: false,
-            walker_restart_pending: false,
-            seq_current_step: 0,
-            seq_last_tick: std::time::Instant::now(),
-            seq_prev_notes: Vec::new(),
-            seq_mode: SeqMode::NoteSeq,
-            note_seq: NoteSeqState::new(),
-            chord_seq: ChordSeqState::new(),
+            seq,
             chord_kb: ChordKbState::new(),
             arp_bpm: 120.0,
             arp_mode: 0,
@@ -460,16 +444,9 @@ impl SynthApp {
 
 impl SynthApp {
     pub(crate) fn sync_transport_now(&mut self) {
-        self.seq_current_step = 0;
-        self.seq_last_tick = std::time::Instant::now();
-        self.arp_restart_pending = false;
-        self.walker_restart_pending = false;
-
-        let prev: Vec<u8> = self.seq_prev_notes.drain(..).collect();
-        for m in prev {
-            self.push_note_off(m);
-        }
-
+        self.seq.current_step.store(0, Ordering::Relaxed);
+        self.seq.arp_restart.store(false, Ordering::Relaxed);
+        self.seq.walker_restart.store(false, Ordering::Relaxed);
         let _ = self.control.try_send(ControlEvent::ArpRestart { track: 0 });
         let _ = self.control.try_send(ControlEvent::WalkerRestart { track: 0 });
     }
@@ -495,16 +472,20 @@ impl SynthApp {
     }
 
     pub(crate) fn schedule_or_restart_arp(&mut self) {
-        if self.arp_sync_active() && self.seq_bar_quantize_start && self.seq_playing {
-            self.arp_restart_pending = true;
+        let playing = self.seq.playing.load(Ordering::Relaxed);
+        let bar_quantize = self.seq.bar_quantize.load(Ordering::Relaxed);
+        if self.arp_sync_active() && bar_quantize && playing {
+            self.seq.arp_restart.store(true, Ordering::Relaxed);
         } else {
             let _ = self.control.try_send(ControlEvent::ArpRestart { track: 0 });
         }
     }
 
     pub(crate) fn schedule_or_restart_walker(&mut self) {
-        if self.walker_sync_active() && self.seq_bar_quantize_start && self.seq_playing {
-            self.walker_restart_pending = true;
+        let playing = self.seq.playing.load(Ordering::Relaxed);
+        let bar_quantize = self.seq.bar_quantize.load(Ordering::Relaxed);
+        if self.walker_sync_active() && bar_quantize && playing {
+            self.seq.walker_restart.store(true, Ordering::Relaxed);
         } else {
             let _ = self.control.try_send(ControlEvent::WalkerRestart { track: 0 });
         }
@@ -512,8 +493,8 @@ impl SynthApp {
 
     pub(crate) fn apply_clock_sync(&mut self) {
         let global = self.global_bpm as f32;
-        if self.seq_sync_active() && self.seq_bpm != self.global_bpm {
-            self.seq_bpm = self.global_bpm;
+        if self.seq_sync_active() {
+            self.seq.bpm.store(self.global_bpm, Ordering::Relaxed);
         }
         if self.arp_sync_active() && (self.arp_bpm - global).abs() > f32::EPSILON {
             self.arp_bpm = global;
@@ -552,11 +533,10 @@ impl SynthApp {
         // Send NoteOff for every MIDI note that might be held
         let held: Vec<u8> = self.piano_held_midi.drain().collect();
         for n in held { self.push_note_off(n); }
-        let prev: Vec<u8> = self.seq_prev_notes.drain(..).collect();
-        for n in prev { self.push_note_off(n); }
+        // Signal sequencer thread to stop; it will NoteOff its prev_notes itself.
+        self.seq.playing.store(false, Ordering::Relaxed);
         let frozen: Vec<u8> = self.frozen_notes.drain().collect();
         for n in frozen { self.push_note_off(n); }
-        self.pending_note_ons.clear();
         self.chord_kb.held_pad = None;
         self.chord_kb.kb_held.clear();
     }
@@ -622,65 +602,6 @@ impl SynthApp {
 }
 
 // ---------------------------------------------------------------------------
-// Sequencer tick
-// ---------------------------------------------------------------------------
-
-impl SynthApp {
-    fn tick_sequencer(&mut self, ctx: &egui::Context) {
-        if !self.seq_playing {
-            return;
-        }
-        let step_dur = std::time::Duration::from_millis(60_000 / self.seq_bpm as u64 / 2);
-        if self.seq_last_tick.elapsed() < step_dur {
-            return;
-        }
-        self.seq_last_tick = std::time::Instant::now();
-
-        let prev: Vec<u8> = self.seq_prev_notes.drain(..).collect();
-        for m in prev { self.push_note_off(m); }
-
-        let seq_length = match self.seq_mode {
-            SeqMode::NoteSeq  => self.note_seq.length,
-            SeqMode::ChordSeq => self.chord_seq.length,
-            SeqMode::ChordKb  => return,
-        };
-        self.seq_current_step = (self.seq_current_step + 1) % seq_length;
-        let bar_boundary = self.seq_current_step == 0;
-
-        if self.arp_restart_pending && bar_boundary {
-            let _ = self.control.try_send(ControlEvent::ArpRestart { track: 0 });
-            self.arp_restart_pending = false;
-        }
-        if self.walker_restart_pending && bar_boundary {
-            let _ = self.control.try_send(ControlEvent::WalkerRestart { track: 0 });
-            self.walker_restart_pending = false;
-        }
-
-        let notes_to_play: Vec<u8> = match self.seq_mode {
-            SeqMode::NoteSeq => {
-                let i = self.seq_current_step;
-                if self.note_seq.steps[i] { vec![self.note_seq.notes[i]] } else { vec![] }
-            }
-            SeqMode::ChordSeq => {
-                let i = self.seq_current_step;
-                if self.chord_seq.steps[i] {
-                    self.chord_seq.step_notes(i).to_vec()
-                } else {
-                    vec![]
-                }
-            }
-            SeqMode::ChordKb => vec![],
-        };
-
-        for m in notes_to_play {
-            self.push_note_on(m);
-            self.seq_prev_notes.push(m);
-        }
-        ctx.request_repaint_after(step_dur);
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Main update
 // ---------------------------------------------------------------------------
 
@@ -709,7 +630,6 @@ impl eframe::App for SynthApp {
 
         self.tick_midi();
         self.apply_clock_sync();
-        self.tick_sequencer(ctx);
         self.tick_keyboard_input(ctx);
 
         // Patch browser is a floating window — must be shown before panels.
@@ -1135,22 +1055,23 @@ impl SynthApp {
                     self.apply_clock_sync();
                     self.sync_transport_now();
                 } else {
-                    self.arp_restart_pending   = false;
-                    self.walker_restart_pending = false;
+                    self.seq.arp_restart.store(false, Ordering::Relaxed);
+                    self.seq.walker_restart.store(false, Ordering::Relaxed);
                 }
             }
 
             let any_sync = self.global_sync || self.seq_sync || self.arp_sync || self.walker_sync;
             ui.add_enabled_ui(any_sync, |ui| {
-                let bq_col = if self.seq_bar_quantize_start { self.theme.c(&self.theme.accent_dim) }
-                             else                           { self.theme.c(&self.theme.text_disabled) };
+                let bq = self.seq.bar_quantize.load(Ordering::Relaxed);
+                let bq_col = if bq { self.theme.c(&self.theme.accent_dim) }
+                             else  { self.theme.c(&self.theme.text_disabled) };
                 if ui.add(egui::SelectableLabel::new(
-                    self.seq_bar_quantize_start,
+                    bq,
                     egui::RichText::new("BAR").size(11.0).color(bq_col),
                 )).on_hover_text("Quantise Arp/Walker restart to next bar boundary.")
                   .clicked()
                 {
-                    self.seq_bar_quantize_start = !self.seq_bar_quantize_start;
+                    self.seq.bar_quantize.store(!bq, Ordering::Relaxed);
                 }
             });
 

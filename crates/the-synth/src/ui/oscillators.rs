@@ -226,7 +226,8 @@ impl SynthApp {
             ui.add_space(sp_sm);
 
             // ── Mini waveform preview ─────────────────────────────────────
-            let notes_held = !self.piano_held_midi.is_empty() || !self.pending_note_ons.is_empty();
+            let notes_held = !self.piano_held_midi.is_empty()
+                || self.seq.playing.load(std::sync::atomic::Ordering::Relaxed);
             let active = on && notes_held;
 
             let preview_h = 36.0;
