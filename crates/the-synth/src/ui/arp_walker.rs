@@ -1,5 +1,4 @@
 use crate::SynthApp;
-use synth_control::ControlEvent;
 use eframe::egui;
 use egui::Color32;
 use std::sync::atomic::Ordering;
@@ -20,11 +19,11 @@ impl SynthApp {
                     self.schedule_or_restart_arp();
                 }
                 if !new_enabled {
-                    let _ = self.control.try_send(ControlEvent::ChordHold { track: 0, notes: Vec::new() });
+                    self.engine.chord_hold(&[]);
                 }
             }
             if ui.button("RST").on_hover_text("Restart arp phase/step from beginning.").clicked() {
-                let _ = self.control.try_send(ControlEvent::ArpRestart { track: 0 });
+                self.engine.arp_restart();
             }
             let hold = self.engine.arp_hold();
             let hold_label = egui::RichText::new("HOLD")
@@ -33,7 +32,7 @@ impl SynthApp {
                 let new_hold = !hold;
                 self.engine.set_arp_hold(new_hold);
                 if !new_hold {
-                    let _ = self.control.try_send(ControlEvent::ChordHold { track: 0, notes: Vec::new() });
+                    self.engine.chord_hold(&[]);
                 }
             }
         });
@@ -118,7 +117,7 @@ impl SynthApp {
                 }
             }
             if ui.button("RST").on_hover_text("Restart walker phase/index from beginning.").clicked() {
-                let _ = self.control.try_send(ControlEvent::WalkerRestart { track: 0 });
+                self.engine.walker_restart();
             }
         });
 

@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use synth_engine::audio::build_synth_graph;
 use synth_engine::{SynthEngineHandle, VoiceAllocator};
-use synth_control::{make_control_channel, ControlSender, ControlReceiver};
+use synth_control::{make_control_channel, ControlReceiver};
 use synth_dsp::LookaheadLimiter;
 use crate::recorder::Recorder;
 
@@ -23,12 +23,9 @@ type RecorderSink = Arc<Mutex<Option<Recorder>>>;
 pub use synth_engine::audio::{AudioState, VOICE_COUNT};
 
 pub struct AudioEngine {
-    pub state: Arc<AudioState>,
-    pub control_tx: ControlSender,
-    /// Typed facade over `state` + `control_tx`. Clone this into any thread
-    /// that needs to talk to the engine. Stage 1 of the headless refactor
-    /// (see doc/engine-handle-plan.md) — old `state` / `control_tx` fields
-    /// remain for back-compat during per-panel migration.
+    /// Typed facade over the engine's internal state and control channel.
+    /// Clone this into any thread (UI, MIDI, sequencer, future OSC/WS/FFI
+    /// bridges) that needs to talk to the engine.
     pub handle: SynthEngineHandle,
     _stream: Stream,
 }
@@ -39,10 +36,8 @@ impl AudioEngine {
         let (tx, rx) = make_control_channel(1024);
         let stream = build_stream(Arc::clone(&state), rx, recorder_sink)?;
         stream.play()?;
-        let handle = SynthEngineHandle::new(Arc::clone(&state), tx.clone());
+        let handle = SynthEngineHandle::new(state, tx);
         Ok(Self {
-            state,
-            control_tx: tx,
             handle,
             _stream: stream,
         })

@@ -1,5 +1,4 @@
 use crate::SynthApp;
-use crate::audio::AudioState;
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, Rounding, Sense, Stroke, Vec2};
 
@@ -33,13 +32,12 @@ impl SynthApp {
             ).on_hover_text("Vertical zoom (0.25–8×). Drag left/right to adjust.");
         });
 
-        let buf = self.state.osc_buffer.lock().unwrap().clone();
+        let buf = self.engine.scope_buffer_snapshot();
         let width = ui.available_width();
 
         // Update peak meter state (L channel drives display; R tracked separately)
-        use std::sync::atomic::Ordering;
-        let peak_raw_l = f32::from_bits(self.state.peak_l.load(Ordering::Relaxed));
-        let peak_raw_r = f32::from_bits(self.state.peak_r.load(Ordering::Relaxed));
+        let peak_raw_l = self.engine.peak_l();
+        let peak_raw_r = self.engine.peak_r();
         let dt = 1.0 / 60.0_f32;
         self.peak_display = (self.peak_display * 0.85 + peak_raw_l * 0.15).max(peak_raw_l * 0.3);
         let peak_raw_max = peak_raw_l.max(peak_raw_r);
@@ -205,12 +203,10 @@ impl SynthApp {
     }
 }
 
-pub fn draw_latency_bar(ui: &mut egui::Ui, state: &AudioState, attack_s: f32, theme: &super::theme::SynthTheme) {
-    use std::sync::atomic::Ordering;
-
-    let sr = state.sample_rate.load(Ordering::Relaxed);
-    let frames = state.buffer_frames.load(Ordering::Relaxed);
-    let measured_us = state.last_latency_us.load(Ordering::Relaxed);
+pub fn draw_latency_bar(ui: &mut egui::Ui, engine: &synth_engine::SynthEngineHandle, attack_s: f32, theme: &super::theme::SynthTheme) {
+    let sr = engine.sample_rate();
+    let frames = engine.buffer_frames();
+    let measured_us = engine.last_latency_us();
 
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Latency:").weak().small());

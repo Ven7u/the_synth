@@ -9,9 +9,8 @@ mod recorder;
 mod sequencer;
 mod ui;
 
-use audio::{AudioEngine, AudioState};
+use audio::AudioEngine;
 use synth_control::midi::{MidiEngine, MidiEvent};
-use synth_control::{ControlEvent, ControlSender};
 use patch::{Patch, default_patches};
 use eframe::egui;
 use sequencer::{
@@ -24,9 +23,7 @@ use ui::frame::SynthFrame;
 
 fn main() -> eframe::Result {
     let recorder_sink = Arc::new(Mutex::new(None));
-    let engine = AudioEngine::new(Arc::clone(&recorder_sink)).expect("Failed to start audio");
-    let state = Arc::clone(&engine.state);
-    let control_tx = engine.control_tx.clone();
+    let audio = AudioEngine::new(Arc::clone(&recorder_sink)).expect("Failed to start audio");
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -38,7 +35,7 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "The Synth",
         options,
-        Box::new(move |_cc| Ok(Box::new(SynthApp::new(state, engine, control_tx, recorder_sink)))),
+        Box::new(move |_cc| Ok(Box::new(SynthApp::new(audio, recorder_sink)))),
     )
 }
 
@@ -102,13 +99,10 @@ impl PanelVisibility {
 
 pub(crate) struct SynthApp {
     pub(crate) _audio: AudioEngine, // keeps cpal stream alive
-    pub(crate) state: Arc<AudioState>,
-    /// Typed engine facade. The UI migration (Stage 2+) will replace direct
-    /// `state.*.set(...)` writes with calls on this handle. Coexists with
-    /// `state` and `control` during Stage 1 for back-compat.
+    /// Typed engine facade. The only way UI code talks to the engine —
+    /// all parameter writes, event dispatch, and readback flow through this.
     pub(crate) engine: synth_engine::SynthEngineHandle,
     pub(crate) midi: MidiEngine,
-    pub(crate) control: ControlSender,
     pub(crate) theme: ui::theme::SynthTheme,
     pub(crate) panels: PanelVisibility,
     pub(crate) reset_layout_pending: bool,
@@ -285,7 +279,7 @@ pub(crate) struct SynthApp {
 }
 
 impl SynthApp {
-    fn new(state: Arc<AudioState>, audio: AudioEngine, control: ControlSender, recorder_sink: Arc<Mutex<Option<recorder::Recorder>>>) -> Self {
+    fn new(audio: AudioEngine, recorder_sink: Arc<Mutex<Option<recorder::Recorder>>>) -> Self {
         let mut midi = MidiEngine::new();
         midi.list_ports(); // populate port list at startup
 
@@ -305,18 +299,12 @@ impl SynthApp {
         let studio_tab = saved.studio_tab;
 
         let seq = Arc::new(SequencerHandle::new());
-        spawn_sequencer(
-            Arc::clone(&seq),
-            control.clone(),
-            Arc::clone(&state.note_on_time),
-        );
+        spawn_sequencer(Arc::clone(&seq), engine.clone());
 
         Self {
             _audio: audio,
-            state,
             engine,
             midi,
-            control,
             theme,
             panels,
             reset_layout_pending: true,
@@ -457,8 +445,8 @@ impl SynthApp {
         self.seq.current_step.store(0, Ordering::Relaxed);
         self.seq.arp_restart.store(false, Ordering::Relaxed);
         self.seq.walker_restart.store(false, Ordering::Relaxed);
-        let _ = self.control.try_send(ControlEvent::ArpRestart { track: 0 });
-        let _ = self.control.try_send(ControlEvent::WalkerRestart { track: 0 });
+        self.engine.arp_restart();
+        self.engine.walker_restart();
     }
 
     pub(crate) fn arp_sync_active(&self) -> bool {
@@ -487,7 +475,7 @@ impl SynthApp {
         if self.arp_sync_active() && bar_quantize && playing {
             self.seq.arp_restart.store(true, Ordering::Relaxed);
         } else {
-            let _ = self.control.try_send(ControlEvent::ArpRestart { track: 0 });
+            self.engine.arp_restart();
         }
     }
 
@@ -497,7 +485,7 @@ impl SynthApp {
         if self.walker_sync_active() && bar_quantize && playing {
             self.seq.walker_restart.store(true, Ordering::Relaxed);
         } else {
-            let _ = self.control.try_send(ControlEvent::WalkerRestart { track: 0 });
+            self.engine.walker_restart();
         }
     }
 
@@ -524,22 +512,20 @@ impl SynthApp {
     }
 
     /// Push a NoteOn event into the audio thread's control queue.
+    /// `engine.note_on` also records the timestamp used for latency measurement.
     pub(crate) fn push_note_on(&mut self, midi: u8) {
-        if let Ok(mut t) = self.state.note_on_time.lock() {
-            *t = Some(std::time::Instant::now());
-        }
-        let _ = self.control.try_send(ControlEvent::NoteOn { pitch: midi, velocity: 100, track: 0 });
+        self.engine.note_on(midi, 100);
     }
 
     /// Push a NoteOff event into the audio thread's control queue.
     pub(crate) fn push_note_off(&mut self, midi: u8) {
-        let _ = self.control.try_send(ControlEvent::NoteOff { pitch: midi, track: 0 });
+        self.engine.note_off(midi);
     }
 
     /// Silence all voices, reset all FX tails, and clear all note-tracking state.
     pub(crate) fn all_notes_off(&mut self) {
         // Zero all voice gates — kills currently-playing voices via ADSR release
-        for g in &self.state.voice_gates { g.set(0.0); }
+        self.engine.silence_all_voices();
         // Send NoteOff for every MIDI note that might be held
         let held: Vec<u8> = self.piano_held_midi.drain().collect();
         for n in held { self.push_note_off(n); }
@@ -1164,7 +1150,7 @@ impl SynthApp {
                 ui.separator();
 
                 // Latency / CPU indicator
-                ui::scope::draw_latency_bar(ui, &self.state, self.amp_adsr[0], &self.theme);
+                ui::scope::draw_latency_bar(ui, &self.engine, self.amp_adsr[0], &self.theme);
 
                 ui.separator();
 
@@ -1195,7 +1181,7 @@ impl SynthApp {
                        .on_hover_text("Record stereo output to WAV.")
                        .clicked()
                     {
-                        let sr = self.state.sample_rate.load(std::sync::atomic::Ordering::Relaxed);
+                        let sr = self.engine.sample_rate();
                         if let Some(path) = rfd::FileDialog::new()
                             .set_title("Save recording as")
                             .set_file_name("recording.wav")

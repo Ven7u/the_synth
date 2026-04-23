@@ -340,8 +340,15 @@ impl SynthEngineHandle {
     // Event methods — channel-routed, track 0
     // =======================================================================
 
-    /// Trigger a note. Sends `ControlEvent::NoteOn { .., track: 0 }`.
+    /// Trigger a note. Sends `ControlEvent::NoteOn { .., track: 0 }` and
+    /// records a timestamp that the audio callback uses to compute
+    /// `last_latency_us`. The mutex write never contends with the audio
+    /// thread (which only `try_lock`s), so UI / sequencer / MIDI threads
+    /// may call this freely.
     pub fn note_on(&self, pitch: u8, velocity: u8) {
+        if let Ok(mut t) = self.state.note_on_time.lock() {
+            *t = Some(std::time::Instant::now());
+        }
         let _ = self.control.try_send(ControlEvent::NoteOn { pitch, velocity, track: 0 });
     }
 
@@ -358,6 +365,16 @@ impl SynthEngineHandle {
     pub fn all_notes_off(&self) {
         for pitch in 0u8..=127 {
             let _ = self.control.try_send(ControlEvent::NoteOff { pitch, track: 0 });
+        }
+    }
+
+    /// Panic: zero every voice gate right now, bypassing the event channel.
+    /// Voices go through ADSR release on the next audio sample. Intended
+    /// for hard silence (mode changes, patch loads, emergency stop) where
+    /// waiting for a channel round-trip would leak audio.
+    pub fn silence_all_voices(&self) {
+        for gate in self.state.voice_gates.iter() {
+            gate.set(0.0);
         }
     }
 
@@ -387,9 +404,28 @@ impl SynthEngineHandle {
         self.state.amp_cursors.get(voice).map(|s| s.value()).unwrap_or(0.0)
     }
 
+    /// Snapshot every voice's amp-envelope cursor in one call. Same encoding
+    /// as [`Self::amp_cursor`]. Allocates a `Vec` on the caller thread (UI
+    /// rate — fine). Length is always `crate::audio::VOICE_COUNT`.
+    pub fn amp_cursors(&self) -> Vec<f32> {
+        self.state.amp_cursors.iter().map(|s| s.value()).collect()
+    }
+
     /// Current filter-envelope cursor for a voice. Same encoding as amp cursor.
     pub fn fenv_cursor(&self, voice: usize) -> f32 {
         self.state.fenv_cursors.get(voice).map(|s| s.value()).unwrap_or(0.0)
+    }
+
+    /// Snapshot every voice's filter-envelope cursor in one call.
+    pub fn fenv_cursors(&self) -> Vec<f32> {
+        self.state.fenv_cursors.iter().map(|s| s.value()).collect()
+    }
+
+    /// Clone the oscilloscope ring buffer for display. Briefly acquires the
+    /// buffer mutex — the audio callback uses `try_lock` so this never
+    /// stalls the audio thread. Call from the UI thread at frame rate.
+    pub fn scope_buffer_snapshot(&self) -> Vec<f32> {
+        self.state.osc_buffer.lock().map(|b| b.clone()).unwrap_or_default()
     }
 
     /// Peak left-channel level (linear, post-limiter, post-tanh).

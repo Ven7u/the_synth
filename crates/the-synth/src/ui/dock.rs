@@ -132,7 +132,7 @@ impl<'a> TabViewer for SynthTabViewer<'a> {
             Tab::Midi => {
                 self.app.ui_midi_panel(ui);
                 ui.separator();
-                super::scope::draw_latency_bar(ui, &self.app.state, self.app.amp_adsr[0], &self.app.theme);
+                super::scope::draw_latency_bar(ui, &self.app.engine, self.app.amp_adsr[0], &self.app.theme);
             }
         }
     }

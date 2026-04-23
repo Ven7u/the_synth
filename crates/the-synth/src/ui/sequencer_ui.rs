@@ -2,7 +2,6 @@ use crate::SynthApp;
 use crate::sequencer::{
     SeqMode, ScaleType, NOTE_NAMES, DEGREE_LABELS, chord_name, chord_quality,
 };
-use synth_control::ControlEvent;
 use eframe::egui;
 use egui::{Color32, Rounding, Sense, Stroke, Vec2};
 use std::sync::atomic::Ordering;
@@ -53,11 +52,11 @@ impl SynthApp {
                         let current_step = self.seq.current_step.load(Ordering::Relaxed);
                         if bar_quantize && current_step == 0 {
                             if self.seq.arp_restart.load(Ordering::Relaxed) {
-                                let _ = self.control.try_send(ControlEvent::ArpRestart { track: 0 });
+                                self.engine.arp_restart();
                                 self.seq.arp_restart.store(false, Ordering::Relaxed);
                             }
                             if self.seq.walker_restart.load(Ordering::Relaxed) {
-                                let _ = self.control.try_send(ControlEvent::WalkerRestart { track: 0 });
+                                self.engine.walker_restart();
                                 self.seq.walker_restart.store(false, Ordering::Relaxed);
                             }
                         }

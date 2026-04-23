@@ -414,12 +414,12 @@ impl SequencerHandle {
 
 /// Spawn the sequencer on a dedicated thread.
 ///
-/// `control` — channel to send NoteOn/NoteOff/ArpRestart/WalkerRestart events.
-/// `note_on_time` — shared timestamp updated on every NoteOn (used by latency display).
+/// `engine` — typed engine handle. The sequencer calls `note_on` / `note_off`
+/// / `arp_restart` / `walker_restart` on the handle; `note_on` also records
+/// the latency-measurement timestamp internally.
 pub fn spawn_sequencer(
     handle: Arc<SequencerHandle>,
-    control: synth_control::ControlSender,
-    note_on_time: Arc<Mutex<Option<std::time::Instant>>>,
+    engine: synth_engine::SynthEngineHandle,
 ) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name("sequencer".into())
@@ -437,9 +437,7 @@ pub fn spawn_sequencer(
                 if !playing {
                     if was_playing {
                         for m in prev_notes.drain(..) {
-                            let _ = control.try_send(synth_control::ControlEvent::NoteOff {
-                                pitch: m, track: 0,
-                            });
+                            engine.note_off(m);
                         }
                         was_playing = false;
                         first_tick = true;
@@ -473,9 +471,7 @@ pub fn spawn_sequencer(
 
                 // NoteOff previous notes.
                 for m in prev_notes.drain(..) {
-                    let _ = control.try_send(synth_control::ControlEvent::NoteOff {
-                        pitch: m, track: 0,
-                    });
+                    engine.note_off(m);
                 }
 
                 // Advance step. On the very first tick after Play we play the
@@ -499,10 +495,10 @@ pub fn spawn_sequencer(
 
                 if bar_boundary {
                     if handle.arp_restart.swap(false, Ordering::Relaxed) {
-                        let _ = control.try_send(synth_control::ControlEvent::ArpRestart { track: 0 });
+                        engine.arp_restart();
                     }
                     if handle.walker_restart.swap(false, Ordering::Relaxed) {
-                        let _ = control.try_send(synth_control::ControlEvent::WalkerRestart { track: 0 });
+                        engine.walker_restart();
                     }
                 }
 
@@ -521,16 +517,12 @@ pub fn spawn_sequencer(
                     SeqMode::ChordKb => vec![],
                 };
 
-                // Send NoteOns. The audio thread's trigger_note guarantees a
+                // Send NoteOns. The audio thread's VoiceAllocator guarantees a
                 // clean attack even when NoteOff + NoteOn for the same pitch
                 // arrive in the same buffer, so no inter-event delay is needed.
+                // `engine.note_on` also writes the latency-measurement timestamp.
                 for m in notes_to_play {
-                    if let Ok(mut t) = note_on_time.lock() {
-                        *t = Some(Instant::now());
-                    }
-                    let _ = control.try_send(synth_control::ControlEvent::NoteOn {
-                        pitch: m, velocity: 100, track: 0,
-                    });
+                    engine.note_on(m, 100);
                     prev_notes.push(m);
                 }
             }

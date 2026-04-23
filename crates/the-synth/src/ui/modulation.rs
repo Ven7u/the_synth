@@ -45,9 +45,7 @@ impl SynthApp {
                     .clicked()
                 {
                     self.lfo_enabled = !on;
-                    self.state
-                        .lfo_depth
-                        .set(if self.lfo_enabled { self.lfo_depth } else { 0.0 });
+                    self.engine.set_lfo_depth(if self.lfo_enabled { self.lfo_depth } else { 0.0 });
                 }
             });
 
@@ -218,9 +216,7 @@ impl SynthApp {
                     .clicked()
                 {
                     self.lfo2_enabled = !on;
-                    self.state
-                        .lfo2_depth
-                        .set(if self.lfo2_enabled { self.lfo2_depth } else { 0.0 });
+                    self.engine.set_lfo2_depth(if self.lfo2_enabled { self.lfo2_depth } else { 0.0 });
                 }
             });
 
@@ -547,9 +543,9 @@ impl SynthApp {
             ui.add_space(sp_xs);
 
             let cursors: Vec<f32> = if is_filter {
-                self.state.fenv_cursors.iter().map(|s| s.value()).collect()
+                self.engine.fenv_cursors()
             } else {
-                self.state.amp_cursors.iter().map(|s| s.value()).collect()
+                self.engine.amp_cursors()
             };
             draw_adsr_visualizer(ui, adsr, &cursors, &self.theme);
         });
