@@ -35,26 +35,39 @@ fn main() {
     save(&mut (pink() * 0.5 >> pan(0.0)), "04_noise_raw.wav");
 
     // Lowpass at 800 Hz — everything above 800 Hz is attenuated
-    save(&mut (pink() * 0.5 >> lowpass_hz(800.0, 1.0) >> pan(0.0)), "04_lowpass_800.wav");
+    save(
+        &mut (pink() * 0.5 >> lowpass_hz(800.0, 1.0) >> pan(0.0)),
+        "04_lowpass_800.wav",
+    );
 
     // Highpass at 2000 Hz — everything below 2000 Hz is removed
-    save(&mut (pink() * 0.5 >> highpass_hz(2000.0, 1.0) >> pan(0.0)), "04_highpass_2k.wav");
+    save(
+        &mut (pink() * 0.5 >> highpass_hz(2000.0, 1.0) >> pan(0.0)),
+        "04_highpass_2k.wav",
+    );
 
     // Bandpass centred at 1000 Hz, Q=5 — narrow window, whistling quality
-    save(&mut (pink() * 0.5 >> bandpass_hz(1000.0, 5.0) >> pan(0.0)), "04_bandpass_1k.wav");
+    save(
+        &mut (pink() * 0.5 >> bandpass_hz(1000.0, 5.0) >> pan(0.0)),
+        "04_bandpass_1k.wav",
+    );
 
     // High resonance Q=12 — strong ring at the cutoff frequency
-    save(&mut (pink() * 0.5 >> lowpass_hz(1200.0, 12.0) >> pan(0.0)), "04_resonant.wav");
+    save(
+        &mut (pink() * 0.5 >> lowpass_hz(1200.0, 12.0) >> pan(0.0)),
+        "04_resonant.wav",
+    );
 
     // --- Dynamic filter sweep ---
     // `lfo(|t| ...)` generates a time-varying cutoff Hz value (0 inputs, 1 output).
     // `lowpass_q(q)` is the signal-driven variant: takes (audio, cutoff_hz) as two
     // inputs via the `|` stack operator, and outputs filtered audio.
-    let sweep   = lfo(|t: f32| 200.0 + 7800.0 * (t / 4.0).min(1.0));
-    let audio   = saw_hz(110.0) * 0.5;
+    let sweep = lfo(|t: f32| 200.0 + 7800.0 * (t / 4.0).min(1.0));
+    let audio = saw_hz(110.0) * 0.5;
     let mut filter_sweep = (audio | sweep) >> lowpass_q(1.0) >> pan(0.0);
     let wave = Wave::render(44100.0, 4.5, &mut filter_sweep);
-    wave.save_wav32(std::path::Path::new("output/04_filter_sweep.wav")).unwrap();
+    wave.save_wav32(std::path::Path::new("output/04_filter_sweep.wav"))
+        .unwrap();
     println!("Saved output/04_filter_sweep.wav — the classic synthesizer 'filter sweep' sound");
 
     println!("\nTip: open in Audacity and use Analyze → Plot Spectrum to visualize.");

@@ -110,23 +110,45 @@ impl AmbientPatch {
     pub fn apply_to_track(&self, track: &TrackState) {
         for i in 0..3 {
             track.osc_wave[i].store(self.osc_wave[i] as u8, Ordering::Relaxed);
-            track.osc_vol[i].set(if self.osc_enabled[i] { self.osc_vol[i] } else { 0.0 });
+            track.osc_vol[i].set(if self.osc_enabled[i] {
+                self.osc_vol[i]
+            } else {
+                0.0
+            });
             track.osc_pulse_width[i].set(self.osc_pulse_width[i].clamp(0.01, 0.99));
             Self::set_freq_mult(self, track, i);
             Self::set_unison(self, track, i);
         }
 
-        track.hard_sync_enabled.store(self.hard_sync, Ordering::Relaxed);
-        track.fm_depth.set(if self.fm_enabled { self.fm_depth.max(0.0) } else { 0.0 });
-        track.ring_depth.set(if self.ring_enabled { self.ring_depth.max(0.0) } else { 0.0 });
+        track
+            .hard_sync_enabled
+            .store(self.hard_sync, Ordering::Relaxed);
+        track.fm_depth.set(if self.fm_enabled {
+            self.fm_depth.max(0.0)
+        } else {
+            0.0
+        });
+        track.ring_depth.set(if self.ring_enabled {
+            self.ring_depth.max(0.0)
+        } else {
+            0.0
+        });
 
         track.noise_vol.set(self.noise_vol.clamp(0.0, 1.0));
         track.lfo_rate.set(self.lfo_rate.clamp(0.1, 20.0));
-        track.lfo_depth.set(if self.lfo_enabled { self.lfo_depth.clamp(0.0, 1.0) } else { 0.0 });
-        track.lfo_shape.store(self.lfo_shape as u8, Ordering::Relaxed);
+        track.lfo_depth.set(if self.lfo_enabled {
+            self.lfo_depth.clamp(0.0, 1.0)
+        } else {
+            0.0
+        });
+        track
+            .lfo_shape
+            .store(self.lfo_shape as u8, Ordering::Relaxed);
         track.lfo_dest.store(self.lfo_dest as u8, Ordering::Relaxed);
         track.lfo_sync.store(self.lfo_sync as u8, Ordering::Relaxed);
-        track.lfo_division.store(self.lfo_division, Ordering::Relaxed);
+        track
+            .lfo_division
+            .store(self.lfo_division, Ordering::Relaxed);
 
         track.cutoff.set(if self.filter_enabled {
             self.filter_cutoff.clamp(80.0, 18_000.0)
@@ -138,7 +160,9 @@ impl AmbientPatch {
         } else {
             0.0
         });
-        track.filter_env_amount.set(self.filter_env_amount.clamp(0.0, 1.0));
+        track
+            .filter_env_amount
+            .set(self.filter_env_amount.clamp(0.0, 1.0));
         track.fenv_attack.set(self.fenv_adsr[0].max(0.0));
         track.fenv_decay.set(self.fenv_adsr[1].max(0.0));
         track.fenv_sustain.set(self.fenv_adsr[2].clamp(0.0, 1.0));
@@ -184,4 +208,3 @@ impl AmbientPatch {
         }
     }
 }
-

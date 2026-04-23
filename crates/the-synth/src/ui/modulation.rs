@@ -1,20 +1,20 @@
-use crate::SynthApp;
 use crate::ui::frame::SynthFrame;
+use crate::SynthApp;
 use eframe::egui;
 use egui::{Color32, Pos2, RichText, Stroke};
 
 /// (label, beats_per_cycle) — beats relative to a quarter note.
 /// rate_hz = bpm / 60.0 / beats_per_cycle
 pub const LFO_SYNC_DIVISIONS: &[(&str, f32)] = &[
-    ("4",    16.0),  // 4 bars
-    ("2",     8.0),  // 2 bars
-    ("1",     4.0),  // 1 bar
-    ("1/2",   2.0),
-    ("1/4",   1.0),
-    ("1/8",   0.5),
-    ("1/16",  0.25),
-    ("1/4T",  2.0 / 3.0),  // quarter triplet
-    ("1/8T",  1.0 / 3.0),  // eighth triplet
+    ("4", 16.0), // 4 bars
+    ("2", 8.0),  // 2 bars
+    ("1", 4.0),  // 1 bar
+    ("1/2", 2.0),
+    ("1/4", 1.0),
+    ("1/8", 0.5),
+    ("1/16", 0.25),
+    ("1/4T", 2.0 / 3.0), // quarter triplet
+    ("1/8T", 1.0 / 3.0), // eighth triplet
 ];
 
 pub fn lfo_synced_rate(bpm: f32, division: usize) -> f32 {
@@ -41,11 +41,17 @@ impl SynthApp {
                         on,
                         RichText::new("LFO 1").size(12.0).strong().color(col),
                     ))
-                    .on_hover_text("Low Frequency Oscillator — modulates pitch, filter cutoff, or amplitude")
+                    .on_hover_text(
+                        "Low Frequency Oscillator — modulates pitch, filter cutoff, or amplitude",
+                    )
                     .clicked()
                 {
                     self.lfo_enabled = !on;
-                    self.engine.set_lfo_depth(if self.lfo_enabled { self.lfo_depth } else { 0.0 });
+                    self.engine.set_lfo_depth(if self.lfo_enabled {
+                        self.lfo_depth
+                    } else {
+                        0.0
+                    });
                 }
             });
 
@@ -64,7 +70,9 @@ impl SynthApp {
                             &self.theme,
                             false,
                         )
-                        .on_hover_text("LFO speed in Hz. 0.1 = very slow, 5 = fast vibrato, 20 = audio range.")
+                        .on_hover_text(
+                            "LFO speed in Hz. 0.1 = very slow, 5 = fast vibrato, 20 = audio range.",
+                        )
                         .changed()
                         {
                             self.engine.set_lfo_rate(self.lfo_rate);
@@ -216,7 +224,11 @@ impl SynthApp {
                     .clicked()
                 {
                     self.lfo2_enabled = !on;
-                    self.engine.set_lfo2_depth(if self.lfo2_enabled { self.lfo2_depth } else { 0.0 });
+                    self.engine.set_lfo2_depth(if self.lfo2_enabled {
+                        self.lfo2_depth
+                    } else {
+                        0.0
+                    });
                 }
             });
 
@@ -349,16 +361,11 @@ impl SynthApp {
                         self.engine.set_filter_resonance(self.filter_q);
                     }
                     let mut env_amt = self.engine.filter_env_amount();
-                    if super::widgets::knob(
-                        ui,
-                        &mut env_amt,
-                        0.0..=1.0,
-                        "ENV",
-                        &self.theme,
-                        false,
-                    )
-                    .on_hover_text("Filter envelope amount — how much the filter env sweeps the cutoff.")
-                    .changed()
+                    if super::widgets::knob(ui, &mut env_amt, 0.0..=1.0, "ENV", &self.theme, false)
+                        .on_hover_text(
+                            "Filter envelope amount — how much the filter env sweeps the cutoff.",
+                        )
+                        .changed()
                     {
                         self.engine.set_filter_env_amount(env_amt);
                     }
@@ -378,10 +385,9 @@ impl SynthApp {
                     let dy = -delta.y / rect.height();
                     let log_min = 80.0_f32.ln();
                     let log_max = 18000.0_f32.ln();
-                    self.filter_cutoff =
-                        ((self.filter_cutoff.ln() + dx * (log_max - log_min))
-                            .clamp(log_min, log_max))
-                        .exp();
+                    self.filter_cutoff = ((self.filter_cutoff.ln() + dx * (log_max - log_min))
+                        .clamp(log_min, log_max))
+                    .exp();
                     self.filter_q = (self.filter_q + dy * 0.95).clamp(0.0, 0.95);
                     self.engine.set_filter_cutoff(self.filter_cutoff);
                     self.engine.set_filter_resonance(self.filter_q);
@@ -422,12 +428,8 @@ impl SynthApp {
                     let px = rect.left() + tx * rect.width();
                     let py = rect.top() + ty * rect.height();
 
-                    let line_col = Color32::from_rgba_premultiplied(
-                        accent.r(),
-                        accent.g(),
-                        accent.b(),
-                        40,
-                    );
+                    let line_col =
+                        Color32::from_rgba_premultiplied(accent.r(), accent.g(), accent.b(), 40);
                     painter.line_segment(
                         [egui::pos2(px, rect.top()), egui::pos2(px, rect.bottom())],
                         egui::Stroke::new(1.0, line_col),
@@ -566,10 +568,17 @@ impl SynthApp {
     }
 }
 
-pub fn draw_adsr_visualizer(ui: &mut egui::Ui, adsr: &[f32; 4], cursors: &[f32], theme: &super::theme::SynthTheme) {
+pub fn draw_adsr_visualizer(
+    ui: &mut egui::Ui,
+    adsr: &[f32; 4],
+    cursors: &[f32],
+    theme: &super::theme::SynthTheme,
+) {
     let height = 48.0;
-    let (resp, painter) =
-        ui.allocate_painter(egui::Vec2::new(ui.available_width(), height), egui::Sense::hover());
+    let (resp, painter) = ui.allocate_painter(
+        egui::Vec2::new(ui.available_width(), height),
+        egui::Sense::hover(),
+    );
     let rect = resp.rect;
 
     painter.rect_filled(rect, egui::Rounding::same(3.0), theme.c(&theme.bg_adsr));
@@ -581,7 +590,7 @@ pub fn draw_adsr_visualizer(ui: &mut egui::Ui, adsr: &[f32; 4], cursors: &[f32],
 
     let total = a + d + r;
     let s_vis = total * 0.35;
-    let span  = a + d + s_vis + r;
+    let span = a + d + s_vis + r;
 
     let w = rect.width();
     let h = rect.height();
@@ -591,16 +600,20 @@ pub fn draw_adsr_visualizer(ui: &mut egui::Ui, adsr: &[f32; 4], cursors: &[f32],
     let tx = |t: f32| rect.left() + (t / span) * w;
     let ly = |level: f32| rect.bottom() - pad_y - level * usable_h;
 
-    let p0 = Pos2::new(rect.left(),    ly(0.0));
-    let p1 = Pos2::new(tx(a),          ly(1.0));
-    let p2 = Pos2::new(tx(a + d),      ly(s));
+    let p0 = Pos2::new(rect.left(), ly(0.0));
+    let p1 = Pos2::new(tx(a), ly(1.0));
+    let p2 = Pos2::new(tx(a + d), ly(s));
     let p3 = Pos2::new(tx(a + d + s_vis), ly(s));
-    let p4 = Pos2::new(rect.right(),   ly(0.0));
+    let p4 = Pos2::new(rect.right(), ly(0.0));
 
     let fill_pts = vec![
-        p0, p1, p2, p3, p4,
+        p0,
+        p1,
+        p2,
+        p3,
+        p4,
         Pos2::new(rect.right(), rect.bottom() - pad_y),
-        Pos2::new(rect.left(),  rect.bottom() - pad_y),
+        Pos2::new(rect.left(), rect.bottom() - pad_y),
     ];
     painter.add(egui::Shape::convex_polygon(
         fill_pts,
@@ -632,21 +645,27 @@ pub fn draw_adsr_visualizer(ui: &mut egui::Ui, adsr: &[f32; 4], cursors: &[f32],
     }
 
     for &cursor in cursors {
-        if cursor < 0.5 { continue; }
+        if cursor < 0.5 {
+            continue;
+        }
 
-        let phase    = cursor as u8;
+        let phase = cursor as u8;
         let progress = cursor.fract();
 
         let pos = match phase {
-            1 => Pos2::new(tx(a * progress),                              ly(progress)),
-            2 => Pos2::new(tx(a + d * progress),                          ly(1.0 - (1.0 - s) * progress)),
-            3 => Pos2::new(tx(a + d + s_vis * 0.5),                       ly(s)),
-            4 => Pos2::new(tx(a + d + s_vis + r * progress),              ly(s * (1.0 - progress))),
+            1 => Pos2::new(tx(a * progress), ly(progress)),
+            2 => Pos2::new(tx(a + d * progress), ly(1.0 - (1.0 - s) * progress)),
+            3 => Pos2::new(tx(a + d + s_vis * 0.5), ly(s)),
+            4 => Pos2::new(tx(a + d + s_vis + r * progress), ly(s * (1.0 - progress))),
             _ => continue,
         };
 
         let cursor_c = theme.c(&theme.adsr_cursor);
-        painter.circle_filled(pos, 5.0, Color32::from_rgba_premultiplied(cursor_c.r(), cursor_c.g(), cursor_c.b(), 40));
+        painter.circle_filled(
+            pos,
+            5.0,
+            Color32::from_rgba_premultiplied(cursor_c.r(), cursor_c.g(), cursor_c.b(), 40),
+        );
         painter.circle_filled(pos, 2.5, cursor_c);
     }
 }

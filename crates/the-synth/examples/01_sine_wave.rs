@@ -20,7 +20,7 @@ use fundsp::prelude32::*;
 
 fn main() {
     let sample_rate = 44100.0_f64;
-    let duration    = 3.0_f64;   // seconds
+    let duration = 3.0_f64; // seconds
 
     // `sine_hz(f)` creates a sine oscillator at a fixed frequency f.
     // It has 0 inputs and 1 output.
@@ -35,6 +35,10 @@ fn main() {
     std::fs::create_dir_all("output").ok();
     let path = std::path::Path::new("output/01_sine_wave.wav");
     wave.save_wav32(path).expect("Could not save WAV");
-    println!("Saved {path:?}  ({} samples, {} Hz)", wave.len(), wave.sample_rate());
+    println!(
+        "Saved {path:?}  ({} samples, {} Hz)",
+        wave.len(),
+        wave.sample_rate()
+    );
     println!("Open it in Audacity — it should look like a smooth S-curve.");
 }

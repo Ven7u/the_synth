@@ -1,6 +1,6 @@
+use crate::SynthApp;
 use egui::WidgetText;
 use egui_dock::{DockState, NodeIndex, Split, TabViewer};
-use crate::SynthApp;
 
 /// Each dockable panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -19,13 +19,13 @@ impl Tab {
     pub fn title(self) -> &'static str {
         match self {
             Tab::Oscillators => "Oscillators",
-            Tab::Modulation  => "Modulation",
-            Tab::Filter      => "Filter & Envelopes",
-            Tab::Sequencer   => "Sequencer",
-            Tab::ArpWalker   => "Arp & Walker",
-            Tab::FxChain     => "FX Chain",
-            Tab::Scope       => "Oscilloscope",
-            Tab::Midi        => "MIDI & Latency",
+            Tab::Modulation => "Modulation",
+            Tab::Filter => "Filter & Envelopes",
+            Tab::Sequencer => "Sequencer",
+            Tab::ArpWalker => "Arp & Walker",
+            Tab::FxChain => "FX Chain",
+            Tab::Scope => "Oscilloscope",
+            Tab::Midi => "MIDI & Latency",
         }
     }
 
@@ -60,7 +60,8 @@ pub fn default_dock_state() -> DockState<Tab> {
 
     // 1. Split bottom from root: Sequencer + ArpWalker tabbed — bottom 32%.
     let [top, _bottom] = surface.split_below(
-        NodeIndex::root(), 0.68,
+        NodeIndex::root(),
+        0.68,
         vec![Tab::Sequencer, Tab::ArpWalker],
     );
 
@@ -68,10 +69,7 @@ pub fn default_dock_state() -> DockState<Tab> {
     let [top_left, top_right] = surface.split_right(top, 0.60, vec![Tab::Scope]);
 
     // 3. Split top-left vertically: Modulation + Filter tabbed below Oscillators.
-    let [_osc, _mod] = surface.split_below(
-        top_left, 0.55,
-        vec![Tab::Modulation, Tab::Filter],
-    );
+    let [_osc, _mod] = surface.split_below(top_left, 0.55, vec![Tab::Modulation, Tab::Filter]);
 
     // 4. Split top-right vertically: FX Chain below Oscilloscope.
     let [_scope, _fx] = surface.split_below(top_right, 0.50, vec![Tab::FxChain]);
@@ -110,8 +108,14 @@ impl<'a> TabViewer for SynthTabViewer<'a> {
             Tab::Filter => {
                 ui.columns(3, |cols| {
                     self.app.ui_filter_panel(&mut cols[0]);
-                    self.app.ui_adsr_panel(&mut cols[1], "Filter Env", &mut [0usize, 1, 2, 3], true);
-                    self.app.ui_adsr_panel(&mut cols[2], "Amp Env", &mut [0usize, 1, 2, 3], false);
+                    self.app.ui_adsr_panel(
+                        &mut cols[1],
+                        "Filter Env",
+                        &mut [0usize, 1, 2, 3],
+                        true,
+                    );
+                    self.app
+                        .ui_adsr_panel(&mut cols[2], "Amp Env", &mut [0usize, 1, 2, 3], false);
                 });
             }
             Tab::Sequencer => {
@@ -132,7 +136,12 @@ impl<'a> TabViewer for SynthTabViewer<'a> {
             Tab::Midi => {
                 self.app.ui_midi_panel(ui);
                 ui.separator();
-                super::scope::draw_latency_bar(ui, &self.app.engine, self.app.engine.amp_attack(), &self.app.theme);
+                super::scope::draw_latency_bar(
+                    ui,
+                    &self.app.engine,
+                    self.app.engine.amp_attack(),
+                    &self.app.theme,
+                );
             }
         }
     }

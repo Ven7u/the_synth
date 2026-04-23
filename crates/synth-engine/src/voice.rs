@@ -56,18 +56,20 @@ pub struct VoiceAllocator {
 }
 
 impl Default for VoiceAllocator {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl VoiceAllocator {
     pub fn new() -> Self {
         Self {
-            voice_notes:         [None; VOICE_COUNT],
-            steal_idx:           0,
-            pitch_hold_count:    [0; 128],
+            voice_notes: [None; VOICE_COUNT],
+            steal_idx: 0,
+            pitch_hold_count: [0; 128],
             retrigger_countdown: [0; VOICE_COUNT],
-            arp:                 ArpState::new(),
-            walker:              ScaleWalker::new(),
+            arp: ArpState::new(),
+            walker: ScaleWalker::new(),
         }
     }
 
@@ -158,11 +160,11 @@ impl VoiceAllocator {
                     // ParamId variants reach the engine through direct atomic
                     // writes, not through this channel path.
                     match param {
-                        ParamId::FilterCutoff    => state.cutoff.set(value),
+                        ParamId::FilterCutoff => state.cutoff.set(value),
                         ParamId::FilterResonance => state.resonance.set(value),
-                        ParamId::LfoDepth        => state.lfo_depth.set(value),
-                        ParamId::MasterVolume    => state.master_vol.set(value),
-                        ParamId::LfoPitchMult    => state.lfo_pitch_mult.set(value),
+                        ParamId::LfoDepth => state.lfo_depth.set(value),
+                        ParamId::MasterVolume => state.master_vol.set(value),
+                        ParamId::LfoPitchMult => state.lfo_pitch_mult.set(value),
                         _ => {}
                     }
                 }
@@ -184,7 +186,7 @@ impl VoiceAllocator {
     }
 
     fn tick_arp_walker(&mut self, state: &AudioState, frames: usize, sr: f64) {
-        let arp_ev  = self.arp.tick(&state.arp, frames, sr);
+        let arp_ev = self.arp.tick(&state.arp, frames, sr);
         let walk_ev = self.walker.tick(&state.walker, frames, sr);
         for ev in [arp_ev, walk_ev] {
             if let Some(pitch) = ev.note_off {
@@ -214,7 +216,10 @@ impl VoiceAllocator {
         *count = count.saturating_add(1);
 
         let n = self.voice_notes.len();
-        let slot = self.voice_notes.iter().position(|&v| v == Some(pitch))
+        let slot = self
+            .voice_notes
+            .iter()
+            .position(|&v| v == Some(pitch))
             .or_else(|| self.voice_notes.iter().position(|v| v.is_none()))
             .unwrap_or_else(|| {
                 let s = self.steal_idx % n;
@@ -226,8 +231,8 @@ impl VoiceAllocator {
         // idle yet (cursor > 0.5 means attack/decay/sustain/release — i.e.
         // still producing sound). Amp_cursor encoding: 0=idle, 1.x=A, 2.x=D,
         // 3=S, 4.x=R.
-        let audible = state.voice_gates[slot].value() > 0.5
-            || state.amp_cursors[slot].value() > 0.5;
+        let audible =
+            state.voice_gates[slot].value() > 0.5 || state.amp_cursors[slot].value() > 0.5;
 
         self.voice_notes[slot] = Some(pitch);
         state.voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
@@ -247,7 +252,9 @@ impl VoiceAllocator {
     /// envelope decays — the release-cleanup pass handles final slot freeing.
     fn release_note(&mut self, state: &AudioState, pitch: u8) {
         let count = &mut self.pitch_hold_count[pitch as usize];
-        if *count > 0 { *count -= 1; }
+        if *count > 0 {
+            *count -= 1;
+        }
         if *count == 0 {
             for (slot, note) in self.voice_notes.iter_mut().enumerate() {
                 if *note == Some(pitch) {
@@ -269,7 +276,12 @@ mod tests {
     use std::sync::Arc;
     use synth_control::{make_control_channel, ControlEvent};
 
-    fn setup() -> (VoiceAllocator, Arc<AudioState>, synth_control::ControlSender, synth_control::ControlReceiver) {
+    fn setup() -> (
+        VoiceAllocator,
+        Arc<AudioState>,
+        synth_control::ControlSender,
+        synth_control::ControlReceiver,
+    ) {
         let state = Arc::new(AudioState::new());
         let (tx, rx) = make_control_channel(64);
         (VoiceAllocator::new(), state, tx, rx)
@@ -278,7 +290,12 @@ mod tests {
     #[test]
     fn note_on_sets_gate_and_freq() {
         let (mut va, state, tx, rx) = setup();
-        tx.try_send(ControlEvent::NoteOn { pitch: 69, velocity: 100, track: 0 }).unwrap();
+        tx.try_send(ControlEvent::NoteOn {
+            pitch: 69,
+            velocity: 100,
+            track: 0,
+        })
+        .unwrap();
         va.begin_buffer(&state, &rx, 64, 48_000.0);
 
         // First free slot is 0.
@@ -290,8 +307,17 @@ mod tests {
     #[test]
     fn note_off_kills_gate_when_count_reaches_zero() {
         let (mut va, state, tx, rx) = setup();
-        tx.try_send(ControlEvent::NoteOn  { pitch: 60, velocity: 100, track: 0 }).unwrap();
-        tx.try_send(ControlEvent::NoteOff { pitch: 60, track: 0 }).unwrap();
+        tx.try_send(ControlEvent::NoteOn {
+            pitch: 60,
+            velocity: 100,
+            track: 0,
+        })
+        .unwrap();
+        tx.try_send(ControlEvent::NoteOff {
+            pitch: 60,
+            track: 0,
+        })
+        .unwrap();
         va.begin_buffer(&state, &rx, 64, 48_000.0);
 
         assert_eq!(state.voice_gates[0].value(), 0.0);
@@ -305,24 +331,44 @@ mod tests {
         let (mut va, state, tx, rx) = setup();
 
         // Source A: NoteOn(60).
-        tx.try_send(ControlEvent::NoteOn { pitch: 60, velocity: 100, track: 0 }).unwrap();
+        tx.try_send(ControlEvent::NoteOn {
+            pitch: 60,
+            velocity: 100,
+            track: 0,
+        })
+        .unwrap();
         va.begin_buffer(&state, &rx, 64, 48_000.0);
         assert_eq!(state.voice_gates[0].value(), 1.0);
 
         // Source B: NoteOn(60) — count goes 1→2. Retrigger countdown fires
         // because the slot is still audible; advance 4 samples to clear it.
-        tx.try_send(ControlEvent::NoteOn { pitch: 60, velocity: 100, track: 0 }).unwrap();
+        tx.try_send(ControlEvent::NoteOn {
+            pitch: 60,
+            velocity: 100,
+            track: 0,
+        })
+        .unwrap();
         va.begin_buffer(&state, &rx, 64, 48_000.0);
-        for _ in 0..4 { va.tick_sample(&state); }
+        for _ in 0..4 {
+            va.tick_sample(&state);
+        }
         assert_eq!(state.voice_gates[0].value(), 1.0);
 
         // Source A: NoteOff(60) — count 2→1, must NOT kill gate.
-        tx.try_send(ControlEvent::NoteOff { pitch: 60, track: 0 }).unwrap();
+        tx.try_send(ControlEvent::NoteOff {
+            pitch: 60,
+            track: 0,
+        })
+        .unwrap();
         va.begin_buffer(&state, &rx, 64, 48_000.0);
         assert_eq!(state.voice_gates[0].value(), 1.0);
 
         // Source B: NoteOff(60) — count 1→0, gate drops.
-        tx.try_send(ControlEvent::NoteOff { pitch: 60, track: 0 }).unwrap();
+        tx.try_send(ControlEvent::NoteOff {
+            pitch: 60,
+            track: 0,
+        })
+        .unwrap();
         va.begin_buffer(&state, &rx, 64, 48_000.0);
         assert_eq!(state.voice_gates[0].value(), 0.0);
     }
@@ -334,21 +380,37 @@ mod tests {
         // begin_buffer, then flip back to 1.0 after 4 tick_sample calls.
         let (mut va, state, tx, rx) = setup();
         // Drive the first attack.
-        tx.try_send(ControlEvent::NoteOn { pitch: 62, velocity: 100, track: 0 }).unwrap();
+        tx.try_send(ControlEvent::NoteOn {
+            pitch: 62,
+            velocity: 100,
+            track: 0,
+        })
+        .unwrap();
         va.begin_buffer(&state, &rx, 64, 48_000.0);
         // Pretend the ADSR advanced — set amp_cursor so "audible" is true.
         state.amp_cursors[0].set(3.0);
         assert_eq!(state.voice_gates[0].value(), 1.0);
 
         // Same-buffer NoteOff + NoteOn for the same pitch.
-        tx.try_send(ControlEvent::NoteOff { pitch: 62, track: 0 }).unwrap();
-        tx.try_send(ControlEvent::NoteOn  { pitch: 62, velocity: 100, track: 0 }).unwrap();
+        tx.try_send(ControlEvent::NoteOff {
+            pitch: 62,
+            track: 0,
+        })
+        .unwrap();
+        tx.try_send(ControlEvent::NoteOn {
+            pitch: 62,
+            velocity: 100,
+            track: 0,
+        })
+        .unwrap();
         va.begin_buffer(&state, &rx, 64, 48_000.0);
 
         // Gate must be 0 on entry to sample loop.
         assert_eq!(state.voice_gates[0].value(), 0.0);
         // Ticking 3 times: still in countdown.
-        va.tick_sample(&state); va.tick_sample(&state); va.tick_sample(&state);
+        va.tick_sample(&state);
+        va.tick_sample(&state);
+        va.tick_sample(&state);
         assert_eq!(state.voice_gates[0].value(), 0.0);
         // Fourth tick expires the countdown and flips the gate high.
         va.tick_sample(&state);
@@ -358,11 +420,19 @@ mod tests {
     #[test]
     fn set_param_legacy_five_still_routed() {
         let (mut va, state, tx, rx) = setup();
-        tx.try_send(ControlEvent::SetParam { param: ParamId::FilterCutoff,  value: 2345.0 }).unwrap();
-        tx.try_send(ControlEvent::SetParam { param: ParamId::MasterVolume,  value: 0.42 }).unwrap();
+        tx.try_send(ControlEvent::SetParam {
+            param: ParamId::FilterCutoff,
+            value: 2345.0,
+        })
+        .unwrap();
+        tx.try_send(ControlEvent::SetParam {
+            param: ParamId::MasterVolume,
+            value: 0.42,
+        })
+        .unwrap();
         va.begin_buffer(&state, &rx, 64, 48_000.0);
-        assert!((state.cutoff.value()     - 2345.0).abs() < 1e-3);
-        assert!((state.master_vol.value() - 0.42).abs()   < 1e-5);
+        assert!((state.cutoff.value() - 2345.0).abs() < 1e-3);
+        assert!((state.master_vol.value() - 0.42).abs() < 1e-5);
     }
 
     #[test]
@@ -370,15 +440,29 @@ mod tests {
         let (mut va, state, tx, rx) = setup();
         // Fill every slot with distinct pitches.
         for p in 0..VOICE_COUNT as u8 {
-            tx.try_send(ControlEvent::NoteOn { pitch: 60 + p, velocity: 100, track: 0 }).unwrap();
+            tx.try_send(ControlEvent::NoteOn {
+                pitch: 60 + p,
+                velocity: 100,
+                track: 0,
+            })
+            .unwrap();
         }
         va.begin_buffer(&state, &rx, 64, 48_000.0);
         for s in 0..VOICE_COUNT {
-            assert_eq!(state.voice_gates[s].value(), 1.0, "slot {s} should be gated");
+            assert_eq!(
+                state.voice_gates[s].value(),
+                1.0,
+                "slot {s} should be gated"
+            );
         }
 
         // One more NoteOn forces a steal. Slot 0 is the first victim.
-        tx.try_send(ControlEvent::NoteOn { pitch: 80, velocity: 100, track: 0 }).unwrap();
+        tx.try_send(ControlEvent::NoteOn {
+            pitch: 80,
+            velocity: 100,
+            track: 0,
+        })
+        .unwrap();
         va.begin_buffer(&state, &rx, 64, 48_000.0);
         let f = midi_hz(80.0) as f32;
         assert!((state.voice_freq_targets[0].value() - f).abs() < 1e-3);

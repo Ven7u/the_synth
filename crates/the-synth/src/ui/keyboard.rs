@@ -1,6 +1,8 @@
+use crate::sequencer::{
+    chord_name, chord_quality, ChordType, ScaleType, SeqMode, CHORD_KB_COLS, CHORD_KB_ROWS,
+    DEGREE_LABELS, NOTE_NAMES,
+};
 use crate::SynthApp;
-use crate::sequencer::{SeqMode, ScaleType, NOTE_NAMES, DEGREE_LABELS, chord_name, chord_quality,
-    CHORD_KB_ROWS, CHORD_KB_COLS, ChordType};
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, Rounding, Sense, Stroke, Vec2};
 
@@ -45,8 +47,13 @@ impl SynthApp {
     /// Call this from the main update loop, not from a tab panel.
     pub fn tick_keyboard_input(&mut self, ctx: &egui::Context) {
         const WHITE_KEYS: &[egui::Key] = &[
-            egui::Key::A, egui::Key::S, egui::Key::D, egui::Key::F,
-            egui::Key::G, egui::Key::H, egui::Key::J,
+            egui::Key::A,
+            egui::Key::S,
+            egui::Key::D,
+            egui::Key::F,
+            egui::Key::G,
+            egui::Key::H,
+            egui::Key::J,
         ];
 
         // Space bar toggles freeze (when no text widget has focus).
@@ -55,7 +62,9 @@ impl SynthApp {
             self.kb_freeze = !self.kb_freeze;
             if !self.kb_freeze {
                 let frozen: Vec<u8> = self.frozen_notes.drain().collect();
-                for n in frozen { self.push_note_off(n); }
+                for n in frozen {
+                    self.push_note_off(n);
+                }
             }
         }
 
@@ -65,19 +74,42 @@ impl SynthApp {
             //   Row 1 (7ths):    Q W E R T Y U
             //   Row 2 (sus/add): Z X C V B N M
             const ROW_KEYS: [[egui::Key; 7]; 3] = [
-                [egui::Key::Q, egui::Key::W, egui::Key::E, egui::Key::R,
-                 egui::Key::T, egui::Key::Y, egui::Key::U],
-                [egui::Key::A, egui::Key::S, egui::Key::D, egui::Key::F,
-                 egui::Key::G, egui::Key::H, egui::Key::J],
-                [egui::Key::Z, egui::Key::X, egui::Key::C, egui::Key::V,
-                 egui::Key::B, egui::Key::N, egui::Key::M],
+                [
+                    egui::Key::Q,
+                    egui::Key::W,
+                    egui::Key::E,
+                    egui::Key::R,
+                    egui::Key::T,
+                    egui::Key::Y,
+                    egui::Key::U,
+                ],
+                [
+                    egui::Key::A,
+                    egui::Key::S,
+                    egui::Key::D,
+                    egui::Key::F,
+                    egui::Key::G,
+                    egui::Key::H,
+                    egui::Key::J,
+                ],
+                [
+                    egui::Key::Z,
+                    egui::Key::X,
+                    egui::Key::C,
+                    egui::Key::V,
+                    egui::Key::B,
+                    egui::Key::N,
+                    egui::Key::M,
+                ],
             ];
 
             let mut current_pads = std::collections::HashSet::<(usize, usize)>::new();
             ctx.input(|inp| {
                 for (row, keys) in ROW_KEYS.iter().enumerate() {
                     for (col, &key) in keys.iter().enumerate() {
-                        if inp.key_down(key) { current_pads.insert((row, col)); }
+                        if inp.key_down(key) {
+                            current_pads.insert((row, col));
+                        }
                     }
                 }
             });
@@ -87,40 +119,58 @@ impl SynthApp {
                     let (row, col) = pad;
                     if self.kb_freeze {
                         let frozen: Vec<u8> = self.frozen_notes.drain().collect();
-                        for n in frozen { self.push_note_off(n); }
+                        for n in frozen {
+                            self.push_note_off(n);
+                        }
                         for m in self.chord_kb.chord_notes_for(row, col) {
                             self.push_note_on(m);
                         }
                     } else {
-                        for m in self.chord_kb.chord_notes_for(row, col) { self.push_note_on(m); }
+                        for m in self.chord_kb.chord_notes_for(row, col) {
+                            self.push_note_on(m);
+                        }
                     }
                 }
             }
-            let released: Vec<(usize, usize)> = self.chord_kb.kb_held.iter()
+            let released: Vec<(usize, usize)> = self
+                .chord_kb
+                .kb_held
+                .iter()
                 .filter(|p| !current_pads.contains(p))
-                .copied().collect();
+                .copied()
+                .collect();
             for (row, col) in released {
                 let notes = self.chord_kb.chord_notes_for(row, col);
                 if self.kb_freeze {
-                    for m in notes { self.frozen_notes.insert(m); }
+                    for m in notes {
+                        self.frozen_notes.insert(m);
+                    }
                 } else {
-                    for m in notes { self.push_note_off(m); }
+                    for m in notes {
+                        self.push_note_off(m);
+                    }
                 }
             }
             self.chord_kb.kb_held = current_pads;
             let prev_midi: Vec<u8> = self.piano_held_midi.drain().collect();
-            for m in prev_midi { self.push_note_off(m); }
+            for m in prev_midi {
+                self.push_note_off(m);
+            }
         } else {
             // Piano mode — release chord notes if mode just switched
             if !self.chord_kb.kb_held.is_empty() {
                 let held: Vec<(usize, usize)> = self.chord_kb.kb_held.drain().collect();
                 for (row, col) in held {
-                    for m in self.chord_kb.chord_notes_for(row, col) { self.push_note_off(m); }
+                    for m in self.chord_kb.chord_notes_for(row, col) {
+                        self.push_note_off(m);
+                    }
                 }
             }
             // ChordSeq live transpose: any key press sets the root note
-            if SeqMode::from_u8(self.seq.mode.load(std::sync::atomic::Ordering::Relaxed)) == SeqMode::ChordSeq
-                && self.seq.playing.load(std::sync::atomic::Ordering::Relaxed) {
+            if SeqMode::from_u8(self.seq.mode.load(std::sync::atomic::Ordering::Relaxed))
+                == SeqMode::ChordSeq
+                && self.seq.playing.load(std::sync::atomic::Ordering::Relaxed)
+            {
                 let mut pressed_semitone: Option<u8> = None;
                 ctx.input(|inp| {
                     for &(key, semitone) in KEY_MAP {
@@ -133,7 +183,9 @@ impl SynthApp {
                     self.seq.chord_seq.lock().unwrap().root = semi;
                 }
                 let prev: Vec<u8> = self.piano_held_midi.drain().collect();
-                for m in prev { self.push_note_off(m); }
+                for m in prev {
+                    self.push_note_off(m);
+                }
             } else {
                 let mut current_held = std::collections::HashSet::<u8>::new();
                 ctx.input(|inp| {
@@ -148,16 +200,21 @@ impl SynthApp {
                         // New note: release frozen set now, defer NoteOn to next frame.
                         if self.kb_freeze {
                             let frozen: Vec<u8> = self.frozen_notes.drain().collect();
-                            for n in frozen { self.push_note_off(n); }
+                            for n in frozen {
+                                self.push_note_off(n);
+                            }
                             self.push_note_on(midi);
                         } else {
                             self.push_note_on(midi);
                         }
                     }
                 }
-                let released: Vec<u8> = self.piano_held_midi.iter()
+                let released: Vec<u8> = self
+                    .piano_held_midi
+                    .iter()
                     .filter(|&&m| !current_held.contains(&m))
-                    .copied().collect();
+                    .copied()
+                    .collect();
                 for midi in released {
                     if self.kb_freeze {
                         self.frozen_notes.insert(midi);
@@ -305,103 +362,145 @@ impl SynthApp {
             .num_columns(CHORD_KB_COLS + 1)
             .spacing([spacing, 2.0])
             .show(ui, |ui| {
-        for row in 0..CHORD_KB_ROWS {
-            // Fixed-width row label cell
-            ui.allocate_ui_with_layout(
-                Vec2::new(label_w, btn_h),
-                egui::Layout::right_to_left(egui::Align::Center),
-                |ui| {
-                    ui.label(egui::RichText::new(ROW_LABELS[row])
-                        .weak().small()
-                        .color(Color32::from_gray(120)));
-                },
-            );
+                for row in 0..CHORD_KB_ROWS {
+                    // Fixed-width row label cell
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(label_w, btn_h),
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            ui.label(
+                                egui::RichText::new(ROW_LABELS[row])
+                                    .weak()
+                                    .small()
+                                    .color(Color32::from_gray(120)),
+                            );
+                        },
+                    );
 
-                for col in 0..CHORD_KB_COLS {
-                    let (resp, painter) = ui.allocate_painter(
-                        Vec2::new(btn_w, btn_h), Sense::click_and_drag());
-                    let r = resp.rect;
+                    for col in 0..CHORD_KB_COLS {
+                        let (resp, painter) =
+                            ui.allocate_painter(Vec2::new(btn_w, btn_h), Sense::click_and_drag());
+                        let r = resp.rect;
 
-                    let is_held_mouse = held_pad == Some((row, col));
-                    let is_held_kb = self.chord_kb.kb_held.contains(&(row, col));
-                    let is_held = is_held_mouse || is_held_kb;
-                    let is_editing = editing_pad == Some((row, col));
+                        let is_held_mouse = held_pad == Some((row, col));
+                        let is_held_kb = self.chord_kb.kb_held.contains(&(row, col));
+                        let is_held = is_held_mouse || is_held_kb;
+                        let is_editing = editing_pad == Some((row, col));
 
-                    let quality = chord_quality(self.chord_kb.scale, col);
-                    let bg = if is_held { self.theme.c(&self.theme.seq_current) }
-                        else if is_editing { Color32::from_rgb(80, 60, 20) }
-                        else if quality == "m" { self.theme.c(&self.theme.seq_kb_minor) }
-                        else if quality == "°" { self.theme.c(&self.theme.seq_kb_dim) }
-                        else { self.theme.c(&self.theme.seq_kb_major) };
-                    painter.rect_filled(r, Rounding::same(6.0), bg);
-                    let stroke_color = if is_held { Color32::WHITE }
-                        else if is_editing { Color32::from_rgb(240, 180, 60) }
-                        else { Color32::from_gray(80) };
-                    painter.rect_stroke(r, Rounding::same(6.0),
-                        Stroke::new(if is_held || is_editing { 2.0 } else { 1.0 }, stroke_color));
+                        let quality = chord_quality(self.chord_kb.scale, col);
+                        let bg = if is_held {
+                            self.theme.c(&self.theme.seq_current)
+                        } else if is_editing {
+                            Color32::from_rgb(80, 60, 20)
+                        } else if quality == "m" {
+                            self.theme.c(&self.theme.seq_kb_minor)
+                        } else if quality == "°" {
+                            self.theme.c(&self.theme.seq_kb_dim)
+                        } else {
+                            self.theme.c(&self.theme.seq_kb_major)
+                        };
+                        painter.rect_filled(r, Rounding::same(6.0), bg);
+                        let stroke_color = if is_held {
+                            Color32::WHITE
+                        } else if is_editing {
+                            Color32::from_rgb(240, 180, 60)
+                        } else {
+                            Color32::from_gray(80)
+                        };
+                        painter.rect_stroke(
+                            r,
+                            Rounding::same(6.0),
+                            Stroke::new(
+                                if is_held || is_editing { 2.0 } else { 1.0 },
+                                stroke_color,
+                            ),
+                        );
 
-                    // Chord name
-                    let cname = chord_name(self.chord_kb.root, self.chord_kb.scale, col);
-                    let chord_type = self.chord_kb.pads[row][col].chord_type;
-                    let display = if chord_type == ChordType::Triad {
-                        cname
-                    } else {
-                        format!("{} {}", cname, chord_type.label())
-                    };
-                    painter.text(egui::pos2(r.center().x, r.top() + 14.0),
-                        egui::Align2::CENTER_CENTER, &display,
-                        egui::FontId::proportional(11.0), Color32::WHITE);
+                        // Chord name
+                        let cname = chord_name(self.chord_kb.root, self.chord_kb.scale, col);
+                        let chord_type = self.chord_kb.pads[row][col].chord_type;
+                        let display = if chord_type == ChordType::Triad {
+                            cname
+                        } else {
+                            format!("{} {}", cname, chord_type.label())
+                        };
+                        painter.text(
+                            egui::pos2(r.center().x, r.top() + 14.0),
+                            egui::Align2::CENTER_CENTER,
+                            &display,
+                            egui::FontId::proportional(11.0),
+                            Color32::WHITE,
+                        );
 
-                    // Degree label
-                    painter.text(egui::pos2(r.center().x, r.top() + 28.0),
-                        egui::Align2::CENTER_CENTER, DEGREE_LABELS[col],
-                        egui::FontId::monospace(9.0), Color32::from_gray(160));
+                        // Degree label
+                        painter.text(
+                            egui::pos2(r.center().x, r.top() + 28.0),
+                            egui::Align2::CENTER_CENTER,
+                            DEGREE_LABELS[col],
+                            egui::FontId::monospace(9.0),
+                            Color32::from_gray(160),
+                        );
 
-                    // Key hint (bottom right corner)
-                    painter.text(egui::pos2(r.right() - 5.0, r.bottom() - 4.0),
-                        egui::Align2::RIGHT_BOTTOM, KEY_HINTS[row][col],
-                        egui::FontId::monospace(8.0), Color32::from_gray(110));
+                        // Key hint (bottom right corner)
+                        painter.text(
+                            egui::pos2(r.right() - 5.0, r.bottom() - 4.0),
+                            egui::Align2::RIGHT_BOTTOM,
+                            KEY_HINTS[row][col],
+                            egui::FontId::monospace(8.0),
+                            Color32::from_gray(110),
+                        );
 
-                    // Interaction
-                    if edit_mode {
-                        if resp.clicked() {
-                            self.chord_kb.editing_pad = if is_editing { None } else { Some((row, col)) };
-                        }
-                    } else {
-                        if resp.is_pointer_button_down_on() && !is_held_mouse {
-                            if self.kb_freeze {
-                                let frozen: Vec<u8> = self.frozen_notes.drain().collect();
-                                for n in frozen { self.push_note_off(n); }
-                                if let Some((pr, pc)) = self.chord_kb.held_pad {
-                                    for m in self.chord_kb.chord_notes_for(pr, pc) {
-                                        self.frozen_notes.insert(m);
+                        // Interaction
+                        if edit_mode {
+                            if resp.clicked() {
+                                self.chord_kb.editing_pad =
+                                    if is_editing { None } else { Some((row, col)) };
+                            }
+                        } else {
+                            if resp.is_pointer_button_down_on() && !is_held_mouse {
+                                if self.kb_freeze {
+                                    let frozen: Vec<u8> = self.frozen_notes.drain().collect();
+                                    for n in frozen {
+                                        self.push_note_off(n);
+                                    }
+                                    if let Some((pr, pc)) = self.chord_kb.held_pad {
+                                        for m in self.chord_kb.chord_notes_for(pr, pc) {
+                                            self.frozen_notes.insert(m);
+                                        }
+                                    }
+                                    for m in self.chord_kb.chord_notes_for(row, col) {
+                                        self.push_note_on(m);
+                                    }
+                                } else {
+                                    if let Some((pr, pc)) = self.chord_kb.held_pad {
+                                        for m in self.chord_kb.chord_notes_for(pr, pc) {
+                                            self.push_note_off(m);
+                                        }
+                                    }
+                                    for m in self.chord_kb.chord_notes_for(row, col) {
+                                        self.push_note_on(m);
                                     }
                                 }
-                                for m in self.chord_kb.chord_notes_for(row, col) {
-                                    self.push_note_on(m);
-                                }
-                            } else {
-                                if let Some((pr, pc)) = self.chord_kb.held_pad {
-                                    for m in self.chord_kb.chord_notes_for(pr, pc) { self.push_note_off(m); }
-                                }
-                                for m in self.chord_kb.chord_notes_for(row, col) { self.push_note_on(m); }
+                                self.chord_kb.held_pad = Some((row, col));
                             }
-                            self.chord_kb.held_pad = Some((row, col));
-                        }
-                        if !resp.is_pointer_button_down_on() && is_held_mouse {
-                            self.chord_kb.held_pad = None;
-                            let notes = self.chord_kb.chord_notes_for(row, col);
-                            if self.kb_freeze {
-                                for m in notes { self.frozen_notes.insert(m); }
-                            } else {
-                                for m in notes { self.push_note_off(m); }
+                            if !resp.is_pointer_button_down_on() && is_held_mouse {
+                                self.chord_kb.held_pad = None;
+                                let notes = self.chord_kb.chord_notes_for(row, col);
+                                if self.kb_freeze {
+                                    for m in notes {
+                                        self.frozen_notes.insert(m);
+                                    }
+                                } else {
+                                    for m in notes {
+                                        self.push_note_off(m);
+                                    }
+                                }
                             }
                         }
                     }
+                    ui.end_row();
                 }
-            ui.end_row();
-        }
-        }); // end Grid
+            }); // end Grid
 
         // Edit popover
         if let Some((row, col)) = self.chord_kb.editing_pad {
@@ -414,8 +513,11 @@ impl SynthApp {
                     ui.separator();
                     for &ct in ChordType::all() {
                         let active = self.chord_kb.pads[row][col].chord_type == ct;
-                        let label = egui::RichText::new(ct.label())
-                            .color(if active { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
+                        let label = egui::RichText::new(ct.label()).color(if active {
+                            self.theme.c(&self.theme.accent)
+                        } else {
+                            Color32::GRAY
+                        });
                         if ui.button(label).clicked() {
                             self.chord_kb.pads[row][col].chord_type = ct;
                             self.chord_kb.editing_pad = None;
@@ -435,10 +537,14 @@ impl SynthApp {
         // Collect active notes: frozen + currently held pads
         let mut active: std::collections::HashSet<u8> = self.frozen_notes.clone();
         if let Some((row, col)) = self.chord_kb.held_pad {
-            for m in self.chord_kb.chord_notes_for(row, col) { active.insert(m); }
+            for m in self.chord_kb.chord_notes_for(row, col) {
+                active.insert(m);
+            }
         }
         for &(row, col) in &self.chord_kb.kb_held.clone() {
-            for m in self.chord_kb.chord_notes_for(row, col) { active.insert(m); }
+            for m in self.chord_kb.chord_notes_for(row, col) {
+                active.insert(m);
+            }
         }
 
         let num_white = count_white_keys();
@@ -449,10 +555,8 @@ impl SynthApp {
         let black_h = white_h * 0.60;
         let total_width = white_w * num_white as f32;
 
-        let (resp, painter) = ui.allocate_painter(
-            Vec2::new(total_width, white_h + 2.0),
-            Sense::hover(),
-        );
+        let (resp, painter) =
+            ui.allocate_painter(Vec2::new(total_width, white_h + 2.0), Sense::hover());
         let origin = resp.rect.left_top();
         let accent = self.theme.c(&self.theme.accent);
 
@@ -461,7 +565,9 @@ impl SynthApp {
 
         // Pass 1: white keys
         for midi in PIANO_FIRST_MIDI..=PIANO_LAST_MIDI {
-            if !is_white_key(midi) { continue; }
+            if !is_white_key(midi) {
+                continue;
+            }
             let x = white_x;
             white_key_x[midi as usize] = x;
             white_x += white_w;
@@ -471,10 +577,17 @@ impl SynthApp {
                 Vec2::new(white_w - 1.0, white_h - 2.0),
             );
             let pressed = active.contains(&midi);
-            let fill = if pressed { accent } else { Color32::from_rgb(230, 230, 230) };
+            let fill = if pressed {
+                accent
+            } else {
+                Color32::from_rgb(230, 230, 230)
+            };
             painter.rect_filled(rect, Rounding::same(2.0), fill);
-            painter.rect_stroke(rect, Rounding::same(2.0),
-                Stroke::new(0.5, Color32::from_rgb(160, 160, 160)));
+            painter.rect_stroke(
+                rect,
+                Rounding::same(2.0),
+                Stroke::new(0.5, Color32::from_rgb(160, 160, 160)),
+            );
 
             if midi % 12 == 0 {
                 let octave = (midi / 12) as i32 - 1;
@@ -490,14 +603,15 @@ impl SynthApp {
 
         // Pass 2: black keys
         for midi in PIANO_FIRST_MIDI..=PIANO_LAST_MIDI {
-            if is_white_key(midi) { continue; }
+            if is_white_key(midi) {
+                continue;
+            }
             let white_below = midi - 1;
-            if !is_white_key(white_below) { continue; }
+            if !is_white_key(white_below) {
+                continue;
+            }
             let x = white_key_x[white_below as usize] + white_w * 0.6;
-            let rect = Rect::from_min_size(
-                origin + Vec2::new(x, 1.0),
-                Vec2::new(black_w, black_h),
-            );
+            let rect = Rect::from_min_size(origin + Vec2::new(x, 1.0), Vec2::new(black_w, black_h));
             let pressed = active.contains(&midi);
             let fill = if pressed {
                 Color32::from_rgba_premultiplied(accent.r(), accent.g(), accent.b(), 220)
@@ -537,7 +651,9 @@ impl SynthApp {
         let mut white_key_x: [f32; 128] = [0.0; 128];
 
         for midi in PIANO_FIRST_MIDI..=PIANO_LAST_MIDI {
-            if !is_white_key(midi) { continue; }
+            if !is_white_key(midi) {
+                continue;
+            }
 
             let x = white_x;
             white_key_x[midi as usize] = x;
@@ -548,8 +664,8 @@ impl SynthApp {
                 Vec2::new(white_w - 1.0, white_h - 2.0),
             );
 
-            let pressed = self.piano_held_midi.contains(&midi)
-                || self.piano_mouse_midi == Some(midi);
+            let pressed =
+                self.piano_held_midi.contains(&midi) || self.piano_mouse_midi == Some(midi);
             let in_kb_range = midi >= kb_range_start && midi < kb_range_end;
 
             let fill = if pressed {
@@ -562,8 +678,11 @@ impl SynthApp {
             };
 
             painter.rect_filled(rect, Rounding::same(2.0), fill);
-            painter.rect_stroke(rect, Rounding::same(2.0),
-                Stroke::new(0.5, Color32::from_rgb(180, 180, 180)));
+            painter.rect_stroke(
+                rect,
+                Rounding::same(2.0),
+                Stroke::new(0.5, Color32::from_rgb(180, 180, 180)),
+            );
 
             // C note labels at the bottom of each C key.
             if midi % 12 == 0 {
@@ -586,21 +705,22 @@ impl SynthApp {
 
         // --- Pass 2: Draw black keys (on top) ---
         for midi in PIANO_FIRST_MIDI..=PIANO_LAST_MIDI {
-            if is_white_key(midi) { continue; }
+            if is_white_key(midi) {
+                continue;
+            }
 
             // Black key sits between the white key below and above.
             // Find the white key just below this black key.
             let white_below = midi - 1;
-            if !is_white_key(white_below) { continue; }
+            if !is_white_key(white_below) {
+                continue;
+            }
             let x = white_key_x[white_below as usize] + white_w * 0.6;
 
-            let rect = Rect::from_min_size(
-                origin + Vec2::new(x, 1.0),
-                Vec2::new(black_w, black_h),
-            );
+            let rect = Rect::from_min_size(origin + Vec2::new(x, 1.0), Vec2::new(black_w, black_h));
 
-            let pressed = self.piano_held_midi.contains(&midi)
-                || self.piano_mouse_midi == Some(midi);
+            let pressed =
+                self.piano_held_midi.contains(&midi) || self.piano_mouse_midi == Some(midi);
             let in_kb_range = midi >= kb_range_start && midi < kb_range_end;
 
             let fill = if pressed {
@@ -628,7 +748,9 @@ impl SynthApp {
             let mut range_left = f32::MAX;
             let mut range_right = 0.0_f32;
             for midi in kb_range_start..kb_range_end.min(PIANO_LAST_MIDI + 1) {
-                if midi < PIANO_FIRST_MIDI { continue; }
+                if midi < PIANO_FIRST_MIDI {
+                    continue;
+                }
                 if is_white_key(midi) {
                     let x = white_key_x[midi as usize];
                     range_left = range_left.min(x);

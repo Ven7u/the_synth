@@ -38,7 +38,11 @@ impl Recorder {
             writer.finalize()
         });
 
-        Ok(Self { tx, thread: Some(handle), path })
+        Ok(Self {
+            tx,
+            thread: Some(handle),
+            path,
+        })
     }
 
     /// Push a stereo sample. Non-blocking: silently drops if the ring is full.

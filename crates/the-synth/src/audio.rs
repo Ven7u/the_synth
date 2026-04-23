@@ -11,11 +11,11 @@ use cpal::{FromSample, SizedSample, Stream};
 use fundsp::prelude32::*;
 use std::sync::{Arc, Mutex};
 
-use synth_engine::audio::build_synth_graph;
-use synth_engine::{SynthEngineHandle, VoiceAllocator};
+use crate::recorder::Recorder;
 use synth_control::{make_control_channel, ControlReceiver};
 use synth_dsp::LookaheadLimiter;
-use crate::recorder::Recorder;
+use synth_engine::audio::build_synth_graph;
+use synth_engine::{SynthEngineHandle, VoiceAllocator};
 
 type RecorderSink = Arc<Mutex<Option<Recorder>>>;
 
@@ -48,7 +48,11 @@ impl AudioEngine {
 // cpal stream
 // ---------------------------------------------------------------------------
 
-fn build_stream(state: Arc<AudioState>, rx: ControlReceiver, recorder_sink: RecorderSink) -> anyhow::Result<Stream> {
+fn build_stream(
+    state: Arc<AudioState>,
+    rx: ControlReceiver,
+    recorder_sink: RecorderSink,
+) -> anyhow::Result<Stream> {
     let host = cpal::default_host();
     let device = host
         .default_output_device()
@@ -57,9 +61,15 @@ fn build_stream(state: Arc<AudioState>, rx: ControlReceiver, recorder_sink: Reco
     let sr = config.sample_rate().0 as f64;
 
     let stream = match config.sample_format() {
-        cpal::SampleFormat::F32 => make_stream::<f32>(&device, &config.into(), state, sr, rx, recorder_sink)?,
-        cpal::SampleFormat::I16 => make_stream::<i16>(&device, &config.into(), state, sr, rx, recorder_sink)?,
-        cpal::SampleFormat::U16 => make_stream::<u16>(&device, &config.into(), state, sr, rx, recorder_sink)?,
+        cpal::SampleFormat::F32 => {
+            make_stream::<f32>(&device, &config.into(), state, sr, rx, recorder_sink)?
+        }
+        cpal::SampleFormat::I16 => {
+            make_stream::<i16>(&device, &config.into(), state, sr, rx, recorder_sink)?
+        }
+        cpal::SampleFormat::U16 => {
+            make_stream::<u16>(&device, &config.into(), state, sr, rx, recorder_sink)?
+        }
         _ => anyhow::bail!("Unsupported sample format"),
     };
     Ok(stream)
@@ -140,7 +150,9 @@ where
 
             // Voice gain staging: count sounding voices, smooth 1/sqrt(n) gain
             {
-                let n_active = state.amp_cursors.iter()
+                let n_active = state
+                    .amp_cursors
+                    .iter()
                     .filter(|c| c.value() > 0.01)
                     .count();
                 let n_active = if n_active < 1 { 1 } else { n_active };
@@ -151,16 +163,16 @@ where
 
             // Read per-buffer params once (cheap; avoids repeated atomic loads per sample)
             let sr_f = sr as f32;
-            let lfo_rate  = state.lfo_rate.value();
+            let lfo_rate = state.lfo_rate.value();
             let lfo_depth = state.lfo_depth.value();
             let lfo_shape = state.lfo_shape.load(std::sync::atomic::Ordering::Relaxed);
-            let lfo_dest  = state.lfo_dest.load(std::sync::atomic::Ordering::Relaxed);
-            let lfo_dt    = lfo_rate / sr_f;
-            let lfo2_rate  = state.lfo2_rate.value();
+            let lfo_dest = state.lfo_dest.load(std::sync::atomic::Ordering::Relaxed);
+            let lfo_dt = lfo_rate / sr_f;
+            let lfo2_rate = state.lfo2_rate.value();
             let lfo2_depth = state.lfo2_depth.value();
             let lfo2_shape = state.lfo2_shape.load(std::sync::atomic::Ordering::Relaxed);
-            let lfo2_dest  = state.lfo2_dest.load(std::sync::atomic::Ordering::Relaxed);
-            let lfo2_dt    = lfo2_rate / sr_f;
+            let lfo2_dest = state.lfo2_dest.load(std::sync::atomic::Ordering::Relaxed);
+            let lfo2_dt = lfo2_rate / sr_f;
             let base_cutoff = state.cutoff.value().clamp(80.0, 18000.0);
 
             // --- Glide: smooth voice_freq_targets → voice_freqs once per buffer ---
@@ -201,39 +213,56 @@ where
             for (frame_i, frame) in data.chunks_mut(channels).enumerate() {
                 // --- LFO 1 & 2: advance phases and combine modulation ---
                 lfo_phase += lfo_dt;
-                if lfo_phase >= 1.0 { lfo_phase -= 1.0; }
+                if lfo_phase >= 1.0 {
+                    lfo_phase -= 1.0;
+                }
                 let lfo_raw = match lfo_shape {
-                    1 => if lfo_phase < 0.5 { 4.0*lfo_phase-1.0 } else { 3.0-4.0*lfo_phase },
+                    1 => {
+                        if lfo_phase < 0.5 {
+                            4.0 * lfo_phase - 1.0
+                        } else {
+                            3.0 - 4.0 * lfo_phase
+                        }
+                    }
                     2 => 2.0 * lfo_phase - 1.0,
                     _ => (lfo_phase * std::f32::consts::TAU).sin(),
                 };
                 lfo2_phase += lfo2_dt;
-                if lfo2_phase >= 1.0 { lfo2_phase -= 1.0; }
+                if lfo2_phase >= 1.0 {
+                    lfo2_phase -= 1.0;
+                }
                 let lfo2_raw = match lfo2_shape {
-                    1 => if lfo2_phase < 0.5 { 4.0*lfo2_phase-1.0 } else { 3.0-4.0*lfo2_phase },
+                    1 => {
+                        if lfo2_phase < 0.5 {
+                            4.0 * lfo2_phase - 1.0
+                        } else {
+                            3.0 - 4.0 * lfo2_phase
+                        }
+                    }
                     2 => 2.0 * lfo2_phase - 1.0,
                     _ => (lfo2_phase * std::f32::consts::TAU).sin(),
                 };
 
                 // Accumulate pitch, filter, and amp contributions from both LFOs
-                let mut pitch_mod: f32 = 0.0;  // additive semitones * 2
+                let mut pitch_mod: f32 = 0.0; // additive semitones * 2
                 let mut filter_mod: f32 = 0.0; // additive cutoff multiplier
-                let mut amp_mod: f32 = 1.0;    // multiplicative
+                let mut amp_mod: f32 = 1.0; // multiplicative
 
                 for (raw, depth, dest) in [
                     (lfo_raw, lfo_depth, lfo_dest),
                     (lfo2_raw, lfo2_depth, lfo2_dest),
                 ] {
                     match dest {
-                        0 => pitch_mod  += raw * depth,
-                        2 => amp_mod    *= 1.0 - depth * (1.0 - raw) * 0.5,
+                        0 => pitch_mod += raw * depth,
+                        2 => amp_mod *= 1.0 - depth * (1.0 - raw) * 0.5,
                         _ => filter_mod += raw * depth,
                     }
                 }
 
                 state.lfo_pitch_mult.set(2_f32.powf(pitch_mod * 2.0 / 12.0));
-                state.effective_cutoff.set(
-                    (base_cutoff + filter_mod * base_cutoff * 0.5).clamp(80.0, 18000.0));
+                state
+                    .effective_cutoff
+                    .set((base_cutoff + filter_mod * base_cutoff * 0.5).clamp(80.0, 18000.0));
                 let lfo_amp = amp_mod;
 
                 // Drive the voice allocator's per-sample retrigger countdown.
@@ -247,8 +276,10 @@ where
                 // DC blocker applied before limiter so limiter sees clean signal
                 let dc_l = raw_l_pre - dc_x_prev_l + dc_coeff * dc_y_prev_l;
                 let dc_r = raw_r_pre - dc_x_prev_r + dc_coeff * dc_y_prev_r;
-                dc_x_prev_l = raw_l_pre; dc_y_prev_l = dc_l;
-                dc_x_prev_r = raw_r_pre; dc_y_prev_r = dc_r;
+                dc_x_prev_l = raw_l_pre;
+                dc_y_prev_l = dc_l;
+                dc_x_prev_r = raw_r_pre;
+                dc_y_prev_r = dc_r;
                 let (mut raw_l, mut raw_r) = (dc_l, dc_r);
 
                 // Lookahead true-peak limiter: applies gain before the peak arrives
@@ -261,13 +292,22 @@ where
                 // Gentle soft clip for occasional overshoots.
                 // Apply tremolo after limiter so the limiter doesn't fight the modulation.
                 let target_global = state.global_vol.value() as f32;
-                global_vol_smooth = target_global + global_vol_coeff * (global_vol_smooth - target_global);
-                let l = if raw_l.is_finite() { raw_l.tanh() } else { 0.0 } * lfo_amp * global_vol_smooth;
-                let r_out = if raw_r.is_finite() { raw_r.tanh() } else { 0.0 } * lfo_amp * global_vol_smooth;
+                global_vol_smooth =
+                    target_global + global_vol_coeff * (global_vol_smooth - target_global);
+                let l = if raw_l.is_finite() { raw_l.tanh() } else { 0.0 }
+                    * lfo_amp
+                    * global_vol_smooth;
+                let r_out = if raw_r.is_finite() { raw_r.tanh() } else { 0.0 }
+                    * lfo_amp
+                    * global_vol_smooth;
 
                 // Peak metering: track true output level (post-limiter, post-tanh)
-                if l.abs() > peak_l_local { peak_l_local = l.abs(); }
-                if r_out.abs() > peak_r_local { peak_r_local = r_out.abs(); }
+                if l.abs() > peak_l_local {
+                    peak_l_local = l.abs();
+                }
+                if r_out.abs() > peak_r_local {
+                    peak_r_local = r_out.abs();
+                }
 
                 if let Some(buf) = scope_buf.as_mut() {
                     // Downsample scope writes to reduce callback pressure.

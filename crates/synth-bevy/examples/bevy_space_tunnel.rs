@@ -26,20 +26,21 @@ use bevy::{
     prelude::*,
     window::WindowResolution,
 };
-use synth_bevy::{SceneTransitionMode, SynthBackendKind, SynthBevyConfig, SynthEvent,
-    SynthParam, SynthPlugin};
+use synth_bevy::{
+    SceneTransitionMode, SynthBackendKind, SynthBevyConfig, SynthEvent, SynthParam, SynthPlugin,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const STAR_COUNT:  usize = 220;
-const RING_COUNT:  usize = 4;
-const Z_FAR:       f32   = 1600.0;
-const Z_NEAR:      f32   = 20.0;
+const STAR_COUNT: usize = 220;
+const RING_COUNT: usize = 4;
+const Z_FAR: f32 = 1600.0;
+const Z_NEAR: f32 = 20.0;
 const TUNNEL_RADIUS: f32 = 900.0;
-const BASE_SPEED:  f32   = 180.0;
-const SCENE_NAME:  &str  = "Inception";
+const BASE_SPEED: f32 = 180.0;
+const SCENE_NAME: &str = "Inception";
 /// Seconds before Bevy force-advances to the next section.
 const SECTION_ADVANCE_SECS: [f32; 4] = [28.0, 38.0, 42.0, 9999.0];
 /// Speed spike multiplier applied on section advance, then decays back.
@@ -52,19 +53,21 @@ const ADVANCE_SPEED_SPIKE: f32 = 3.5;
 #[derive(Clone, Copy)]
 struct Palette {
     background: LinearRgba,
-    star_inner:  LinearRgba,
-    star_outer:  LinearRgba,
-    ring_color:  LinearRgba,
-    nebula:      LinearRgba,
+    star_inner: LinearRgba,
+    star_outer: LinearRgba,
+    ring_color: LinearRgba,
+    nebula: LinearRgba,
 }
 
-fn lrgb(r: f32, g: f32, b: f32) -> LinearRgba { LinearRgba::new(r, g, b, 1.0) }
+fn lrgb(r: f32, g: f32, b: f32) -> LinearRgba {
+    LinearRgba::new(r, g, b, 1.0)
+}
 
 fn lerp_color(a: LinearRgba, b: LinearRgba, t: f32) -> LinearRgba {
     LinearRgba::new(
-        a.red   + (b.red   - a.red)   * t,
+        a.red + (b.red - a.red) * t,
         a.green + (b.green - a.green) * t,
-        a.blue  + (b.blue  - a.blue)  * t,
+        a.blue + (b.blue - a.blue) * t,
         a.alpha + (b.alpha - a.alpha) * t,
     )
 }
@@ -72,40 +75,40 @@ fn lerp_color(a: LinearRgba, b: LinearRgba, t: f32) -> LinearRgba {
 fn palette_sedation() -> Palette {
     Palette {
         background: lrgb(0.003, 0.004, 0.018),
-        star_inner:  lrgb(0.20, 0.55, 2.80),
-        star_outer:  lrgb(0.04, 0.10, 0.40),
-        ring_color:  lrgb(0.10, 0.30, 1.80),
-        nebula:      lrgb(0.05, 0.10, 0.60),
+        star_inner: lrgb(0.20, 0.55, 2.80),
+        star_outer: lrgb(0.04, 0.10, 0.40),
+        ring_color: lrgb(0.10, 0.30, 1.80),
+        nebula: lrgb(0.05, 0.10, 0.60),
     }
 }
 
 fn palette_first_level() -> Palette {
     Palette {
         background: lrgb(0.006, 0.004, 0.028),
-        star_inner:  lrgb(1.00, 0.40, 3.20),
-        star_outer:  lrgb(0.08, 0.04, 0.55),
-        ring_color:  lrgb(0.60, 0.20, 2.50),
-        nebula:      lrgb(0.15, 0.05, 0.80),
+        star_inner: lrgb(1.00, 0.40, 3.20),
+        star_outer: lrgb(0.08, 0.04, 0.55),
+        ring_color: lrgb(0.60, 0.20, 2.50),
+        nebula: lrgb(0.15, 0.05, 0.80),
     }
 }
 
 fn palette_second_level() -> Palette {
     Palette {
         background: lrgb(0.010, 0.003, 0.035),
-        star_inner:  lrgb(2.40, 0.30, 3.00),
-        star_outer:  lrgb(0.20, 0.05, 0.60),
-        ring_color:  lrgb(1.80, 0.10, 2.80),
-        nebula:      lrgb(0.30, 0.05, 1.00),
+        star_inner: lrgb(2.40, 0.30, 3.00),
+        star_outer: lrgb(0.20, 0.05, 0.60),
+        ring_color: lrgb(1.80, 0.10, 2.80),
+        nebula: lrgb(0.30, 0.05, 1.00),
     }
 }
 
 fn palette_limbo() -> Palette {
     Palette {
         background: lrgb(0.025, 0.020, 0.045),
-        star_inner:  lrgb(6.00, 5.60, 7.20),
-        star_outer:  lrgb(0.40, 0.35, 0.60),
-        ring_color:  lrgb(4.00, 3.60, 5.00),
-        nebula:      lrgb(0.60, 0.55, 0.80),
+        star_inner: lrgb(6.00, 5.60, 7.20),
+        star_outer: lrgb(0.40, 0.35, 0.60),
+        ring_color: lrgb(4.00, 3.60, 5.00),
+        nebula: lrgb(0.60, 0.55, 0.80),
     }
 }
 
@@ -130,7 +133,7 @@ fn section_speed_mult(idx: usize) -> f32 {
 struct Star {
     angle: f32,
     phase: f32,
-    z:     f32,
+    z: f32,
     material: Handle<ColorMaterial>,
 }
 
@@ -170,25 +173,25 @@ fn xorshift(x: &mut u32) -> f32 {
 
 #[derive(Resource)]
 struct TunnelState {
-    section:          usize,
-    section_elapsed:  f32,
-    speed_smooth:     f32,
+    section: usize,
+    section_elapsed: f32,
+    speed_smooth: f32,
     /// Global rotation offset applied to all star angles (radians).
-    rotation:         f32,
-    last_epoch:       usize,
-    last_bar_epoch:   usize,
+    rotation: f32,
+    last_epoch: usize,
+    last_bar_epoch: usize,
     last_subdiv_epoch: usize,
 }
 
 impl Default for TunnelState {
     fn default() -> Self {
         Self {
-            section:          0,
-            section_elapsed:  0.0,
-            speed_smooth:     BASE_SPEED * section_speed_mult(0),
-            rotation:         0.0,
-            last_epoch:       0,
-            last_bar_epoch:   0,
+            section: 0,
+            section_elapsed: 0.0,
+            speed_smooth: BASE_SPEED * section_speed_mult(0),
+            rotation: 0.0,
+            last_epoch: 0,
+            last_bar_epoch: 0,
             last_subdiv_epoch: 0,
         }
     }
@@ -196,15 +199,20 @@ impl Default for TunnelState {
 
 #[derive(Resource)]
 struct PaletteFade {
-    from:     Palette,
-    to:       Palette,
+    from: Palette,
+    to: Palette,
     progress: f32,
     duration: f32,
 }
 
 impl PaletteFade {
     fn new(p: Palette) -> Self {
-        Self { from: p, to: p, progress: 1.0, duration: 6.0 }
+        Self {
+            from: p,
+            to: p,
+            progress: 1.0,
+            duration: 6.0,
+        }
     }
 
     fn start(&mut self, next: Palette, dur: f32) {
@@ -220,15 +228,17 @@ impl PaletteFade {
     }
 }
 
-fn smooth_step(t: f32) -> f32 { t * t * (3.0 - 2.0 * t) }
+fn smooth_step(t: f32) -> f32 {
+    t * t * (3.0 - 2.0 * t)
+}
 
 fn lerp_palette(a: Palette, b: Palette, t: f32) -> Palette {
     Palette {
         background: lerp_color(a.background, b.background, t),
-        star_inner:  lerp_color(a.star_inner,  b.star_inner,  t),
-        star_outer:  lerp_color(a.star_outer,  b.star_outer,  t),
-        ring_color:  lerp_color(a.ring_color,  b.ring_color,  t),
-        nebula:      lerp_color(a.nebula,       b.nebula,       t),
+        star_inner: lerp_color(a.star_inner, b.star_inner, t),
+        star_outer: lerp_color(a.star_outer, b.star_outer, t),
+        ring_color: lerp_color(a.ring_color, b.ring_color, t),
+        nebula: lerp_color(a.nebula, b.nebula, t),
     }
 }
 
@@ -274,15 +284,19 @@ fn main() {
         }))
         .add_plugins(SynthPlugin)
         .add_systems(Startup, setup)
-        .add_systems(Update, (
-            beat_sync_system,
-            tunnel_motion_system,
-            ring_system,
-            nebula_system,
-            flash_system,
-            palette_fade_system,
-            timeline_conductor_system,
-        ).chain())
+        .add_systems(
+            Update,
+            (
+                beat_sync_system,
+                tunnel_motion_system,
+                ring_system,
+                nebula_system,
+                flash_system,
+                palette_fade_system,
+                timeline_conductor_system,
+            )
+                .chain(),
+        )
         .run();
 }
 
@@ -292,10 +306,10 @@ fn main() {
 
 fn setup(
     mut commands: Commands,
-    mut meshes:    ResMut<Assets<Mesh>>,
+    mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    palette_fade:  Res<PaletteFade>,
-    mut synth:     MessageWriter<SynthEvent>,
+    palette_fade: Res<PaletteFade>,
+    mut synth: MessageWriter<SynthEvent>,
 ) {
     commands.spawn((
         Camera2d,
@@ -332,7 +346,7 @@ fn setup(
     let mut rng: u32 = 0xDEAD_CAFE;
     for i in 0..STAR_COUNT {
         let angle = (i as f32 / STAR_COUNT as f32) * TAU + xorshift(&mut rng) * 0.10;
-        let z     = xorshift(&mut rng) * Z_FAR;
+        let z = xorshift(&mut rng) * Z_FAR;
         let phase = xorshift(&mut rng);
 
         let depth_t = z / Z_FAR;
@@ -350,7 +364,12 @@ fn setup(
             MeshMaterial2d(mat.clone()),
             Transform::from_xyz(sx, sy, 0.0)
                 .with_rotation(Quat::from_rotation_z(angle + FRAC_PI_2)),
-            Star { angle, phase, z, material: mat },
+            Star {
+                angle,
+                phase,
+                z,
+                material: mat,
+            },
         ));
     }
 
@@ -358,24 +377,31 @@ fn setup(
     let ring_z_positions = [400.0f32, 700.0, 1000.0, 1300.0];
     for (i, &z) in ring_z_positions.iter().enumerate() {
         let spin = i as f32 * TAU / RING_COUNT as f32;
-        let mat = materials.add(ColorMaterial::from_color(
-            Color::LinearRgba(LinearRgba::new(
+        let mat = materials.add(ColorMaterial::from_color(Color::LinearRgba(
+            LinearRgba::new(
                 palette.ring_color.red,
                 palette.ring_color.green,
                 palette.ring_color.blue,
                 0.7,
-            ))
-        ));
+            ),
+        )));
         let r = ring_radius_at_z(z);
         commands.spawn((
             Mesh2d(meshes.add(Annulus::new(r - 2.0, r + 2.0))),
             MeshMaterial2d(mat.clone()),
             Transform::from_xyz(0.0, 0.0, 0.5),
-            Ring { z, spin, material: mat, pulse_scale: 1.0 },
+            Ring {
+                z,
+                spin,
+                material: mat,
+                pulse_scale: 1.0,
+            },
         ));
     }
 
-    synth.write(SynthEvent::SceneLoad { name: SCENE_NAME.to_string() });
+    synth.write(SynthEvent::SceneLoad {
+        name: SCENE_NAME.to_string(),
+    });
 }
 
 fn star_screen_pos(angle: f32, z: f32, rotation: f32) -> (f32, f32) {
@@ -396,13 +422,15 @@ fn ring_radius_at_z(z: f32) -> f32 {
 // ---------------------------------------------------------------------------
 
 fn beat_sync_system(
-    params:    Option<Res<SynthParam>>,
+    params: Option<Res<SynthParam>>,
     mut tunnel: ResMut<TunnelState>,
-    mut rings:  Query<&mut Ring>,
+    mut rings: Query<&mut Ring>,
 ) {
-    let Some(params) = params else { return; };
+    let Some(params) = params else {
+        return;
+    };
 
-    let bar_epoch   = params.bar_epoch.load(Ordering::Relaxed);
+    let bar_epoch = params.bar_epoch.load(Ordering::Relaxed);
     let subdiv_epoch = params.subdivision_epoch.load(Ordering::Relaxed);
 
     // Bar boundary — pulse all rings
@@ -421,14 +449,14 @@ fn beat_sync_system(
 // ---------------------------------------------------------------------------
 
 fn tunnel_motion_system(
-    time:          Res<Time>,
-    mut tunnel:    ResMut<TunnelState>,
-    palette_fade:  Res<PaletteFade>,
-    mut meshes:    ResMut<Assets<Mesh>>,
+    time: Res<Time>,
+    mut tunnel: ResMut<TunnelState>,
+    palette_fade: Res<PaletteFade>,
+    mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mut stars:     Query<(&mut Transform, &mut Star, &Mesh2d)>,
+    mut stars: Query<(&mut Transform, &mut Star, &Mesh2d)>,
 ) {
-    let dt    = time.delta_secs();
+    let dt = time.delta_secs();
     let speed = tunnel.speed_smooth;
     let palette = palette_fade.current();
 
@@ -448,7 +476,7 @@ fn tunnel_motion_system(
         tf.translation.y = sy;
         tf.rotation = Quat::from_rotation_z(star.angle + tunnel.rotation + FRAC_PI_2);
 
-        let depth_t  = ((star.z - Z_NEAR) / (Z_FAR - Z_NEAR)).clamp(0.0, 1.0);
+        let depth_t = ((star.z - Z_NEAR) / (Z_FAR - Z_NEAR)).clamp(0.0, 1.0);
         let nearness = 1.0 - depth_t;
 
         // Trail and width both scale quadratically with nearness
@@ -470,15 +498,15 @@ fn tunnel_motion_system(
 // ---------------------------------------------------------------------------
 
 fn ring_system(
-    time:          Res<Time>,
-    tunnel:        Res<TunnelState>,
-    palette_fade:  Res<PaletteFade>,
-    mut meshes:    ResMut<Assets<Mesh>>,
+    time: Res<Time>,
+    tunnel: Res<TunnelState>,
+    palette_fade: Res<PaletteFade>,
+    mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mut rings:     Query<(&mut Transform, &mut Ring, &Mesh2d)>,
+    mut rings: Query<(&mut Transform, &mut Ring, &Mesh2d)>,
 ) {
-    let dt      = time.delta_secs();
-    let speed   = tunnel.speed_smooth;
+    let dt = time.delta_secs();
+    let speed = tunnel.speed_smooth;
     let palette = palette_fade.current();
 
     for (mut tf, mut ring, mesh_h) in &mut rings {
@@ -520,14 +548,16 @@ fn ring_system(
 // ---------------------------------------------------------------------------
 
 fn nebula_system(
-    params:        Option<Res<SynthParam>>,
-    tunnel:        Res<TunnelState>,
-    palette_fade:  Res<PaletteFade>,
+    params: Option<Res<SynthParam>>,
+    tunnel: Res<TunnelState>,
+    palette_fade: Res<PaletteFade>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    nebula_q:      Query<&Nebula>,
-    time:          Res<Time>,
+    nebula_q: Query<&Nebula>,
+    time: Res<Time>,
 ) {
-    let Some(params) = params else { return; };
+    let Some(params) = params else {
+        return;
+    };
     let subdiv = params.subdivision_epoch.load(Ordering::Relaxed);
     let palette = palette_fade.current();
 
@@ -548,10 +578,10 @@ fn nebula_system(
 // ---------------------------------------------------------------------------
 
 fn flash_system(
-    mut commands:  Commands,
-    time:          Res<Time>,
+    mut commands: Commands,
+    time: Res<Time>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mut flashes:   Query<(Entity, &mut FlashOverlay, &MeshMaterial2d<ColorMaterial>)>,
+    mut flashes: Query<(Entity, &mut FlashOverlay, &MeshMaterial2d<ColorMaterial>)>,
 ) {
     let dt = time.delta_secs();
     for (entity, mut flash, mat_h) in &mut flashes {
@@ -564,10 +594,14 @@ fn flash_system(
     }
 }
 
-fn spawn_flash(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<ColorMaterial>) {
-    let mat = materials.add(ColorMaterial::from_color(
-        Color::LinearRgba(LinearRgba::new(1.0, 1.0, 1.0, 1.0)),
-    ));
+fn spawn_flash(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<ColorMaterial>,
+) {
+    let mat = materials.add(ColorMaterial::from_color(Color::LinearRgba(
+        LinearRgba::new(1.0, 1.0, 1.0, 1.0),
+    )));
     commands.spawn((
         Mesh2d(meshes.add(Rectangle::new(3000.0, 3000.0))),
         MeshMaterial2d(mat),
@@ -585,7 +619,9 @@ fn palette_fade_system(
     mut fade: ResMut<PaletteFade>,
     mut clear_color: ResMut<ClearColor>,
 ) {
-    if fade.progress >= 1.0 { return; }
+    if fade.progress >= 1.0 {
+        return;
+    }
     fade.progress = (fade.progress + time.delta_secs() / fade.duration).min(1.0);
     clear_color.0 = Color::LinearRgba(fade.current().background);
 }
@@ -595,22 +631,28 @@ fn palette_fade_system(
 // ---------------------------------------------------------------------------
 
 fn timeline_conductor_system(
-    time:          Res<Time>,
-    mut tunnel:    ResMut<TunnelState>,
-    mut fade:      ResMut<PaletteFade>,
-    tl:            Res<TunnelTimeline>,
-    params:        Option<Res<SynthParam>>,
-    mut commands:  Commands,
-    mut meshes:    ResMut<Assets<Mesh>>,
+    time: Res<Time>,
+    mut tunnel: ResMut<TunnelState>,
+    mut fade: ResMut<PaletteFade>,
+    tl: Res<TunnelTimeline>,
+    params: Option<Res<SynthParam>>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mut synth:     MessageWriter<SynthEvent>,
+    mut synth: MessageWriter<SynthEvent>,
 ) {
     let dt = time.delta_secs();
-    let Some(params) = params else { return; };
+    let Some(params) = params else {
+        return;
+    };
 
     // ── Speed update ─────────────────────────────────────────────────────────
     let target_speed = BASE_SPEED * section_speed_mult(tunnel.section);
-    let rate = if target_speed > tunnel.speed_smooth { 6.0 } else { 3.0 };
+    let rate = if target_speed > tunnel.speed_smooth {
+        6.0
+    } else {
+        3.0
+    };
     tunnel.speed_smooth += (target_speed - tunnel.speed_smooth) * (rate * dt).min(1.0);
 
     // ── Phrase epoch ─────────────────────────────────────────────────────────
@@ -627,15 +669,22 @@ fn timeline_conductor_system(
 
         if time_up || visual_saturated {
             let next = tunnel.section + 1;
-            info!("[tunnel] {} → {}", tl.section_names[tunnel.section],
-                  tl.section_names.get(next).map(|s| s.as_str()).unwrap_or("end"));
+            info!(
+                "[tunnel] {} → {}",
+                tl.section_names[tunnel.section],
+                tl.section_names
+                    .get(next)
+                    .map(|s| s.as_str())
+                    .unwrap_or("end")
+            );
 
             synth.write(SynthEvent::TimelineAdvance);
             fade.start(section_palette(next), 8.0);
             spawn_flash(&mut commands, &mut meshes, &mut materials);
 
             // Speed spike — smoother will decay it back to target
-            tunnel.speed_smooth = BASE_SPEED * section_speed_mult(tunnel.section) * ADVANCE_SPEED_SPIKE;
+            tunnel.speed_smooth =
+                BASE_SPEED * section_speed_mult(tunnel.section) * ADVANCE_SPEED_SPIKE;
 
             tunnel.section = next;
             tunnel.section_elapsed = 0.0;

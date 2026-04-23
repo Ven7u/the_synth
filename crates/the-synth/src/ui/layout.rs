@@ -32,11 +32,11 @@ impl StudioTab {
 
     pub fn label(self) -> &'static str {
         match self {
-            StudioTab::Voice     => "VOICE",
-            StudioTab::Shape     => "SHAPE",
-            StudioTab::Fx        => "FX",
+            StudioTab::Voice => "VOICE",
+            StudioTab::Shape => "SHAPE",
+            StudioTab::Fx => "FX",
             StudioTab::Sequencer => "SEQ",
-            StudioTab::Settings  => "SETTINGS",
+            StudioTab::Settings => "SETTINGS",
         }
     }
 }
@@ -73,7 +73,7 @@ impl Default for LayoutState {
     fn default() -> Self {
         Self {
             theme_name: "Midnight".into(),
-            app_mode:   AppMode::Studio,
+            app_mode: AppMode::Studio,
             studio_tab: StudioTab::Voice,
             panels: PanelVisibilityState {
                 oscillators: true,
@@ -102,9 +102,14 @@ pub fn preset_sound_design() -> LayoutPreset {
         name: "Sound Design",
         description: "All panels visible for patch creation.",
         panels: PanelVisibilityState {
-            oscillators: true, modulation: true, keyboard: true,
-            sequencer: true, arp_walker: true, fx_chain: true,
-            scope: true, midi: true,
+            oscillators: true,
+            modulation: true,
+            keyboard: true,
+            sequencer: true,
+            arp_walker: true,
+            fx_chain: true,
+            scope: true,
+            midi: true,
         },
     }
 }
@@ -114,9 +119,14 @@ pub fn preset_performance() -> LayoutPreset {
         name: "Performance",
         description: "Keyboard + FX + Scope for live playing.",
         panels: PanelVisibilityState {
-            oscillators: false, modulation: false, keyboard: true,
-            sequencer: false, arp_walker: false, fx_chain: true,
-            scope: true, midi: false,
+            oscillators: false,
+            modulation: false,
+            keyboard: true,
+            sequencer: false,
+            arp_walker: false,
+            fx_chain: true,
+            scope: true,
+            midi: false,
         },
     }
 }
@@ -126,15 +136,24 @@ pub fn preset_sequencer() -> LayoutPreset {
         name: "Sequencer",
         description: "Sequencer + Arp/Walker + Scope for pattern work.",
         panels: PanelVisibilityState {
-            oscillators: false, modulation: false, keyboard: true,
-            sequencer: true, arp_walker: true, fx_chain: false,
-            scope: true, midi: false,
+            oscillators: false,
+            modulation: false,
+            keyboard: true,
+            sequencer: true,
+            arp_walker: true,
+            fx_chain: false,
+            scope: true,
+            midi: false,
         },
     }
 }
 
 pub fn builtin_presets() -> Vec<LayoutPreset> {
-    vec![preset_sound_design(), preset_performance(), preset_sequencer()]
+    vec![
+        preset_sound_design(),
+        preset_performance(),
+        preset_sequencer(),
+    ]
 }
 
 // ── Persistence ──────────────────────────────────────────────────────────────

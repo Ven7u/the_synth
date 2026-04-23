@@ -7,7 +7,11 @@ impl SynthApp {
         ui.label(egui::RichText::new("MIDI").strong().small());
 
         // Refresh port list button
-        if ui.small_button("⟳").on_hover_text("Refresh MIDI device list").clicked() {
+        if ui
+            .small_button("⟳")
+            .on_hover_text("Refresh MIDI device list")
+            .clicked()
+        {
             self.midi.list_ports();
         }
 
@@ -27,17 +31,22 @@ impl SynthApp {
             .selected_text(egui::RichText::new(current_label).small())
             .show_ui(ui, |ui| {
                 let selected = connected.is_none();
-                if ui.selectable_label(selected, "— disconnected —")
+                if ui
+                    .selectable_label(selected, "— disconnected —")
                     .on_hover_text("Disconnect from all MIDI devices.")
-                    .clicked() {
+                    .clicked()
+                {
                     self.midi.disconnect();
                 }
                 let names: Vec<String> = self.midi.port_names.clone();
                 for (i, name) in names.iter().enumerate() {
                     let selected = connected == Some(i);
-                    if ui.selectable_label(selected, name)
+                    if ui
+                        .selectable_label(selected, name)
                         .on_hover_text(format!("Connect to MIDI device: {name}"))
-                        .clicked() && !selected {
+                        .clicked()
+                        && !selected
+                    {
                         if let Err(e) = self.midi.connect(i) {
                             eprintln!("MIDI connect error: {e}");
                         }

@@ -10,16 +10,14 @@ mod sequencer;
 mod ui;
 
 use audio::AudioEngine;
-use synth_control::midi::{MidiEngine, MidiEvent};
-use patch::{Patch, default_patches};
 use eframe::egui;
-use sequencer::{
-    ChordKbState, SequencerHandle, spawn_sequencer,
-};
+use patch::{default_patches, Patch};
+use sequencer::{spawn_sequencer, ChordKbState, SequencerHandle};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use ui::layout::{AppMode, StudioTab};
+use synth_control::midi::{MidiEngine, MidiEvent};
 use ui::frame::SynthFrame;
+use ui::layout::{AppMode, StudioTab};
 
 fn main() -> eframe::Result {
     let recorder_sink = Arc::new(Mutex::new(None));
@@ -136,8 +134,8 @@ pub(crate) struct SynthApp {
     pub(crate) lfo_enabled: bool,
     pub(crate) lfo_rate: f32,
     pub(crate) lfo_depth: f32,
-    pub(crate) lfo_shape: usize,    // 0=sin 1=tri 2=saw
-    pub(crate) lfo_dest: usize,     // 0=pitch 1=filter 2=amp
+    pub(crate) lfo_shape: usize, // 0=sin 1=tri 2=saw
+    pub(crate) lfo_dest: usize,  // 0=pitch 1=filter 2=amp
     pub(crate) lfo_sync: bool,
     pub(crate) lfo_division: usize,
 
@@ -161,7 +159,7 @@ pub(crate) struct SynthApp {
     pub(crate) piano_octave: i32,
     pub(crate) piano_held_midi: std::collections::HashSet<u8>,
     pub(crate) piano_mouse_midi: Option<u8>,
-    pub(crate) kb_chord_mode: bool,  // true = chord pads, false = standard piano
+    pub(crate) kb_chord_mode: bool, // true = chord pads, false = standard piano
     /// When true, NoteOffs are suppressed; notes keep sounding until a new chord/note is played.
     pub(crate) kb_freeze: bool,
     /// MIDI notes currently sustained by freeze (key lifted but NoteOff suppressed).
@@ -177,11 +175,11 @@ pub(crate) struct SynthApp {
     pub(crate) window_focused: bool,
 
     // Global tempo / sync
-    pub(crate) global_bpm: u32,     // master tempo — source of truth when components are synced
-    pub(crate) global_sync: bool,   // when true, all components are forced to BPM sync
-    pub(crate) arp_sync: bool,      // per-component sync toggle for arpeggiator
-    pub(crate) walker_sync: bool,   // per-component sync toggle for scale walker
-    pub(crate) seq_sync: bool,      // per-component sync toggle for sequencer
+    pub(crate) global_bpm: u32, // master tempo — source of truth when components are synced
+    pub(crate) global_sync: bool, // when true, all components are forced to BPM sync
+    pub(crate) arp_sync: bool,  // per-component sync toggle for arpeggiator
+    pub(crate) walker_sync: bool, // per-component sync toggle for scale walker
+    pub(crate) seq_sync: bool,  // per-component sync toggle for sequencer
 
     // Sequencer — handle shared with the dedicated sequencer thread
     pub(crate) seq: Arc<SequencerHandle>,
@@ -224,8 +222,8 @@ pub(crate) struct SynthApp {
     pub(crate) fx_delay_time: f32,
     pub(crate) fx_delay_feedback: f32,
     pub(crate) fx_delay_mix: f32,
-    pub(crate) fx_delay_sync: bool,        // if true, delay_time is derived from BPM
-    pub(crate) fx_delay_division: usize,   // index into DELAY_DIVISIONS
+    pub(crate) fx_delay_sync: bool, // if true, delay_time is derived from BPM
+    pub(crate) fx_delay_division: usize, // index into DELAY_DIVISIONS
     pub(crate) fx_reverb_on: bool,
     pub(crate) fx_reverb_size: f32,
     pub(crate) fx_reverb_damp: f32,
@@ -274,7 +272,7 @@ impl SynthApp {
             .find(|t| t.name == saved.theme_name)
             .unwrap_or_else(ui::theme::midnight);
         let panels = PanelVisibility::from_state(&saved.panels);
-        let app_mode   = saved.app_mode;
+        let app_mode = saved.app_mode;
         let studio_tab = saved.studio_tab;
 
         let seq = Arc::new(SequencerHandle::new());
@@ -486,11 +484,15 @@ impl SynthApp {
         self.engine.silence_all_voices();
         // Send NoteOff for every MIDI note that might be held
         let held: Vec<u8> = self.piano_held_midi.drain().collect();
-        for n in held { self.push_note_off(n); }
+        for n in held {
+            self.push_note_off(n);
+        }
         // Signal sequencer thread to stop; it will NoteOff its prev_notes itself.
         self.seq.playing.store(false, Ordering::Relaxed);
         let frozen: Vec<u8> = self.frozen_notes.drain().collect();
-        for n in frozen { self.push_note_off(n); }
+        for n in frozen {
+            self.push_note_off(n);
+        }
         self.chord_kb.held_pad = None;
         self.chord_kb.kb_held.clear();
     }
@@ -515,31 +517,38 @@ impl SynthApp {
                 MidiEvent::CC { cc, value, .. } => {
                     let v = value as f32 / 127.0;
                     match cc {
-                        1  => { // Mod wheel → LFO depth
+                        1 => {
+                            // Mod wheel → LFO depth
                             self.lfo_depth = v;
                             self.engine.set_lfo_depth(v);
                         }
-                        7  => { // Volume → master vol
+                        7 => {
+                            // Volume → master vol
                             self.engine.set_master_volume(v);
                         }
-                        71 => { // Resonance
+                        71 => {
+                            // Resonance
                             let q = v * 0.95;
                             self.filter_q = q;
                             self.engine.set_filter_resonance(q);
                         }
-                        74 => { // Cutoff (brightness)
+                        74 => {
+                            // Cutoff (brightness)
                             let hz = 80.0 * (18000.0_f32 / 80.0).powf(v);
                             self.filter_cutoff = hz;
                             self.engine.set_filter_cutoff(hz);
                         }
-                        64 => { // Sustain pedal → freeze
+                        64 => {
+                            // Sustain pedal → freeze
                             let pedal_down = value >= 64;
                             if pedal_down && !self.kb_freeze {
                                 self.kb_freeze = true;
                             } else if !pedal_down && self.kb_freeze {
                                 self.kb_freeze = false;
                                 let frozen: Vec<u8> = self.frozen_notes.drain().collect();
-                                for n in frozen { self.push_note_off(n); }
+                                for n in frozen {
+                                    self.push_note_off(n);
+                                }
                             }
                         }
                         _ => {}
@@ -562,8 +571,8 @@ impl eframe::App for SynthApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         let state = ui::layout::LayoutState {
             theme_name: self.theme.name.clone(),
-            panels:     self.panels.to_state(),
-            app_mode:   self.app_mode,
+            panels: self.panels.to_state(),
+            app_mode: self.app_mode,
             studio_tab: self.studio_tab,
         };
         ui::layout::save_layout(&state);
@@ -591,17 +600,23 @@ impl eframe::App for SynthApp {
         // ── Zone 1: global bar (top, always visible) ──────────────────────────
         egui::TopBottomPanel::top("global_bar")
             .frame(SynthFrame::bar(&self.theme))
-            .show(ctx, |ui| { self.ui_global_bar(ui); });
+            .show(ctx, |ui| {
+                self.ui_global_bar(ui);
+            });
 
         // ── Zone 5b: keyboard strip (bottom-most) ─────────────────────────────
         egui::TopBottomPanel::bottom("keyboard_strip")
             .frame(SynthFrame::transport(&self.theme))
-            .show(ctx, |ui| { self.ui_keyboard_panel(ui); });
+            .show(ctx, |ui| {
+                self.ui_keyboard_panel(ui);
+            });
 
         // ── Zone 5a: FX mini strip (above keyboard, always visible) ───────────
         egui::TopBottomPanel::bottom("fx_mini_strip")
             .frame(SynthFrame::transport(&self.theme))
-            .show(ctx, |ui| { self.ui_fx_mini_strip(ui); });
+            .show(ctx, |ui| {
+                self.ui_fx_mini_strip(ui);
+            });
 
         // ── Zones 2 + 3: central editing area (dock in Studio, placeholder in Live) ──
         egui::CentralPanel::default()
@@ -619,46 +634,57 @@ impl eframe::App for SynthApp {
                         );
                         let mut dock_style = egui_dock::Style::from_egui(ui.style());
                         dock_style.separator.width = 6.0;
-                        dock_style.separator.color_idle    = egui::Color32::TRANSPARENT;
+                        dock_style.separator.color_idle = egui::Color32::TRANSPARENT;
                         dock_style.separator.color_hovered = egui::Color32::from_black_alpha(60);
                         dock_style.separator.color_dragged = egui::Color32::from_black_alpha(100);
                         dock_style.dock_area_padding = Some(egui::Margin::same(6.0));
                         let rm = self.theme.rounding_md;
-                        let r_top = egui::Rounding { nw: rm, ne: rm, sw: 0.0, se: 0.0 };
-                        let r_body = egui::Rounding { nw: 0.0, ne: rm, sw: rm, se: rm };
-                        let bg_app     = self.theme.c(&self.theme.bg_app);
+                        let r_top = egui::Rounding {
+                            nw: rm,
+                            ne: rm,
+                            sw: 0.0,
+                            se: 0.0,
+                        };
+                        let r_body = egui::Rounding {
+                            nw: 0.0,
+                            ne: rm,
+                            sw: rm,
+                            se: rm,
+                        };
+                        let bg_app = self.theme.c(&self.theme.bg_app);
                         let bg_surface = self.theme.c(&self.theme.bg_surface);
-                        let border     = self.theme.c(&self.theme.border);
-                        let text_pri   = self.theme.c(&self.theme.text_primary);
-                        let text_sec   = self.theme.c(&self.theme.text_secondary);
-                        let accent     = self.theme.c(&self.theme.accent);
+                        let border = self.theme.c(&self.theme.border);
+                        let text_pri = self.theme.c(&self.theme.text_primary);
+                        let text_sec = self.theme.c(&self.theme.text_secondary);
+                        let accent = self.theme.c(&self.theme.accent);
                         // Tab body: rounded corners + subtle border
                         dock_style.tab.tab_body.rounding = r_body;
-                        dock_style.tab.tab_body.stroke   = egui::Stroke::new(self.theme.stroke_ui, border);
+                        dock_style.tab.tab_body.stroke =
+                            egui::Stroke::new(self.theme.stroke_ui, border);
                         // Tab bar: transparent so the panel background shows through
-                        dock_style.tab_bar.bg_fill     = egui::Color32::TRANSPARENT;
+                        dock_style.tab_bar.bg_fill = egui::Color32::TRANSPARENT;
                         dock_style.tab_bar.hline_color = egui::Color32::TRANSPARENT;
-                        dock_style.tab_bar.rounding    = r_body;
-                        dock_style.tab_bar.height      = 28.0;
+                        dock_style.tab_bar.rounding = r_body;
+                        dock_style.tab_bar.height = 28.0;
                         // Active tab: raised (bg_surface), top-only rounding, accent outline
-                        dock_style.tab.active.rounding      = r_top;
-                        dock_style.tab.active.bg_fill       = bg_surface;
-                        dock_style.tab.active.text_color    = text_pri;
+                        dock_style.tab.active.rounding = r_top;
+                        dock_style.tab.active.bg_fill = bg_surface;
+                        dock_style.tab.active.text_color = text_pri;
                         dock_style.tab.active.outline_color = accent;
                         // Focused: same as active with accent text
-                        dock_style.tab.focused.rounding      = r_top;
-                        dock_style.tab.focused.bg_fill       = bg_surface;
-                        dock_style.tab.focused.text_color    = accent;
+                        dock_style.tab.focused.rounding = r_top;
+                        dock_style.tab.focused.bg_fill = bg_surface;
+                        dock_style.tab.focused.text_color = accent;
                         dock_style.tab.focused.outline_color = accent;
                         // Inactive: transparent, dimmed text
-                        dock_style.tab.inactive.rounding      = r_top;
-                        dock_style.tab.inactive.bg_fill       = egui::Color32::TRANSPARENT;
-                        dock_style.tab.inactive.text_color    = text_sec;
+                        dock_style.tab.inactive.rounding = r_top;
+                        dock_style.tab.inactive.bg_fill = egui::Color32::TRANSPARENT;
+                        dock_style.tab.inactive.text_color = text_sec;
                         dock_style.tab.inactive.outline_color = egui::Color32::TRANSPARENT;
                         // Hovered: slightly raised
-                        dock_style.tab.hovered.rounding      = r_top;
-                        dock_style.tab.hovered.bg_fill       = bg_surface;
-                        dock_style.tab.hovered.text_color    = text_pri;
+                        dock_style.tab.hovered.rounding = r_top;
+                        dock_style.tab.hovered.bg_fill = bg_surface;
+                        dock_style.tab.hovered.text_color = text_pri;
                         dock_style.tab.hovered.outline_color = border;
                         egui_dock::DockArea::new(&mut dock_state)
                             .style(dock_style)
@@ -692,90 +718,90 @@ impl SynthApp {
         // "remembered" pre-bypass slider positions, derived decompositions
         // of engine params) or whose UI truth outranks engine truth.
         let mut p = self.engine.snapshot_patch();
-        p.name     = self.patch_name.clone();
+        p.name = self.patch_name.clone();
         p.category = "User".into();
 
         // Oscillator bank: UI owns the (osc_vol, *_enabled, osc_pw_enabled,
         // unison_*, osc_octave, osc_detune) decomposition.
-        p.osc_wave           = self.osc_wave;
-        p.osc_octave         = self.osc_octave;
-        p.osc_detune         = self.osc_detune;
-        p.osc_vol            = self.osc_vol;
-        p.osc_enabled        = self.osc_enabled;
-        p.osc_pulse_width    = self.osc_pulse_width;
-        p.osc_pw_enabled     = self.osc_pw_enabled;
+        p.osc_wave = self.osc_wave;
+        p.osc_octave = self.osc_octave;
+        p.osc_detune = self.osc_detune;
+        p.osc_vol = self.osc_vol;
+        p.osc_enabled = self.osc_enabled;
+        p.osc_pulse_width = self.osc_pulse_width;
+        p.osc_pw_enabled = self.osc_pw_enabled;
         p.osc_unison_enabled = self.osc_unison_enabled;
-        p.osc_unison_count   = self.osc_unison_count;
-        p.osc_unison_spread  = self.osc_unison_spread;
-        p.hard_sync          = self.hard_sync;
+        p.osc_unison_count = self.osc_unison_count;
+        p.osc_unison_spread = self.osc_unison_spread;
+        p.hard_sync = self.hard_sync;
 
         // Global/bypass-paired fields.
-        p.fm_enabled         = self.fm_enabled;
-        p.fm_depth           = self.fm_depth;
-        p.ring_enabled       = self.ring_enabled;
-        p.ring_depth         = self.ring_depth;
-        p.lfo_enabled        = self.lfo_enabled;
-        p.lfo_rate           = self.lfo_rate;
-        p.lfo_depth          = self.lfo_depth;
-        p.lfo_shape          = self.lfo_shape;
-        p.lfo_dest           = self.lfo_dest;
-        p.lfo_sync           = self.lfo_sync;
-        p.lfo_division       = self.lfo_division;
-        p.lfo2_enabled       = self.lfo2_enabled;
-        p.lfo2_rate          = self.lfo2_rate;
-        p.lfo2_depth         = self.lfo2_depth;
-        p.lfo2_shape         = self.lfo2_shape;
-        p.lfo2_dest          = self.lfo2_dest;
-        p.filter_enabled     = self.filter_enabled;
-        p.filter_cutoff      = self.filter_cutoff;
-        p.filter_q           = self.filter_q;
-        p.limiter_enabled    = self.limiter_enabled;
+        p.fm_enabled = self.fm_enabled;
+        p.fm_depth = self.fm_depth;
+        p.ring_enabled = self.ring_enabled;
+        p.ring_depth = self.ring_depth;
+        p.lfo_enabled = self.lfo_enabled;
+        p.lfo_rate = self.lfo_rate;
+        p.lfo_depth = self.lfo_depth;
+        p.lfo_shape = self.lfo_shape;
+        p.lfo_dest = self.lfo_dest;
+        p.lfo_sync = self.lfo_sync;
+        p.lfo_division = self.lfo_division;
+        p.lfo2_enabled = self.lfo2_enabled;
+        p.lfo2_rate = self.lfo2_rate;
+        p.lfo2_depth = self.lfo2_depth;
+        p.lfo2_shape = self.lfo2_shape;
+        p.lfo2_dest = self.lfo2_dest;
+        p.filter_enabled = self.filter_enabled;
+        p.filter_cutoff = self.filter_cutoff;
+        p.filter_q = self.filter_q;
+        p.limiter_enabled = self.limiter_enabled;
 
         // FX chain (mirror still lives on SynthApp; future batches may move
         // these into pure engine-read territory).
-        p.fx_overdrive_on    = self.fx_overdrive_on;
+        p.fx_overdrive_on = self.fx_overdrive_on;
         p.fx_overdrive_drive = self.fx_overdrive_drive;
-        p.fx_overdrive_mix   = self.fx_overdrive_mix;
-        p.fx_overdrive_tone  = self.fx_overdrive_tone;
-        p.fx_overdrive_asym  = self.fx_overdrive_asym;
-        p.fx_distortion_on    = self.fx_distortion_on;
+        p.fx_overdrive_mix = self.fx_overdrive_mix;
+        p.fx_overdrive_tone = self.fx_overdrive_tone;
+        p.fx_overdrive_asym = self.fx_overdrive_asym;
+        p.fx_distortion_on = self.fx_distortion_on;
         p.fx_distortion_drive = self.fx_distortion_drive;
-        p.fx_distortion_mix   = self.fx_distortion_mix;
-        p.fx_distortion_tone  = self.fx_distortion_tone;
-        p.fx_distortion_pre   = self.fx_distortion_pre;
-        p.fx_chorus_on    = self.fx_chorus_on;
-        p.fx_chorus_rate  = self.fx_chorus_rate;
+        p.fx_distortion_mix = self.fx_distortion_mix;
+        p.fx_distortion_tone = self.fx_distortion_tone;
+        p.fx_distortion_pre = self.fx_distortion_pre;
+        p.fx_chorus_on = self.fx_chorus_on;
+        p.fx_chorus_rate = self.fx_chorus_rate;
         p.fx_chorus_depth = self.fx_chorus_depth;
-        p.fx_chorus_mix   = self.fx_chorus_mix;
-        p.fx_delay_on       = self.fx_delay_on;
-        p.fx_delay_time     = self.fx_delay_time;
+        p.fx_chorus_mix = self.fx_chorus_mix;
+        p.fx_delay_on = self.fx_delay_on;
+        p.fx_delay_time = self.fx_delay_time;
         p.fx_delay_feedback = self.fx_delay_feedback;
-        p.fx_delay_mix      = self.fx_delay_mix;
-        p.fx_delay_sync     = self.fx_delay_sync;
+        p.fx_delay_mix = self.fx_delay_mix;
+        p.fx_delay_sync = self.fx_delay_sync;
         p.fx_delay_division = self.fx_delay_division;
-        p.fx_reverb_on       = self.fx_reverb_on;
-        p.fx_reverb_size     = self.fx_reverb_size;
-        p.fx_reverb_damp     = self.fx_reverb_damp;
-        p.fx_reverb_mix      = self.fx_reverb_mix;
+        p.fx_reverb_on = self.fx_reverb_on;
+        p.fx_reverb_size = self.fx_reverb_size;
+        p.fx_reverb_damp = self.fx_reverb_damp;
+        p.fx_reverb_mix = self.fx_reverb_mix;
         p.fx_reverb_predelay = self.fx_reverb_predelay;
-        p.fx_reverb_type     = self.fx_reverb_type;
+        p.fx_reverb_type = self.fx_reverb_type;
         p.stereo_spread = self.stereo_spread;
-        p.stereo_width  = self.stereo_width;
-        p.fx_shimmer_on     = self.fx_shimmer_on;
-        p.fx_shimmer_size   = self.fx_shimmer_size;
-        p.fx_shimmer_damp   = self.fx_shimmer_damp;
-        p.fx_shimmer_mix    = self.fx_shimmer_mix;
-        p.fx_shimmer_amt    = self.fx_shimmer_amt;
-        p.fx_shimmer_width  = self.fx_shimmer_width;
+        p.stereo_width = self.stereo_width;
+        p.fx_shimmer_on = self.fx_shimmer_on;
+        p.fx_shimmer_size = self.fx_shimmer_size;
+        p.fx_shimmer_damp = self.fx_shimmer_damp;
+        p.fx_shimmer_mix = self.fx_shimmer_mix;
+        p.fx_shimmer_amt = self.fx_shimmer_amt;
+        p.fx_shimmer_width = self.fx_shimmer_width;
         p.fx_shimmer_spread = self.fx_shimmer_spread;
-        p.fx_shimmer_pitch  = self.fx_shimmer_pitch;
-        p.fx_crystal_on        = self.fx_crystal_on;
-        p.fx_crystal_mix       = self.fx_crystal_mix;
-        p.fx_crystal_grain_ms  = self.fx_crystal_grain_ms;
-        p.fx_crystal_scatter   = self.fx_crystal_scatter;
-        p.fx_crystal_feedback  = self.fx_crystal_feedback;
-        p.fx_crystal_delay_ms  = self.fx_crystal_delay_ms;
-        p.fx_crystal_pitch     = self.fx_crystal_pitch;
+        p.fx_shimmer_pitch = self.fx_shimmer_pitch;
+        p.fx_crystal_on = self.fx_crystal_on;
+        p.fx_crystal_mix = self.fx_crystal_mix;
+        p.fx_crystal_grain_ms = self.fx_crystal_grain_ms;
+        p.fx_crystal_scatter = self.fx_crystal_scatter;
+        p.fx_crystal_feedback = self.fx_crystal_feedback;
+        p.fx_crystal_delay_ms = self.fx_crystal_delay_ms;
+        p.fx_crystal_pitch = self.fx_crystal_pitch;
         p
     }
 
@@ -788,84 +814,84 @@ impl SynthApp {
         // authoritatively owns (ADSRs, glide, master, global, noise,
         // limiter threshold, filter env amount, arp/walker state) are
         // restored by `engine.apply_patch` below.
-        self.patch_name         = p.name.clone();
-        self.osc_wave           = p.osc_wave;
-        self.osc_octave         = p.osc_octave;
-        self.osc_detune         = p.osc_detune;
-        self.osc_vol            = p.osc_vol;
-        self.osc_enabled        = p.osc_enabled;
-        self.osc_pulse_width    = p.osc_pulse_width;
-        self.osc_pw_enabled     = p.osc_pw_enabled;
+        self.patch_name = p.name.clone();
+        self.osc_wave = p.osc_wave;
+        self.osc_octave = p.osc_octave;
+        self.osc_detune = p.osc_detune;
+        self.osc_vol = p.osc_vol;
+        self.osc_enabled = p.osc_enabled;
+        self.osc_pulse_width = p.osc_pulse_width;
+        self.osc_pw_enabled = p.osc_pw_enabled;
         self.osc_unison_enabled = p.osc_unison_enabled;
-        self.osc_unison_count   = p.osc_unison_count;
-        self.osc_unison_spread  = p.osc_unison_spread;
-        self.hard_sync          = p.hard_sync;
-        self.fm_enabled         = p.fm_enabled;
-        self.fm_depth           = p.fm_depth;
-        self.ring_enabled       = p.ring_enabled;
-        self.ring_depth         = p.ring_depth;
-        self.lfo_enabled        = p.lfo_enabled;
-        self.lfo_rate           = p.lfo_rate;
-        self.lfo_depth          = p.lfo_depth;
-        self.lfo_shape          = p.lfo_shape;
-        self.lfo_dest           = p.lfo_dest;
-        self.lfo_sync           = p.lfo_sync;
-        self.lfo_division       = p.lfo_division;
-        self.lfo2_enabled       = p.lfo2_enabled;
-        self.lfo2_rate          = p.lfo2_rate;
-        self.lfo2_depth         = p.lfo2_depth;
-        self.lfo2_shape         = p.lfo2_shape;
-        self.lfo2_dest          = p.lfo2_dest;
-        self.filter_enabled     = p.filter_enabled;
-        self.filter_cutoff      = p.filter_cutoff;
-        self.filter_q           = p.filter_q;
-        self.limiter_enabled    = p.limiter_enabled;
+        self.osc_unison_count = p.osc_unison_count;
+        self.osc_unison_spread = p.osc_unison_spread;
+        self.hard_sync = p.hard_sync;
+        self.fm_enabled = p.fm_enabled;
+        self.fm_depth = p.fm_depth;
+        self.ring_enabled = p.ring_enabled;
+        self.ring_depth = p.ring_depth;
+        self.lfo_enabled = p.lfo_enabled;
+        self.lfo_rate = p.lfo_rate;
+        self.lfo_depth = p.lfo_depth;
+        self.lfo_shape = p.lfo_shape;
+        self.lfo_dest = p.lfo_dest;
+        self.lfo_sync = p.lfo_sync;
+        self.lfo_division = p.lfo_division;
+        self.lfo2_enabled = p.lfo2_enabled;
+        self.lfo2_rate = p.lfo2_rate;
+        self.lfo2_depth = p.lfo2_depth;
+        self.lfo2_shape = p.lfo2_shape;
+        self.lfo2_dest = p.lfo2_dest;
+        self.filter_enabled = p.filter_enabled;
+        self.filter_cutoff = p.filter_cutoff;
+        self.filter_q = p.filter_q;
+        self.limiter_enabled = p.limiter_enabled;
 
         if self.patch_load_fx {
             // Sync the FX mirror fields too.
-            self.fx_overdrive_on     = p.fx_overdrive_on;
-            self.fx_overdrive_drive  = p.fx_overdrive_drive;
-            self.fx_overdrive_mix    = p.fx_overdrive_mix;
-            self.fx_overdrive_tone   = p.fx_overdrive_tone;
-            self.fx_overdrive_asym   = p.fx_overdrive_asym;
-            self.fx_distortion_on    = p.fx_distortion_on;
+            self.fx_overdrive_on = p.fx_overdrive_on;
+            self.fx_overdrive_drive = p.fx_overdrive_drive;
+            self.fx_overdrive_mix = p.fx_overdrive_mix;
+            self.fx_overdrive_tone = p.fx_overdrive_tone;
+            self.fx_overdrive_asym = p.fx_overdrive_asym;
+            self.fx_distortion_on = p.fx_distortion_on;
             self.fx_distortion_drive = p.fx_distortion_drive;
-            self.fx_distortion_mix   = p.fx_distortion_mix;
-            self.fx_distortion_tone  = p.fx_distortion_tone;
-            self.fx_distortion_pre   = p.fx_distortion_pre;
-            self.fx_chorus_on        = p.fx_chorus_on;
-            self.fx_chorus_rate      = p.fx_chorus_rate;
-            self.fx_chorus_depth     = p.fx_chorus_depth;
-            self.fx_chorus_mix       = p.fx_chorus_mix;
-            self.fx_delay_on         = p.fx_delay_on;
-            self.fx_delay_time       = p.fx_delay_time;
-            self.fx_delay_feedback   = p.fx_delay_feedback;
-            self.fx_delay_mix        = p.fx_delay_mix;
-            self.fx_delay_sync       = p.fx_delay_sync;
-            self.fx_delay_division   = p.fx_delay_division;
-            self.fx_reverb_on        = p.fx_reverb_on;
-            self.fx_reverb_size      = p.fx_reverb_size;
-            self.fx_reverb_damp      = p.fx_reverb_damp;
-            self.fx_reverb_mix       = p.fx_reverb_mix;
-            self.fx_reverb_predelay  = p.fx_reverb_predelay;
-            self.fx_reverb_type      = p.fx_reverb_type;
-            self.stereo_spread       = p.stereo_spread;
-            self.stereo_width        = p.stereo_width;
-            self.fx_shimmer_on       = p.fx_shimmer_on;
-            self.fx_shimmer_size     = p.fx_shimmer_size;
-            self.fx_shimmer_damp     = p.fx_shimmer_damp;
-            self.fx_shimmer_mix      = p.fx_shimmer_mix;
-            self.fx_shimmer_amt      = p.fx_shimmer_amt;
-            self.fx_shimmer_width    = p.fx_shimmer_width;
-            self.fx_shimmer_spread   = p.fx_shimmer_spread;
-            self.fx_shimmer_pitch    = p.fx_shimmer_pitch;
-            self.fx_crystal_on       = p.fx_crystal_on;
-            self.fx_crystal_mix      = p.fx_crystal_mix;
+            self.fx_distortion_mix = p.fx_distortion_mix;
+            self.fx_distortion_tone = p.fx_distortion_tone;
+            self.fx_distortion_pre = p.fx_distortion_pre;
+            self.fx_chorus_on = p.fx_chorus_on;
+            self.fx_chorus_rate = p.fx_chorus_rate;
+            self.fx_chorus_depth = p.fx_chorus_depth;
+            self.fx_chorus_mix = p.fx_chorus_mix;
+            self.fx_delay_on = p.fx_delay_on;
+            self.fx_delay_time = p.fx_delay_time;
+            self.fx_delay_feedback = p.fx_delay_feedback;
+            self.fx_delay_mix = p.fx_delay_mix;
+            self.fx_delay_sync = p.fx_delay_sync;
+            self.fx_delay_division = p.fx_delay_division;
+            self.fx_reverb_on = p.fx_reverb_on;
+            self.fx_reverb_size = p.fx_reverb_size;
+            self.fx_reverb_damp = p.fx_reverb_damp;
+            self.fx_reverb_mix = p.fx_reverb_mix;
+            self.fx_reverb_predelay = p.fx_reverb_predelay;
+            self.fx_reverb_type = p.fx_reverb_type;
+            self.stereo_spread = p.stereo_spread;
+            self.stereo_width = p.stereo_width;
+            self.fx_shimmer_on = p.fx_shimmer_on;
+            self.fx_shimmer_size = p.fx_shimmer_size;
+            self.fx_shimmer_damp = p.fx_shimmer_damp;
+            self.fx_shimmer_mix = p.fx_shimmer_mix;
+            self.fx_shimmer_amt = p.fx_shimmer_amt;
+            self.fx_shimmer_width = p.fx_shimmer_width;
+            self.fx_shimmer_spread = p.fx_shimmer_spread;
+            self.fx_shimmer_pitch = p.fx_shimmer_pitch;
+            self.fx_crystal_on = p.fx_crystal_on;
+            self.fx_crystal_mix = p.fx_crystal_mix;
             self.fx_crystal_grain_ms = p.fx_crystal_grain_ms;
-            self.fx_crystal_scatter  = p.fx_crystal_scatter;
+            self.fx_crystal_scatter = p.fx_crystal_scatter;
             self.fx_crystal_feedback = p.fx_crystal_feedback;
             self.fx_crystal_delay_ms = p.fx_crystal_delay_ms;
-            self.fx_crystal_pitch    = p.fx_crystal_pitch;
+            self.fx_crystal_pitch = p.fx_crystal_pitch;
         }
 
         // -- Push engine state through the typed handle.
@@ -880,49 +906,49 @@ impl SynthApp {
             let mut core = p.clone();
             // Wipe FX and stereo so apply_patch doesn't clobber the user's
             // current FX settings. Use the live handle values.
-            core.fx_overdrive_on     = self.fx_overdrive_on;
-            core.fx_overdrive_drive  = self.fx_overdrive_drive;
-            core.fx_overdrive_mix    = self.fx_overdrive_mix;
-            core.fx_overdrive_tone   = self.fx_overdrive_tone;
-            core.fx_overdrive_asym   = self.fx_overdrive_asym;
-            core.fx_distortion_on    = self.fx_distortion_on;
+            core.fx_overdrive_on = self.fx_overdrive_on;
+            core.fx_overdrive_drive = self.fx_overdrive_drive;
+            core.fx_overdrive_mix = self.fx_overdrive_mix;
+            core.fx_overdrive_tone = self.fx_overdrive_tone;
+            core.fx_overdrive_asym = self.fx_overdrive_asym;
+            core.fx_distortion_on = self.fx_distortion_on;
             core.fx_distortion_drive = self.fx_distortion_drive;
-            core.fx_distortion_mix   = self.fx_distortion_mix;
-            core.fx_distortion_tone  = self.fx_distortion_tone;
-            core.fx_distortion_pre   = self.fx_distortion_pre;
-            core.fx_chorus_on        = self.fx_chorus_on;
-            core.fx_chorus_rate      = self.fx_chorus_rate;
-            core.fx_chorus_depth     = self.fx_chorus_depth;
-            core.fx_chorus_mix       = self.fx_chorus_mix;
-            core.fx_delay_on         = self.fx_delay_on;
-            core.fx_delay_time       = self.fx_delay_time;
-            core.fx_delay_feedback   = self.fx_delay_feedback;
-            core.fx_delay_mix        = self.fx_delay_mix;
-            core.fx_delay_sync       = self.fx_delay_sync;
-            core.fx_delay_division   = self.fx_delay_division;
-            core.fx_reverb_on        = self.fx_reverb_on;
-            core.fx_reverb_size      = self.fx_reverb_size;
-            core.fx_reverb_damp      = self.fx_reverb_damp;
-            core.fx_reverb_mix       = self.fx_reverb_mix;
-            core.fx_reverb_predelay  = self.fx_reverb_predelay;
-            core.fx_reverb_type      = self.fx_reverb_type;
-            core.stereo_spread       = self.stereo_spread;
-            core.stereo_width        = self.stereo_width;
-            core.fx_shimmer_on       = self.fx_shimmer_on;
-            core.fx_shimmer_size     = self.fx_shimmer_size;
-            core.fx_shimmer_damp     = self.fx_shimmer_damp;
-            core.fx_shimmer_mix      = self.fx_shimmer_mix;
-            core.fx_shimmer_amt      = self.fx_shimmer_amt;
-            core.fx_shimmer_width    = self.fx_shimmer_width;
-            core.fx_shimmer_spread   = self.fx_shimmer_spread;
-            core.fx_shimmer_pitch    = self.fx_shimmer_pitch;
-            core.fx_crystal_on       = self.fx_crystal_on;
-            core.fx_crystal_mix      = self.fx_crystal_mix;
+            core.fx_distortion_mix = self.fx_distortion_mix;
+            core.fx_distortion_tone = self.fx_distortion_tone;
+            core.fx_distortion_pre = self.fx_distortion_pre;
+            core.fx_chorus_on = self.fx_chorus_on;
+            core.fx_chorus_rate = self.fx_chorus_rate;
+            core.fx_chorus_depth = self.fx_chorus_depth;
+            core.fx_chorus_mix = self.fx_chorus_mix;
+            core.fx_delay_on = self.fx_delay_on;
+            core.fx_delay_time = self.fx_delay_time;
+            core.fx_delay_feedback = self.fx_delay_feedback;
+            core.fx_delay_mix = self.fx_delay_mix;
+            core.fx_delay_sync = self.fx_delay_sync;
+            core.fx_delay_division = self.fx_delay_division;
+            core.fx_reverb_on = self.fx_reverb_on;
+            core.fx_reverb_size = self.fx_reverb_size;
+            core.fx_reverb_damp = self.fx_reverb_damp;
+            core.fx_reverb_mix = self.fx_reverb_mix;
+            core.fx_reverb_predelay = self.fx_reverb_predelay;
+            core.fx_reverb_type = self.fx_reverb_type;
+            core.stereo_spread = self.stereo_spread;
+            core.stereo_width = self.stereo_width;
+            core.fx_shimmer_on = self.fx_shimmer_on;
+            core.fx_shimmer_size = self.fx_shimmer_size;
+            core.fx_shimmer_damp = self.fx_shimmer_damp;
+            core.fx_shimmer_mix = self.fx_shimmer_mix;
+            core.fx_shimmer_amt = self.fx_shimmer_amt;
+            core.fx_shimmer_width = self.fx_shimmer_width;
+            core.fx_shimmer_spread = self.fx_shimmer_spread;
+            core.fx_shimmer_pitch = self.fx_shimmer_pitch;
+            core.fx_crystal_on = self.fx_crystal_on;
+            core.fx_crystal_mix = self.fx_crystal_mix;
             core.fx_crystal_grain_ms = self.fx_crystal_grain_ms;
-            core.fx_crystal_scatter  = self.fx_crystal_scatter;
+            core.fx_crystal_scatter = self.fx_crystal_scatter;
             core.fx_crystal_feedback = self.fx_crystal_feedback;
             core.fx_crystal_delay_ms = self.fx_crystal_delay_ms;
-            core.fx_crystal_pitch    = self.fx_crystal_pitch;
+            core.fx_crystal_pitch = self.fx_crystal_pitch;
             self.engine.apply_patch(&core);
         }
 
@@ -943,24 +969,35 @@ impl SynthApp {
         ui.horizontal(|ui| {
             // ── Mode toggle ───────────────────────────────────────────────
             let studio_active = self.app_mode == AppMode::Studio;
-            let live_active   = self.app_mode == AppMode::Live;
+            let live_active = self.app_mode == AppMode::Live;
 
-            let studio_col = if studio_active { self.theme.c(&self.theme.accent) }
-                             else             { self.theme.c(&self.theme.text_secondary) };
-            let live_col   = if live_active   { self.theme.c(&self.theme.accent) }
-                             else             { self.theme.c(&self.theme.text_secondary) };
+            let studio_col = if studio_active {
+                self.theme.c(&self.theme.accent)
+            } else {
+                self.theme.c(&self.theme.text_secondary)
+            };
+            let live_col = if live_active {
+                self.theme.c(&self.theme.accent)
+            } else {
+                self.theme.c(&self.theme.text_secondary)
+            };
 
-            if ui.add(egui::SelectableLabel::new(
-                studio_active,
-                egui::RichText::new("STUDIO").size(11.0).color(studio_col),
-            )).clicked() {
+            if ui
+                .add(egui::SelectableLabel::new(
+                    studio_active,
+                    egui::RichText::new("STUDIO").size(11.0).color(studio_col),
+                ))
+                .clicked()
+            {
                 self.app_mode = AppMode::Studio;
             }
-            if ui.add(egui::SelectableLabel::new(
-                live_active,
-                egui::RichText::new("LIVE").size(11.0).color(live_col),
-            )).on_hover_text("Live performance view — coming soon.")
-              .clicked()
+            if ui
+                .add(egui::SelectableLabel::new(
+                    live_active,
+                    egui::RichText::new("LIVE").size(11.0).color(live_col),
+                ))
+                .on_hover_text("Live performance view — coming soon.")
+                .clicked()
             {
                 self.app_mode = AppMode::Live;
             }
@@ -973,24 +1010,33 @@ impl SynthApp {
                     .size(11.0)
                     .color(self.theme.c(&self.theme.text_secondary)),
             );
-            if ui.add(
-                egui::DragValue::new(&mut self.global_bpm)
-                    .range(40..=600)
-                    .speed(0.5),
-            ).on_hover_text("Master tempo (40–600 BPM). Drag or scroll.")
-             .changed()
+            if ui
+                .add(
+                    egui::DragValue::new(&mut self.global_bpm)
+                        .range(40..=600)
+                        .speed(0.5),
+                )
+                .on_hover_text("Master tempo (40–600 BPM). Drag or scroll.")
+                .changed()
             {
                 self.apply_clock_sync();
             }
 
             // ── Sync controls ─────────────────────────────────────────────
-            let sync_col = if self.global_sync { self.theme.c(&self.theme.accent) }
-                           else                { self.theme.c(&self.theme.text_disabled) };
-            if ui.add(egui::SelectableLabel::new(
-                self.global_sync,
-                egui::RichText::new("SYNC").size(11.0).color(sync_col),
-            )).on_hover_text("Force all components (Seq, Arp, Walker, Delay) to follow Global BPM.")
-              .clicked()
+            let sync_col = if self.global_sync {
+                self.theme.c(&self.theme.accent)
+            } else {
+                self.theme.c(&self.theme.text_disabled)
+            };
+            if ui
+                .add(egui::SelectableLabel::new(
+                    self.global_sync,
+                    egui::RichText::new("SYNC").size(11.0).color(sync_col),
+                ))
+                .on_hover_text(
+                    "Force all components (Seq, Arp, Walker, Delay) to follow Global BPM.",
+                )
+                .clicked()
             {
                 self.global_sync = !self.global_sync;
                 if self.global_sync {
@@ -1005,13 +1051,18 @@ impl SynthApp {
             let any_sync = self.global_sync || self.seq_sync || self.arp_sync || self.walker_sync;
             ui.add_enabled_ui(any_sync, |ui| {
                 let bq = self.seq.bar_quantize.load(Ordering::Relaxed);
-                let bq_col = if bq { self.theme.c(&self.theme.accent_dim) }
-                             else  { self.theme.c(&self.theme.text_disabled) };
-                if ui.add(egui::SelectableLabel::new(
-                    bq,
-                    egui::RichText::new("BAR").size(11.0).color(bq_col),
-                )).on_hover_text("Quantise Arp/Walker restart to next bar boundary.")
-                  .clicked()
+                let bq_col = if bq {
+                    self.theme.c(&self.theme.accent_dim)
+                } else {
+                    self.theme.c(&self.theme.text_disabled)
+                };
+                if ui
+                    .add(egui::SelectableLabel::new(
+                        bq,
+                        egui::RichText::new("BAR").size(11.0).color(bq_col),
+                    ))
+                    .on_hover_text("Quantise Arp/Walker restart to next bar boundary.")
+                    .clicked()
                 {
                     self.seq.bar_quantize.store(!bq, Ordering::Relaxed);
                 }
@@ -1064,7 +1115,10 @@ impl SynthApp {
 
                     ui.menu_button("Theme", |ui| {
                         for t in ui::theme::builtin_themes() {
-                            if ui.selectable_label(self.theme.name == t.name, &t.name).clicked() {
+                            if ui
+                                .selectable_label(self.theme.name == t.name, &t.name)
+                                .clicked()
+                            {
                                 self.theme = t;
                                 ui.close_menu();
                             }
@@ -1076,9 +1130,8 @@ impl SynthApp {
                             let open = self.dock_state.find_tab(&tab).is_some();
                             if ui.selectable_label(open, tab.title()).clicked() {
                                 if open {
-                                    self.dock_state.remove_tab(
-                                        self.dock_state.find_tab(&tab).unwrap(),
-                                    );
+                                    self.dock_state
+                                        .remove_tab(self.dock_state.find_tab(&tab).unwrap());
                                 } else {
                                     self.dock_state.push_to_focused_leaf(tab);
                                 }
@@ -1093,9 +1146,10 @@ impl SynthApp {
                     });
 
                     ui.separator();
-                    if ui.button("Sync Now")
-                       .on_hover_text("Reset phases for sequencer, arpeggiator, and walker.")
-                       .clicked()
+                    if ui
+                        .button("Sync Now")
+                        .on_hover_text("Reset phases for sequencer, arpeggiator, and walker.")
+                        .clicked()
                     {
                         self.apply_clock_sync();
                         self.sync_transport_now();
@@ -1106,36 +1160,48 @@ impl SynthApp {
                 ui.separator();
 
                 // Latency / CPU indicator
-                ui::scope::draw_latency_bar(ui, &self.engine, self.engine.amp_attack(), &self.theme);
+                ui::scope::draw_latency_bar(
+                    ui,
+                    &self.engine,
+                    self.engine.amp_attack(),
+                    &self.theme,
+                );
 
                 ui.separator();
 
                 // Record button
-                let is_recording = self.recorder_sink.lock().map(|g| g.is_some()).unwrap_or(false);
+                let is_recording = self
+                    .recorder_sink
+                    .lock()
+                    .map(|g| g.is_some())
+                    .unwrap_or(false);
                 if is_recording {
                     let stop_label = egui::RichText::new("■ REC")
                         .size(11.0)
                         .color(egui::Color32::from_rgb(220, 60, 60));
-                    if ui.button(stop_label)
-                       .on_hover_text("Stop recording and save WAV file.")
-                       .clicked()
+                    if ui
+                        .button(stop_label)
+                        .on_hover_text("Stop recording and save WAV file.")
+                        .clicked()
                     {
                         if let Ok(mut guard) = self.recorder_sink.lock() {
                             if let Some(rec) = guard.take() {
                                 let path = rec.path.clone();
                                 match rec.stop() {
-                                    Ok(())  => eprintln!("Recording saved: {path}"),
-                                    Err(e)  => eprintln!("Recording stop error: {e}"),
+                                    Ok(()) => eprintln!("Recording saved: {path}"),
+                                    Err(e) => eprintln!("Recording stop error: {e}"),
                                 }
                             }
                         }
                     }
                 } else {
-                    let rec_label = egui::RichText::new("⏺").size(13.0)
+                    let rec_label = egui::RichText::new("⏺")
+                        .size(13.0)
                         .color(self.theme.c(&self.theme.text_secondary));
-                    if ui.button(rec_label)
-                       .on_hover_text("Record stereo output to WAV.")
-                       .clicked()
+                    if ui
+                        .button(rec_label)
+                        .on_hover_text("Record stereo output to WAV.")
+                        .clicked()
                     {
                         let sr = self.engine.sample_rate();
                         if let Some(path) = rfd::FileDialog::new()
@@ -1166,13 +1232,15 @@ impl SynthApp {
                         .color(self.theme.c(&self.theme.text_disabled)),
                 );
                 let mut global_vol = self.engine.global_volume();
-                if ui.add(
-                    egui::DragValue::new(&mut global_vol)
-                        .range(0.0_f32..=1.0)
-                        .speed(0.005)
-                        .fixed_decimals(2),
-                ).on_hover_text("Global output volume — applied after all FX.")
-                 .changed()
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut global_vol)
+                            .range(0.0_f32..=1.0)
+                            .speed(0.005)
+                            .fixed_decimals(2),
+                    )
+                    .on_hover_text("Global output volume — applied after all FX.")
+                    .changed()
                 {
                     self.engine.set_global_volume(global_vol);
                 }
@@ -1212,7 +1280,10 @@ impl SynthApp {
                         self.theme.c(&self.theme.text_disabled)
                     };
                     if $ui
-                        .add(egui::Button::new(egui::RichText::new($label).size(11.0).color(col)).frame($on))
+                        .add(
+                            egui::Button::new(egui::RichText::new($label).size(11.0).color(col))
+                                .frame($on),
+                        )
                         .clicked()
                     {
                         $toggle;
@@ -1223,46 +1294,53 @@ impl SynthApp {
             let on = self.fx_overdrive_on;
             fx_chip!(ui, "OD", on, self.theme.fx_overdrive, {
                 self.fx_overdrive_on = !on;
-                self.engine.set_fx_overdrive_mix(if !on { self.fx_overdrive_mix } else { 0.0 });
+                self.engine
+                    .set_fx_overdrive_mix(if !on { self.fx_overdrive_mix } else { 0.0 });
             });
 
             let on = self.fx_distortion_on;
             fx_chip!(ui, "DIST", on, self.theme.fx_distortion, {
                 self.fx_distortion_on = !on;
-                self.engine.set_fx_distortion_mix(if !on { self.fx_distortion_mix } else { 0.0 });
+                self.engine
+                    .set_fx_distortion_mix(if !on { self.fx_distortion_mix } else { 0.0 });
             });
 
             let on = self.fx_chorus_on;
             fx_chip!(ui, "CHOR", on, self.theme.fx_chorus, {
                 self.fx_chorus_on = !on;
-                self.engine.set_fx_chorus_mix(if !on { self.fx_chorus_mix } else { 0.0 });
+                self.engine
+                    .set_fx_chorus_mix(if !on { self.fx_chorus_mix } else { 0.0 });
             });
 
             let on = self.fx_delay_on;
             fx_chip!(ui, "DLY", on, self.theme.fx_delay, {
                 self.fx_delay_on = !on;
-                self.engine.set_fx_delay_mix(if !on { self.fx_delay_mix } else { 0.0 });
+                self.engine
+                    .set_fx_delay_mix(if !on { self.fx_delay_mix } else { 0.0 });
             });
 
             let on = self.fx_reverb_on;
             fx_chip!(ui, "REV", on, self.theme.fx_reverb, {
                 self.fx_reverb_on = !on;
-                self.engine.set_fx_reverb_mix(if !on { self.fx_reverb_mix } else { 0.0 });
+                self.engine
+                    .set_fx_reverb_mix(if !on { self.fx_reverb_mix } else { 0.0 });
             });
 
             let on = self.fx_shimmer_on;
             fx_chip!(ui, "SHIM", on, self.theme.fx_shimmer, {
                 self.fx_shimmer_on = !on;
-                self.engine.set_shimmer_amount(if !on { self.fx_shimmer_amt } else { 0.0 });
-                self.engine.set_shimmer_mix(if !on { self.fx_shimmer_mix } else { 0.0 });
+                self.engine
+                    .set_shimmer_amount(if !on { self.fx_shimmer_amt } else { 0.0 });
+                self.engine
+                    .set_shimmer_mix(if !on { self.fx_shimmer_mix } else { 0.0 });
             });
 
             let on = self.fx_crystal_on;
             fx_chip!(ui, "CRYST", on, self.theme.fx_crystallizer, {
                 self.fx_crystal_on = !on;
-                self.engine.set_crystal_mix(if !on { self.fx_crystal_mix } else { 0.0 });
+                self.engine
+                    .set_crystal_mix(if !on { self.fx_crystal_mix } else { 0.0 });
             });
         });
     }
-
 }

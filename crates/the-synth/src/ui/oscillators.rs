@@ -1,5 +1,5 @@
-use crate::SynthApp;
 use crate::ui::frame::SynthFrame;
+use crate::SynthApp;
 use eframe::egui;
 use egui::{Color32, Pos2, RichText, Stroke, Vec2};
 
@@ -14,8 +14,7 @@ impl SynthApp {
 
         // Back face gets a slightly different tint via a modified frame.
         let frame = if flip {
-            SynthFrame::section(&self.theme)
-                .fill(self.theme.c(&self.theme.bg_sunken))
+            SynthFrame::section(&self.theme).fill(self.theme.c(&self.theme.bg_sunken))
         } else {
             SynthFrame::section(&self.theme)
         };
@@ -46,7 +45,11 @@ impl SynthApp {
                     .clicked()
                 {
                     self.osc_enabled[i] = !on;
-                    let vol = if self.osc_enabled[i] { self.osc_vol[i] } else { 0.0 };
+                    let vol = if self.osc_enabled[i] {
+                        self.osc_vol[i]
+                    } else {
+                        0.0
+                    };
                     self.engine.set_osc_vol(i as u8, vol);
                 }
 
@@ -56,10 +59,17 @@ impl SynthApp {
                         let flip_label = if flip { "‹ back" } else { "mod ›" };
                         let flip_col = self.theme.c(&self.theme.text_secondary);
                         if ui
-                            .add(egui::Label::new(
-                                RichText::new(flip_label).size(10.0).color(flip_col),
-                            ).sense(egui::Sense::click()))
-                            .on_hover_text(if flip { "Back to main controls" } else { "Sync / FM / Ring mod" })
+                            .add(
+                                egui::Label::new(
+                                    RichText::new(flip_label).size(10.0).color(flip_col),
+                                )
+                                .sense(egui::Sense::click()),
+                            )
+                            .on_hover_text(if flip {
+                                "Back to main controls"
+                            } else {
+                                "Sync / FM / Ring mod"
+                            })
                             .clicked()
                         {
                             self.osc1_mod_view = !self.osc1_mod_view;
@@ -265,7 +275,9 @@ impl SynthApp {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = sp_xs;
             let on = self.hard_sync;
-            let col = self.theme.active_with(on, &self.theme.accent_hard_sync.clone());
+            let col = self
+                .theme
+                .active_with(on, &self.theme.accent_hard_sync.clone());
             if ui
                 .add_sized(
                     [44.0, 22.0],
@@ -300,7 +312,8 @@ impl SynthApp {
                 .clicked()
             {
                 self.fm_enabled = !on;
-                self.engine.set_fm_depth(if self.fm_enabled { self.fm_depth } else { 0.0 });
+                self.engine
+                    .set_fm_depth(if self.fm_enabled { self.fm_depth } else { 0.0 });
             }
             ui.add_enabled_ui(self.fm_enabled, |ui| {
                 if ui
@@ -332,7 +345,11 @@ impl SynthApp {
                 .clicked()
             {
                 self.ring_enabled = !on;
-                self.engine.set_ring_depth(if self.ring_enabled { self.ring_depth } else { 0.0 });
+                self.engine.set_ring_depth(if self.ring_enabled {
+                    self.ring_depth
+                } else {
+                    0.0
+                });
             }
             ui.add_enabled_ui(self.ring_enabled, |ui| {
                 if ui
@@ -366,7 +383,8 @@ impl SynthApp {
         if !self.osc_unison_enabled[i] || count <= 1 {
             for c in 0..5 {
                 self.engine.set_osc_unison_detune(osc, c as u8, 1.0);
-                self.engine.set_osc_unison_vol(osc, c as u8, if c == 0 { 1.0 } else { 0.0 });
+                self.engine
+                    .set_osc_unison_vol(osc, c as u8, if c == 0 { 1.0 } else { 0.0 });
             }
             return;
         }
@@ -374,7 +392,11 @@ impl SynthApp {
         let vol = 1.0 / count as f32;
         for c in 0..5 {
             if c < count {
-                let t = if count > 1 { c as f32 / (count - 1) as f32 } else { 0.5 };
+                let t = if count > 1 {
+                    c as f32 / (count - 1) as f32
+                } else {
+                    0.5
+                };
                 let cents = -spread * 0.5 + t * spread;
                 let detune = 2_f32.powf(cents / 1200.0);
                 self.engine.set_osc_unison_detune(osc, c as u8, detune);
@@ -404,15 +426,13 @@ impl SynthApp {
                 for i in 0..3 {
                     ui.vertical(|ui| {
                         ui.set_width(36.0);
-                        ui.label(
-                            RichText::new(format!("O{}", i + 1))
-                                .size(10.0)
-                                .color(if self.osc_enabled[i] {
-                                    self.theme.c(&self.theme.text_primary)
-                                } else {
-                                    self.theme.c(&self.theme.text_disabled)
-                                }),
-                        );
+                        ui.label(RichText::new(format!("O{}", i + 1)).size(10.0).color(
+                            if self.osc_enabled[i] {
+                                self.theme.c(&self.theme.text_primary)
+                            } else {
+                                self.theme.c(&self.theme.text_disabled)
+                            },
+                        ));
                         if ui
                             .add_sized(
                                 [20.0, 90.0],
@@ -547,8 +567,20 @@ fn draw_wave_preview(
             let y = match wave {
                 0 => phase_rad.sin(),
                 1 => 1.0 - 2.0 * norm_phase,
-                2 => if norm_phase < pulse_width { 1.0 } else { -1.0 },
-                3 => if norm_phase < 0.5 { 4.0 * norm_phase - 1.0 } else { 3.0 - 4.0 * norm_phase },
+                2 => {
+                    if norm_phase < pulse_width {
+                        1.0
+                    } else {
+                        -1.0
+                    }
+                }
+                3 => {
+                    if norm_phase < 0.5 {
+                        4.0 * norm_phase - 1.0
+                    } else {
+                        3.0 - 4.0 * norm_phase
+                    }
+                }
                 _ => 0.0,
             };
 

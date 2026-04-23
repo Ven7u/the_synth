@@ -27,14 +27,15 @@ fn main() {
     // --- Without envelope ---
     // Clicks at start and end because amplitude steps instantly to/from 0.
     let wave = Wave::render(44100.0, 3.0, &mut (0.5 * saw_hz(220.0)));
-    wave.save_wav32(std::path::Path::new("output/03_raw.wav")).unwrap();
+    wave.save_wav32(std::path::Path::new("output/03_raw.wav"))
+        .unwrap();
     println!("Saved output/03_raw.wav (notice the click at start/end)");
 
     // --- With ADSR envelope ---
-    let attack      = 0.05_f32;
-    let decay       = 0.10_f32;
-    let sustain     = 0.70_f32;
-    let release     = 0.80_f32;
+    let attack = 0.05_f32;
+    let decay = 0.10_f32;
+    let sustain = 0.70_f32;
+    let release = 0.80_f32;
     let note_length = 1.50_f32; // gate open for 1.5 s
 
     // `lfo` has 0 inputs and 1 output. The closure receives elapsed time in seconds.
@@ -60,7 +61,8 @@ fn main() {
     // `>>` pipes the mono signal into `pan(0.0)` which creates a stereo output.
     let mut enveloped = (saw_hz(220.0) * amp_curve) >> pan(0.0);
     let wave = Wave::render(44100.0, 3.5, &mut enveloped);
-    wave.save_wav32(std::path::Path::new("output/03_envelope.wav")).unwrap();
+    wave.save_wav32(std::path::Path::new("output/03_envelope.wav"))
+        .unwrap();
     println!("Saved output/03_envelope.wav (smooth attack and release)");
     println!("\nCompare the two files — the enveloped version sounds much more natural.");
 }

@@ -4,22 +4,22 @@ use egui::Color32;
 
 /// Delay note divisions: (label, beats relative to a quarter-note pulse).
 pub const DELAY_DIVISIONS: &[(&str, f32)] = &[
-    ("1/1",  4.0),
-    ("1/2",  2.0),
-    ("1/4",  1.0),
-    ("1/8",  0.5),
+    ("1/1", 4.0),
+    ("1/2", 2.0),
+    ("1/4", 1.0),
+    ("1/8", 0.5),
     ("1/16", 0.25),
-    ("3/8",  1.5),  // dotted quarter
+    ("3/8", 1.5),   // dotted quarter
     ("3/16", 0.75), // dotted eighth
 ];
 
 impl SynthApp {
     pub fn ui_fx_chain(&mut self, ui: &mut egui::Ui) {
-        let col_od   = self.theme.c(&self.theme.fx_overdrive);
+        let col_od = self.theme.c(&self.theme.fx_overdrive);
         let col_dist = self.theme.c(&self.theme.fx_distortion);
-        let col_cho  = self.theme.c(&self.theme.fx_chorus);
-        let col_dly  = self.theme.c(&self.theme.fx_delay);
-        let col_rev  = self.theme.c(&self.theme.fx_reverb);
+        let col_cho = self.theme.c(&self.theme.fx_chorus);
+        let col_dly = self.theme.c(&self.theme.fx_delay);
+        let col_rev = self.theme.c(&self.theme.fx_reverb);
         let col_crys = self.theme.c(&self.theme.fx_crystallizer);
 
         ui.horizontal(|ui| {

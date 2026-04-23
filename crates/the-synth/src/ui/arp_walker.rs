@@ -9,8 +9,11 @@ impl SynthApp {
 
         let enabled = self.engine.arp_enabled();
         ui.horizontal(|ui| {
-            let label = egui::RichText::new("ARP").strong()
-                .color(if enabled { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
+            let label = egui::RichText::new("ARP").strong().color(if enabled {
+                self.theme.c(&self.theme.accent)
+            } else {
+                Color32::GRAY
+            });
             if ui.button(label).clicked() {
                 let new_enabled = !enabled;
                 self.engine.set_arp_enabled(new_enabled);
@@ -22,12 +25,19 @@ impl SynthApp {
                     self.engine.chord_hold(&[]);
                 }
             }
-            if ui.button("RST").on_hover_text("Restart arp phase/step from beginning.").clicked() {
+            if ui
+                .button("RST")
+                .on_hover_text("Restart arp phase/step from beginning.")
+                .clicked()
+            {
                 self.engine.arp_restart();
             }
             let hold = self.engine.arp_hold();
-            let hold_label = egui::RichText::new("HOLD")
-                .color(if hold { self.theme.c(&self.theme.accent_hold) } else { Color32::GRAY });
+            let hold_label = egui::RichText::new("HOLD").color(if hold {
+                self.theme.c(&self.theme.accent_hold)
+            } else {
+                Color32::GRAY
+            });
             if ui.button(hold_label).clicked() {
                 let new_hold = !hold;
                 self.engine.set_arp_hold(new_hold);
@@ -43,7 +53,8 @@ impl SynthApp {
                 let sync_active = self.arp_sync_active();
                 // When synced, force engine bpm to the global value before we read it.
                 if sync_active {
-                    self.engine.set_arp_bpm(self.seq.bpm.load(Ordering::Relaxed) as f32);
+                    self.engine
+                        .set_arp_bpm(self.seq.bpm.load(Ordering::Relaxed) as f32);
                 }
                 let mut bpm = self.engine.arp_bpm();
                 ui.add_enabled_ui(!sync_active, |ui| {
@@ -53,9 +64,13 @@ impl SynthApp {
                 });
                 // Per-component sync toggle (disabled when global sync is on)
                 ui.add_enabled_ui(!self.global_sync, |ui| {
-                    let sync_label = egui::RichText::new("Sync")
-                        .color(if self.arp_sync_active() { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
-                    if ui.button(sync_label)
+                    let sync_label = egui::RichText::new("Sync").color(if self.arp_sync_active() {
+                        self.theme.c(&self.theme.accent)
+                    } else {
+                        Color32::GRAY
+                    });
+                    if ui
+                        .button(sync_label)
                         .on_hover_text("Lock Arp BPM to the Global BPM.")
                         .clicked()
                     {
@@ -82,7 +97,10 @@ impl SynthApp {
             ui.horizontal(|ui| {
                 ui.label("Mode:");
                 for (i, &label) in ArpMode::LABELS.iter().enumerate() {
-                    if ui.selectable_label(current_mode == i as u8, label).clicked() {
+                    if ui
+                        .selectable_label(current_mode == i as u8, label)
+                        .clicked()
+                    {
                         self.engine.set_arp_mode(i as u8);
                     }
                 }
@@ -91,7 +109,10 @@ impl SynthApp {
             ui.horizontal(|ui| {
                 ui.label("Oct:");
                 for oct in 1u8..=4 {
-                    if ui.selectable_label(current_oct == oct, oct.to_string()).clicked() {
+                    if ui
+                        .selectable_label(current_oct == oct, oct.to_string())
+                        .clicked()
+                    {
                         self.engine.set_arp_octave_range(oct);
                     }
                 }
@@ -105,7 +126,7 @@ impl SynthApp {
     }
 
     pub fn ui_walker_panel(&mut self, ui: &mut egui::Ui) {
-        use synth_engine::arp::{Scale, ClockDiv};
+        use synth_engine::arp::{ClockDiv, Scale};
 
         let enabled = self.engine.walker_enabled();
         ui.horizontal(|ui| {
@@ -129,7 +150,8 @@ impl SynthApp {
                 ui.label("BPM:");
                 let sync_active = self.walker_sync_active();
                 if sync_active {
-                    self.engine.set_walker_bpm(self.seq.bpm.load(Ordering::Relaxed) as f32);
+                    self.engine
+                        .set_walker_bpm(self.seq.bpm.load(Ordering::Relaxed) as f32);
                 }
                 let mut bpm = self.engine.walker_bpm();
                 ui.add_enabled_ui(!sync_active, |ui| {
@@ -139,9 +161,14 @@ impl SynthApp {
                 });
                 // Per-component sync toggle (disabled when global sync is on)
                 ui.add_enabled_ui(!self.global_sync, |ui| {
-                    let sync_label = egui::RichText::new("Sync")
-                        .color(if self.walker_sync_active() { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
-                    if ui.button(sync_label)
+                    let sync_label =
+                        egui::RichText::new("Sync").color(if self.walker_sync_active() {
+                            self.theme.c(&self.theme.accent)
+                        } else {
+                            Color32::GRAY
+                        });
+                    if ui
+                        .button(sync_label)
                         .on_hover_text("Lock Walker BPM to the Global BPM.")
                         .clicked()
                     {
@@ -168,7 +195,10 @@ impl SynthApp {
             ui.horizontal(|ui| {
                 ui.label("Scale:");
                 for (i, &label) in Scale::LABELS.iter().enumerate() {
-                    if ui.selectable_label(current_scale == i as u8, label).clicked() {
+                    if ui
+                        .selectable_label(current_scale == i as u8, label)
+                        .clicked()
+                    {
                         self.engine.set_walker_scale(i as u8);
                     }
                 }
@@ -176,7 +206,9 @@ impl SynthApp {
             ui.horizontal(|ui| {
                 ui.label("Root:");
                 let mut root = self.engine.walker_root();
-                let note_names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+                let note_names = [
+                    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+                ];
                 let name = note_names[(root % 12) as usize];
                 let octave = (root as i32 / 12) - 1;
                 ui.label(format!("{}{}", name, octave));
@@ -186,7 +218,10 @@ impl SynthApp {
                 ui.label("  Oct:");
                 let current_oct = self.engine.walker_octave_range();
                 for oct in 1u8..=3 {
-                    if ui.selectable_label(current_oct == oct, oct.to_string()).clicked() {
+                    if ui
+                        .selectable_label(current_oct == oct, oct.to_string())
+                        .clicked()
+                    {
                         self.engine.set_walker_octave_range(oct);
                     }
                 }

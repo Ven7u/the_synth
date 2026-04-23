@@ -12,10 +12,22 @@ use std::thread;
 
 /// An event sent from the audio thread to the writer thread.
 pub enum MidiRecordEvent {
-    NoteOn  { sample: u64, track: u8, pitch: u8, velocity: u8 },
-    NoteOff { sample: u64, track: u8, pitch: u8 },
+    NoteOn {
+        sample: u64,
+        track: u8,
+        pitch: u8,
+        velocity: u8,
+    },
+    NoteOff {
+        sample: u64,
+        track: u8,
+        pitch: u8,
+    },
     /// Carry the current BPM whenever it changes (or at start).
-    Bpm     { sample: u64, bpm: f32 },
+    Bpm {
+        sample: u64,
+        bpm: f32,
+    },
 }
 
 /// Lightweight sender handle kept inside the audio callback.
@@ -27,13 +39,22 @@ impl MidiSink {
     /// Push a note-on. Non-blocking — drops the event if the ring is full.
     #[inline]
     pub fn note_on(&self, sample: u64, track: u8, pitch: u8, velocity: u8) {
-        let _ = self.0.try_send(MidiRecordEvent::NoteOn { sample, track, pitch, velocity });
+        let _ = self.0.try_send(MidiRecordEvent::NoteOn {
+            sample,
+            track,
+            pitch,
+            velocity,
+        });
     }
 
     /// Push a note-off. Non-blocking.
     #[inline]
     pub fn note_off(&self, sample: u64, track: u8, pitch: u8) {
-        let _ = self.0.try_send(MidiRecordEvent::NoteOff { sample, track, pitch });
+        let _ = self.0.try_send(MidiRecordEvent::NoteOff {
+            sample,
+            track,
+            pitch,
+        });
     }
 
     /// Push a BPM update. Non-blocking.
@@ -46,7 +67,7 @@ impl MidiSink {
 
 pub struct MidiRecorder {
     /// Kept alive so dropping the recorder closes the channel.
-    _tx:    mpsc::SyncSender<MidiRecordEvent>,
+    _tx: mpsc::SyncSender<MidiRecordEvent>,
     thread: Option<thread::JoinHandle<anyhow::Result<()>>>,
     pub path: String,
 }
@@ -67,11 +88,17 @@ impl MidiRecorder {
         let _ = tx.try_send(MidiRecordEvent::Bpm { sample: 0, bpm });
 
         let path_clone = path.clone();
-        let handle = thread::spawn(move || {
-            write_midi_file(rx, &path_clone, sample_rate, track_count)
-        });
+        let handle =
+            thread::spawn(move || write_midi_file(rx, &path_clone, sample_rate, track_count));
 
-        Ok((Self { _tx: tx, thread: Some(handle), path }, sink))
+        Ok((
+            Self {
+                _tx: tx,
+                thread: Some(handle),
+                path,
+            },
+            sink,
+        ))
     }
 
     /// Finalise the MIDI file. Blocks until the writer thread exits.
@@ -79,7 +106,8 @@ impl MidiRecorder {
         // Dropping _tx closes the channel → writer thread exits its loop.
         drop(self._tx);
         if let Some(h) = self.thread.take() {
-            h.join().map_err(|_| anyhow::anyhow!("midi recorder thread panicked"))??;
+            h.join()
+                .map_err(|_| anyhow::anyhow!("midi recorder thread panicked"))??;
         }
         Ok(())
     }
@@ -90,15 +118,13 @@ impl MidiRecorder {
 // ---------------------------------------------------------------------------
 
 fn write_midi_file(
-    rx:           mpsc::Receiver<MidiRecordEvent>,
-    path:         &str,
-    sample_rate:  u32,
-    track_count:  usize,
+    rx: mpsc::Receiver<MidiRecordEvent>,
+    path: &str,
+    sample_rate: u32,
+    track_count: usize,
 ) -> anyhow::Result<()> {
     use midly::num::{u15, u24, u28, u4, u7};
-    use midly::{
-        Format, Header, MidiMessage, Smf, Timing, Track, TrackEvent, TrackEventKind,
-    };
+    use midly::{Format, Header, MidiMessage, Smf, Timing, Track, TrackEvent, TrackEventKind};
 
     const TICKS_PER_QUARTER: u16 = 480;
 
@@ -107,16 +133,16 @@ fn write_midi_file(
 
     // Sort by sample position to handle any out-of-order arrivals.
     events.sort_by_key(|e| match e {
-        MidiRecordEvent::NoteOn  { sample, .. } => *sample,
+        MidiRecordEvent::NoteOn { sample, .. } => *sample,
         MidiRecordEvent::NoteOff { sample, .. } => *sample,
-        MidiRecordEvent::Bpm    { sample, .. } => *sample,
+        MidiRecordEvent::Bpm { sample, .. } => *sample,
     });
 
     // Build per-track raw event lists.
     // Track 0 in the MIDI file = tempo track.
     // Tracks 1..=track_count = note tracks.
-    let mut tempo_events:  Vec<(u64, u32)>                     = Vec::new(); // (sample, us_per_beat)
-    let mut note_events:   Vec<Vec<(u64, u8, u8, bool)>>       = vec![Vec::new(); track_count];
+    let mut tempo_events: Vec<(u64, u32)> = Vec::new(); // (sample, us_per_beat)
+    let mut note_events: Vec<Vec<(u64, u8, u8, bool)>> = vec![Vec::new(); track_count];
     //                                (sample, pitch, vel, is_on)
 
     let mut current_bpm = 120.0f32;
@@ -128,13 +154,22 @@ fn write_midi_file(
                 let us = (60_000_000.0 / bpm) as u32;
                 tempo_events.push((*sample, us));
             }
-            MidiRecordEvent::NoteOn { sample, track, pitch, velocity } => {
+            MidiRecordEvent::NoteOn {
+                sample,
+                track,
+                pitch,
+                velocity,
+            } => {
                 let ti = *track as usize;
                 if ti < track_count {
                     note_events[ti].push((*sample, *pitch, *velocity, true));
                 }
             }
-            MidiRecordEvent::NoteOff { sample, track, pitch } => {
+            MidiRecordEvent::NoteOff {
+                sample,
+                track,
+                pitch,
+            } => {
                 let ti = *track as usize;
                 if ti < track_count {
                     note_events[ti].push((*sample, *pitch, 0, false));
@@ -221,18 +256,21 @@ fn write_midi_file(
 
             let msg = if is_on {
                 MidiMessage::NoteOn {
-                    key:      u7::from(pitch),
-                    vel:      u7::from(vel),
+                    key: u7::from(pitch),
+                    vel: u7::from(vel),
                 }
             } else {
                 MidiMessage::NoteOff {
-                    key:      u7::from(pitch),
-                    vel:      u7::from(0u8),
+                    key: u7::from(pitch),
+                    vel: u7::from(0u8),
                 }
             };
             track.push(TrackEvent {
                 delta: u28::from(delta),
-                kind: TrackEventKind::Midi { channel, message: msg },
+                kind: TrackEventKind::Midi {
+                    channel,
+                    message: msg,
+                },
             });
         }
 
@@ -253,7 +291,8 @@ fn write_midi_file(
     };
 
     let mut buf = Vec::new();
-    smf.write(&mut buf).map_err(|e| anyhow::anyhow!("MIDI encode error: {e}"))?;
+    smf.write(&mut buf)
+        .map_err(|e| anyhow::anyhow!("MIDI encode error: {e}"))?;
     std::fs::write(path, &buf)?;
 
     Ok(())

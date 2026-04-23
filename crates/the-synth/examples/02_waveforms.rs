@@ -22,16 +22,17 @@ use fundsp::prelude32::*;
 fn render(node: &mut impl AudioUnit, name: &str) {
     let wave = Wave::render(44100.0, 2.0, node);
     let path = format!("output/{name}");
-    wave.save_wav32(std::path::Path::new(&path)).expect("Could not save");
+    wave.save_wav32(std::path::Path::new(&path))
+        .expect("Could not save");
     println!("Saved {path}");
 }
 
 fn main() {
     std::fs::create_dir_all("output").ok();
     // All at 220 Hz (A3) — low enough that several harmonics are clearly audible.
-    render(&mut (0.5 * sine_hz(220.0)),     "02_sine.wav");
-    render(&mut (0.5 * saw_hz(220.0)),      "02_saw.wav");
-    render(&mut (0.5 * square_hz(220.0)),   "02_square.wav");
+    render(&mut (0.5 * sine_hz(220.0)), "02_sine.wav");
+    render(&mut (0.5 * saw_hz(220.0)), "02_saw.wav");
+    render(&mut (0.5 * square_hz(220.0)), "02_square.wav");
     render(&mut (0.5 * triangle_hz(220.0)), "02_triangle.wav");
 
     println!("\nListen to each file. The sine is clean; the saw is bright and buzzy;");

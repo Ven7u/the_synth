@@ -45,7 +45,7 @@ struct TrackConfig {
     /// HDR emissive color for lane lines and centre glow.
     zone_color: Vec4,
     /// Horizon fog color — should match or complement the window clear color.
-    fog_color:  Vec4,
+    fog_color: Vec4,
     /// Background / clear color.
     background: Color,
     /// Base forward speed (units/sec scrolled in shader).
@@ -57,7 +57,7 @@ impl Default for TrackConfig {
         Self {
             // Retro synthwave — hot pink grid on dark purple
             zone_color: Vec4::new(3.20, 0.10, 2.40, 1.0),
-            fog_color:  Vec4::new(0.018, 0.0, 0.045, 1.0),
+            fog_color: Vec4::new(0.018, 0.0, 0.045, 1.0),
             background: Color::srgb(0.010, 0.0, 0.028),
             base_speed: 1.0,
         }
@@ -70,12 +70,12 @@ impl Default for TrackConfig {
 /// std140 layout — must match `TrackMaterial` struct in track.wgsl exactly.
 #[derive(ShaderType, Clone, Default)]
 struct TrackUniforms {
-    time:       f32,
-    speed:      f32,
+    time: f32,
+    speed: f32,
     beat_pulse: f32,
-    _pad:       f32,
+    _pad: f32,
     zone_color: Vec4,
-    fog_color:  Vec4,
+    fog_color: Vec4,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
@@ -104,9 +104,9 @@ struct VisualState {
     /// Decays from 1.0 → 0.0 after each bar hit.
     beat_pulse: f32,
     /// Smoothed forward speed fed to shaders.
-    speed:      f32,
+    speed: f32,
     /// Tracks last bar epoch to detect new bars.
-    last_bar:   usize,
+    last_bar: usize,
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -117,7 +117,10 @@ fn main() {
     App::new()
         .insert_resource(ClearColor(cfg.background))
         .insert_resource(cfg)
-        .insert_resource(VisualState { speed: 1.0, ..default() })
+        .insert_resource(VisualState {
+            speed: 1.0,
+            ..default()
+        })
         .insert_resource(SynthBevyConfig {
             backend: SynthBackendKind::Ambient,
             sample_rate_hz: 44_100.0,
@@ -137,21 +140,18 @@ fn main() {
         .add_plugins(SynthPlugin)
         .add_plugins(Material2dPlugin::<TrackMaterial>::default())
         .add_systems(Startup, setup)
-        .add_systems(Update, (
-            beat_sync_system,
-            update_uniforms_system,
-        ).chain())
+        .add_systems(Update, (beat_sync_system, update_uniforms_system).chain())
         .run();
 }
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
 
 fn setup(
-    mut commands:       Commands,
-    mut meshes:         ResMut<Assets<Mesh>>,
-    mut track_mats:     ResMut<Assets<TrackMaterial>>,
-    cfg:                Res<TrackConfig>,
-    mut synth:          MessageWriter<SynthEvent>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut track_mats: ResMut<Assets<TrackMaterial>>,
+    cfg: Res<TrackConfig>,
+    mut synth: MessageWriter<SynthEvent>,
 ) {
     // Camera with bloom — high intensity to let rail glow spill
     commands.spawn((
@@ -169,31 +169,35 @@ fn setup(
     // ── Track fullscreen quad ─────────────────────────────────────────────────
     let track_mat = track_mats.add(TrackMaterial {
         uniforms: TrackUniforms {
-            time:       0.0,
-            speed:      cfg.base_speed,
+            time: 0.0,
+            speed: cfg.base_speed,
             beat_pulse: 0.0,
-            _pad:       0.0,
+            _pad: 0.0,
             zone_color: cfg.zone_color,
-            fog_color:  cfg.fog_color,
+            fog_color: cfg.fog_color,
         },
     });
     commands.spawn((
         Mesh2d(meshes.add(Rectangle::new(TRACK_SIZE, TRACK_SIZE))),
         MeshMaterial2d(track_mat.clone()),
         Transform::from_xyz(0.0, 0.0, 0.0),
-        TrackQuad { material: track_mat },
+        TrackQuad {
+            material: track_mat,
+        },
     ));
 
     // ── Load audio scene ─────────────────────────────────────────────────────
-    synth.write(SynthEvent::SceneLoad { name: SCENE_NAME.to_string() });
+    synth.write(SynthEvent::SceneLoad {
+        name: SCENE_NAME.to_string(),
+    });
 }
 
 // ── Beat sync ─────────────────────────────────────────────────────────────────
 
 fn beat_sync_system(
     synth_params: Option<Res<synth_bevy::SynthParam>>,
-    mut state:    ResMut<VisualState>,
-    time:         Res<Time>,
+    mut state: ResMut<VisualState>,
+    time: Res<Time>,
 ) {
     let dt = time.delta_secs();
 
@@ -204,7 +208,7 @@ fn beat_sync_system(
 
     let bar = params.bar_epoch.load(Ordering::Relaxed);
     if bar != state.last_bar {
-        state.last_bar  = bar;
+        state.last_bar = bar;
         state.beat_pulse = 1.0;
     }
 }
@@ -212,23 +216,23 @@ fn beat_sync_system(
 // ── Uniform update ────────────────────────────────────────────────────────────
 
 fn update_uniforms_system(
-    time:       Res<Time>,
-    state:      Res<VisualState>,
-    cfg:        Res<TrackConfig>,
-    track_q:    Query<&TrackQuad>,
+    time: Res<Time>,
+    state: Res<VisualState>,
+    cfg: Res<TrackConfig>,
+    track_q: Query<&TrackQuad>,
     mut track_mats: ResMut<Assets<TrackMaterial>>,
 ) {
-    let t  = time.elapsed_secs();
+    let t = time.elapsed_secs();
     let sp = state.speed * cfg.base_speed;
     let bp = state.beat_pulse;
 
     for quad in &track_q {
         if let Some(mat) = track_mats.get_mut(&quad.material) {
-            mat.uniforms.time       = t;
-            mat.uniforms.speed      = sp;
+            mat.uniforms.time = t;
+            mat.uniforms.speed = sp;
             mat.uniforms.beat_pulse = bp;
             mat.uniforms.zone_color = cfg.zone_color;
-            mat.uniforms.fog_color  = cfg.fog_color;
+            mat.uniforms.fog_color = cfg.fog_color;
         }
     }
 }

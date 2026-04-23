@@ -152,7 +152,12 @@ impl AudioNode for MultiWaveOsc {
         let pw = self.pulse_width.value();
 
         // Slave: reset phase if master has wrapped since our last tick.
-        if let SyncRole::Slave { sync_enabled, gen, last_gen } = &mut self.sync {
+        if let SyncRole::Slave {
+            sync_enabled,
+            gen,
+            last_gen,
+        } = &mut self.sync
+        {
             if sync_enabled.load(Ordering::Relaxed) {
                 let current_gen = gen.load(Ordering::Relaxed);
                 if current_gen != *last_gen {
@@ -201,8 +206,8 @@ impl AudioNode for MultiWaveOsc {
 mod tests {
     use super::*;
     use fundsp::prelude32::shared;
-    use std::sync::Arc;
     use std::sync::atomic::AtomicU8;
+    use std::sync::Arc;
 
     fn make_osc(shape: u8, sr: f32) -> MultiWaveOsc {
         let wave = Arc::new(AtomicU8::new(shape));
@@ -213,24 +218,56 @@ mod tests {
     fn run_osc(osc: &mut MultiWaveOsc, freq: f32, n: usize) {
         for i in 0..n {
             let y = osc.tick(&[freq].into())[0];
-            assert!(y.is_finite(), "shape {} freq {} sample {i}: not finite", osc.wave.load(Ordering::Relaxed), freq);
-            assert!(y.abs() <= 1.5, "shape {} freq {} sample {i}: too loud {y:.3}", osc.wave.load(Ordering::Relaxed), freq);
+            assert!(
+                y.is_finite(),
+                "shape {} freq {} sample {i}: not finite",
+                osc.wave.load(Ordering::Relaxed),
+                freq
+            );
+            assert!(
+                y.abs() <= 1.5,
+                "shape {} freq {} sample {i}: too loud {y:.3}",
+                osc.wave.load(Ordering::Relaxed),
+                freq
+            );
         }
     }
 
-    #[test] fn sine_440()     { run_osc(&mut make_osc(0, 44100.0), 440.0,  60_000); }
-    #[test] fn sine_8000()    { run_osc(&mut make_osc(0, 44100.0), 8000.0, 60_000); }
-    #[test] fn saw_440()      { run_osc(&mut make_osc(1, 44100.0), 440.0,  60_000); }
-    #[test] fn saw_8000()     { run_osc(&mut make_osc(1, 44100.0), 8000.0, 60_000); }
-    #[test] fn square_440()   { run_osc(&mut make_osc(2, 44100.0), 440.0,  60_000); }
-    #[test] fn square_narrow() {
+    #[test]
+    fn sine_440() {
+        run_osc(&mut make_osc(0, 44100.0), 440.0, 60_000);
+    }
+    #[test]
+    fn sine_8000() {
+        run_osc(&mut make_osc(0, 44100.0), 8000.0, 60_000);
+    }
+    #[test]
+    fn saw_440() {
+        run_osc(&mut make_osc(1, 44100.0), 440.0, 60_000);
+    }
+    #[test]
+    fn saw_8000() {
+        run_osc(&mut make_osc(1, 44100.0), 8000.0, 60_000);
+    }
+    #[test]
+    fn square_440() {
+        run_osc(&mut make_osc(2, 44100.0), 440.0, 60_000);
+    }
+    #[test]
+    fn square_narrow() {
         let wave = Arc::new(AtomicU8::new(2));
         let pw = shared(0.1); // narrow pulse
         let mut osc = MultiWaveOsc::new(wave, pw, 44100.0);
         run_osc(&mut osc, 440.0, 60_000);
     }
-    #[test] fn triangle_440() { run_osc(&mut make_osc(3, 44100.0), 440.0,  60_000); }
-    #[test] fn triangle_low() { run_osc(&mut make_osc(3, 44100.0), 20.0,   60_000); }
+    #[test]
+    fn triangle_440() {
+        run_osc(&mut make_osc(3, 44100.0), 440.0, 60_000);
+    }
+    #[test]
+    fn triangle_low() {
+        run_osc(&mut make_osc(3, 44100.0), 20.0, 60_000);
+    }
 
     #[test]
     fn hard_sync_stable() {
@@ -242,21 +279,40 @@ mod tests {
         let gen = Arc::new(AtomicU8::new(0));
 
         let mut master = MultiWaveOsc::with_sync(
-            Arc::clone(&wave), shared(0.5), sr, 0.0,
-            SyncRole::Master { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&gen) },
+            Arc::clone(&wave),
+            shared(0.5),
+            sr,
+            0.0,
+            SyncRole::Master {
+                sync_enabled: Arc::clone(&sync_enabled),
+                gen: Arc::clone(&gen),
+            },
             None,
         );
         let mut slave = MultiWaveOsc::with_sync(
-            Arc::clone(&wave), pw, sr, 0.0,
-            SyncRole::Slave { sync_enabled: Arc::clone(&sync_enabled), gen: Arc::clone(&gen), last_gen: 0 },
+            Arc::clone(&wave),
+            pw,
+            sr,
+            0.0,
+            SyncRole::Slave {
+                sync_enabled: Arc::clone(&sync_enabled),
+                gen: Arc::clone(&gen),
+                last_gen: 0,
+            },
             None,
         );
 
         for i in 0..60_000 {
             let m = master.tick(&[220.0_f32].into())[0];
             let s = slave.tick(&[550.0_f32].into())[0];
-            assert!(m.is_finite() && s.is_finite(), "hard sync sample {i}: not finite");
-            assert!(m.abs() <= 1.5 && s.abs() <= 1.5, "hard sync sample {i}: too loud m={m:.3} s={s:.3}");
+            assert!(
+                m.is_finite() && s.is_finite(),
+                "hard sync sample {i}: not finite"
+            );
+            assert!(
+                m.abs() <= 1.5 && s.abs() <= 1.5,
+                "hard sync sample {i}: too loud m={m:.3} s={s:.3}"
+            );
         }
     }
 }

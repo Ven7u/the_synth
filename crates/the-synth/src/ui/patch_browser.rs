@@ -1,5 +1,5 @@
-use crate::SynthApp;
 use crate::patch::Patch;
+use crate::SynthApp;
 use eframe::egui;
 use egui::Color32;
 
@@ -12,7 +12,11 @@ impl SynthApp {
             .on_hover_text("Patch name. Used as filename when saving.");
 
         // Save to file
-        if ui.button("💾 Save").on_hover_text("Save current patch to a JSON file.").clicked() {
+        if ui
+            .button("💾 Save")
+            .on_hover_text("Save current patch to a JSON file.")
+            .clicked()
+        {
             let p = self.capture_patch();
             if let Some(path) = rfd::FileDialog::new()
                 .set_file_name(&format!("{}.json", p.name))
@@ -26,7 +30,11 @@ impl SynthApp {
         }
 
         // Load from file
-        if ui.button("📂 Load").on_hover_text("Load a patch from a JSON file.").clicked() {
+        if ui
+            .button("📂 Load")
+            .on_hover_text("Load a patch from a JSON file.")
+            .clicked()
+        {
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter("Patch", &["json"])
                 .pick_file()
@@ -40,15 +48,24 @@ impl SynthApp {
         }
 
         // Library browser toggle
-        let browser_label = egui::RichText::new("📚 Library")
-            .color(if self.patch_browser_open { self.theme.c(&self.theme.accent) } else { Color32::WHITE });
-        if ui.button(browser_label).on_hover_text("Browse and load factory patches organized by category and synth model.").clicked() {
+        let browser_label = egui::RichText::new("📚 Library").color(if self.patch_browser_open {
+            self.theme.c(&self.theme.accent)
+        } else {
+            Color32::WHITE
+        });
+        if ui
+            .button(browser_label)
+            .on_hover_text("Browse and load factory patches organized by category and synth model.")
+            .clicked()
+        {
             self.patch_browser_open = !self.patch_browser_open;
         }
     }
 
     pub fn ui_patch_browser(&mut self, ctx: &egui::Context) {
-        if !self.patch_browser_open { return; }
+        if !self.patch_browser_open {
+            return;
+        }
 
         let mut open = self.patch_browser_open;
         egui::Window::new("Patch Library")

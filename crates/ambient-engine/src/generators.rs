@@ -18,11 +18,11 @@
 //! `synth-engine`, which runs its own phase accumulator (BPM-driven, not BeatClock).
 //! The remaining modes use the generators in this file.
 
+use fundsp::prelude32::{shared, Shared};
 use std::sync::{
     atomic::{AtomicBool, AtomicU8, Ordering},
     Arc,
 };
-use fundsp::prelude32::{shared, Shared};
 
 // ---------------------------------------------------------------------------
 // Minimal LCG — no_std-safe, zero heap, no rand dependency
@@ -31,16 +31,21 @@ use fundsp::prelude32::{shared, Shared};
 struct Lcg(u64);
 
 impl Lcg {
-    fn new(seed: u64) -> Self { Self(seed | 1) }
+    fn new(seed: u64) -> Self {
+        Self(seed | 1)
+    }
     fn next_u32(&mut self) -> u32 {
-        self.0 = self.0
+        self.0 = self
+            .0
             .wrapping_mul(6_364_136_223_846_793_005)
             .wrapping_add(1_442_695_040_888_963_407);
         ((self.0 >> 33) ^ self.0) as u32
     }
     /// Uniform in [0, n).
     fn next_u8_in(&mut self, n: u8) -> u8 {
-        if n == 0 { return 0; }
+        if n == 0 {
+            return 0;
+        }
         (self.next_u32() % n as u32) as u8
     }
 }
@@ -66,22 +71,35 @@ pub struct GenEvent {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum GenerativeMode {
     #[default]
-    Off         = 0,
-    Euclidean   = 1,
-    ProbTable   = 2,
+    Off = 0,
+    Euclidean = 1,
+    ProbTable = 2,
     /// Delegates to `synth_engine::ScaleWalker` (phase-accumulator driven).
-    ScaleWalk   = 3,
+    ScaleWalk = 3,
     /// Global Markov music engine (Phase 8.3). When set on track 0, all tracks
     /// are driven by `MarkovEngine`; per-track Euclidean/ProbTable modes are ignored.
-    Markov      = 4,
+    Markov = 4,
 }
 
 impl GenerativeMode {
     pub fn from_u8(v: u8) -> Self {
-        match v { 1 => Self::Euclidean, 2 => Self::ProbTable, 3 => Self::ScaleWalk, 4 => Self::Markov, _ => Self::Off }
+        match v {
+            1 => Self::Euclidean,
+            2 => Self::ProbTable,
+            3 => Self::ScaleWalk,
+            4 => Self::Markov,
+            _ => Self::Off,
+        }
     }
-    pub const ALL: &'static [Self] = &[Self::Off, Self::Euclidean, Self::ProbTable, Self::ScaleWalk, Self::Markov];
-    pub const LABELS: &'static [&'static str] = &["Off", "Euclidean", "Prob.Table", "ScaleWalk", "Markov"];
+    pub const ALL: &'static [Self] = &[
+        Self::Off,
+        Self::Euclidean,
+        Self::ProbTable,
+        Self::ScaleWalk,
+        Self::Markov,
+    ];
+    pub const LABELS: &'static [&'static str] =
+        &["Off", "Euclidean", "Prob.Table", "ScaleWalk", "Markov"];
 }
 
 // ===========================================================================
@@ -99,13 +117,13 @@ pub const EUCLIDEAN_MAX_STEPS: usize = 32;
 /// Clone and hand copies to the UI / Bevy thread; the audio thread holds one too.
 #[derive(Clone)]
 pub struct EuclideanShared {
-    pub enabled:  Arc<AtomicBool>,
+    pub enabled: Arc<AtomicBool>,
     /// N hits distributed across M steps (Bjorklund). Clamped to [1, steps].
-    pub hits:     Arc<AtomicU8>,
+    pub hits: Arc<AtomicU8>,
     /// M total steps. Clamped to [1, EUCLIDEAN_MAX_STEPS].
-    pub steps:    Arc<AtomicU8>,
+    pub steps: Arc<AtomicU8>,
     /// MIDI pitch played on each hit.
-    pub root:     Arc<AtomicU8>,
+    pub root: Arc<AtomicU8>,
     /// Rotate the pattern by this many steps (0 = no rotation).
     pub rotation: Arc<AtomicU8>,
 }
@@ -113,17 +131,19 @@ pub struct EuclideanShared {
 impl EuclideanShared {
     pub fn new(hits: u8, steps: u8, root: u8) -> Self {
         Self {
-            enabled:  Arc::new(AtomicBool::new(true)),
-            hits:     Arc::new(AtomicU8::new(hits.max(1).min(steps.max(1)))),
-            steps:    Arc::new(AtomicU8::new(steps.max(1).min(EUCLIDEAN_MAX_STEPS as u8))),
-            root:     Arc::new(AtomicU8::new(root)),
+            enabled: Arc::new(AtomicBool::new(true)),
+            hits: Arc::new(AtomicU8::new(hits.max(1).min(steps.max(1)))),
+            steps: Arc::new(AtomicU8::new(steps.max(1).min(EUCLIDEAN_MAX_STEPS as u8))),
+            root: Arc::new(AtomicU8::new(root)),
             rotation: Arc::new(AtomicU8::new(0)),
         }
     }
 }
 
 impl Default for EuclideanShared {
-    fn default() -> Self { Self::new(4, 8, 60) }
+    fn default() -> Self {
+        Self::new(4, 8, 60)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -136,7 +156,9 @@ fn euclidean_pattern(hits: u8, steps: u8) -> [bool; EUCLIDEAN_MAX_STEPS] {
     let mut pattern = [false; EUCLIDEAN_MAX_STEPS];
     let n = (steps as usize).min(EUCLIDEAN_MAX_STEPS);
     let k = (hits as usize).min(n);
-    if n == 0 || k == 0 { return pattern; }
+    if n == 0 || k == 0 {
+        return pattern;
+    }
 
     // Formula: step i fires iff (i * k) % n < k.
     // This distributes k hits evenly starting at step 0 (canonical Bjorklund result).
@@ -166,12 +188,12 @@ fn rotate_pattern(
 
 /// Mutable Euclidean generator state. Lives on the audio thread.
 pub struct EuclideanGen {
-    pattern:      [bool; EUCLIDEAN_MAX_STEPS],
-    step:         usize,
+    pattern: [bool; EUCLIDEAN_MAX_STEPS],
+    step: usize,
     current_note: Option<u8>,
     // Track config to detect changes and rebuild pattern.
-    prev_hits:    u8,
-    prev_steps:   u8,
+    prev_hits: u8,
+    prev_steps: u8,
     prev_rotation: u8,
     prev_enabled: bool,
 }
@@ -179,7 +201,7 @@ pub struct EuclideanGen {
 impl EuclideanGen {
     pub fn new() -> Self {
         let default = EuclideanShared::default();
-        let hits  = default.hits.load(Ordering::Relaxed);
+        let hits = default.hits.load(Ordering::Relaxed);
         let steps = default.steps.load(Ordering::Relaxed);
         Self {
             pattern: euclidean_pattern(hits, steps),
@@ -195,10 +217,14 @@ impl EuclideanGen {
     /// Call once per subdivision boundary (when `BeatEvents::subdivision` is true).
     /// Returns a `GenEvent` with optional note_off (previous note) and note_on (new hit).
     pub fn on_subdivision(&mut self, cfg: &EuclideanShared) -> GenEvent {
-        let enabled  = cfg.enabled.load(Ordering::Relaxed);
-        let hits     = cfg.hits.load(Ordering::Relaxed);
-        let steps    = cfg.steps.load(Ordering::Relaxed).max(1).min(EUCLIDEAN_MAX_STEPS as u8);
-        let root     = cfg.root.load(Ordering::Relaxed);
+        let enabled = cfg.enabled.load(Ordering::Relaxed);
+        let hits = cfg.hits.load(Ordering::Relaxed);
+        let steps = cfg
+            .steps
+            .load(Ordering::Relaxed)
+            .max(1)
+            .min(EUCLIDEAN_MAX_STEPS as u8);
+        let root = cfg.root.load(Ordering::Relaxed);
         let rotation = cfg.rotation.load(Ordering::Relaxed);
 
         // Transition: disabled → fire note_off and reset.
@@ -208,7 +234,10 @@ impl EuclideanGen {
                 self.step = 0;
                 self.prev_enabled = false;
             }
-            return GenEvent { note_on: None, note_off: off };
+            return GenEvent {
+                note_on: None,
+                note_off: off,
+            };
         }
         self.prev_enabled = true;
 
@@ -216,8 +245,8 @@ impl EuclideanGen {
         if hits != self.prev_hits || steps != self.prev_steps || rotation != self.prev_rotation {
             let base = euclidean_pattern(hits, steps);
             self.pattern = rotate_pattern(&base, steps as usize, rotation as usize);
-            self.prev_hits     = hits;
-            self.prev_steps    = steps;
+            self.prev_hits = hits;
+            self.prev_steps = steps;
             self.prev_rotation = rotation;
             // Keep step in range.
             self.step = self.step % steps as usize;
@@ -249,7 +278,9 @@ impl EuclideanGen {
 }
 
 impl Default for EuclideanGen {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ===========================================================================
@@ -266,15 +297,15 @@ pub const PROB_TABLE_MAX_STEPS: usize = 16;
 /// Thread-safe configuration for the probability table generator.
 #[derive(Clone)]
 pub struct ProbTableShared {
-    pub enabled:    Arc<AtomicBool>,
+    pub enabled: Arc<AtomicBool>,
     /// Number of active steps (1-16).
     pub step_count: Arc<AtomicU8>,
     /// MIDI pitch per step (0-127).
-    pub notes:      [Arc<AtomicU8>; PROB_TABLE_MAX_STEPS],
+    pub notes: [Arc<AtomicU8>; PROB_TABLE_MAX_STEPS],
     /// Probability per step encoded as 0-100 (i.e. 0% to 100%).
-    pub probs:      [Arc<AtomicU8>; PROB_TABLE_MAX_STEPS],
+    pub probs: [Arc<AtomicU8>; PROB_TABLE_MAX_STEPS],
     /// Tension (0.0-2.0): 1.0 = as configured, 0.0 = nothing fires, 2.0 = always fires.
-    pub tension:    Shared,
+    pub tension: Shared,
 }
 
 impl ProbTableShared {
@@ -285,15 +316,14 @@ impl ProbTableShared {
             67, 69, 60, 62, 64, 67, 69, 60,
         ];
         const DEFAULT_PROBS: [u8; PROB_TABLE_MAX_STEPS] = [
-            80, 60, 70, 50, 65, 40, 75, 55,
-            60, 70, 50, 65, 80, 45, 70, 60,
+            80, 60, 70, 50, 65, 40, 75, 55, 60, 70, 50, 65, 80, 45, 70, 60,
         ];
         Self {
-            enabled:    Arc::new(AtomicBool::new(true)),
+            enabled: Arc::new(AtomicBool::new(true)),
             step_count: Arc::new(AtomicU8::new(8)),
-            notes:      std::array::from_fn(|i| Arc::new(AtomicU8::new(DEFAULT_NOTES[i]))),
-            probs:      std::array::from_fn(|i| Arc::new(AtomicU8::new(DEFAULT_PROBS[i]))),
-            tension:    shared(1.0),
+            notes: std::array::from_fn(|i| Arc::new(AtomicU8::new(DEFAULT_NOTES[i]))),
+            probs: std::array::from_fn(|i| Arc::new(AtomicU8::new(DEFAULT_PROBS[i]))),
+            tension: shared(1.0),
         }
     }
 
@@ -306,7 +336,9 @@ impl ProbTableShared {
 }
 
 impl Default for ProbTableShared {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -315,9 +347,9 @@ impl Default for ProbTableShared {
 
 /// Mutable probability table generator state. Lives on the audio thread.
 pub struct ProbTableGen {
-    step:         usize,
+    step: usize,
     current_note: Option<u8>,
-    rng:          Lcg,
+    rng: Lcg,
     prev_enabled: bool,
 }
 
@@ -333,7 +365,7 @@ impl ProbTableGen {
 
     /// Call once per subdivision boundary.
     pub fn on_subdivision(&mut self, cfg: &ProbTableShared) -> GenEvent {
-        let enabled    = cfg.enabled.load(Ordering::Relaxed);
+        let enabled = cfg.enabled.load(Ordering::Relaxed);
         let step_count = (cfg.step_count.load(Ordering::Relaxed) as usize)
             .max(1)
             .min(PROB_TABLE_MAX_STEPS);
@@ -345,12 +377,15 @@ impl ProbTableGen {
                 self.step = 0;
                 self.prev_enabled = false;
             }
-            return GenEvent { note_on: None, note_off: off };
+            return GenEvent {
+                note_on: None,
+                note_off: off,
+            };
         }
         self.prev_enabled = true;
 
-        let note    = cfg.notes[self.step].load(Ordering::Relaxed);
-        let prob    = cfg.probs[self.step].load(Ordering::Relaxed) as f32 / 100.0;
+        let note = cfg.notes[self.step].load(Ordering::Relaxed);
+        let prob = cfg.probs[self.step].load(Ordering::Relaxed) as f32 / 100.0;
         let tension = cfg.tension.value().clamp(0.0, 2.0);
         let adj_prob = (prob * tension).clamp(0.0, 1.0);
 
@@ -378,7 +413,9 @@ impl ProbTableGen {
 }
 
 impl Default for ProbTableGen {
-    fn default() -> Self { Self::new(0xABCD_EF01_2345_6789) }
+    fn default() -> Self {
+        Self::new(0xABCD_EF01_2345_6789)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -421,7 +458,7 @@ mod tests {
     #[test]
     fn rotation_shifts_pattern() {
         let base = euclidean_pattern(3, 8); // hits at 0, 3, 6
-        let rot  = rotate_pattern(&base, 8, 1); // hits at 7, 2, 5 (shift left by 1)
+        let rot = rotate_pattern(&base, 8, 1); // hits at 7, 2, 5 (shift left by 1)
         let hits: Vec<usize> = (0..8).filter(|&i| rot[i]).collect();
         assert_eq!(hits, vec![2, 5, 7]);
     }
@@ -436,7 +473,9 @@ mod tests {
         let mut note_ons = vec![];
         for _ in 0..8 {
             let ev = gen.on_subdivision(&cfg);
-            if ev.note_on.is_some() { note_ons.push(gen.step.wrapping_sub(1) % 8); }
+            if ev.note_on.is_some() {
+                note_ons.push(gen.step.wrapping_sub(1) % 8);
+            }
         }
         assert_eq!(note_ons.len(), 3);
     }
@@ -490,7 +529,10 @@ mod tests {
         let mut gen = ProbTableGen::new(42);
         for _ in 0..16 {
             let ev = gen.on_subdivision(&cfg);
-            assert!(ev.note_on.is_some(), "tension=2 + prob=50% should always fire");
+            assert!(
+                ev.note_on.is_some(),
+                "tension=2 + prob=50% should always fire"
+            );
         }
     }
 
@@ -499,12 +541,16 @@ mod tests {
         let cfg = ProbTableShared::new();
         cfg.step_count.store(4, Ordering::Relaxed);
         cfg.tension.set_value(2.0);
-        for i in 0..4 { cfg.probs[i].store(100, Ordering::Relaxed); }
+        for i in 0..4 {
+            cfg.probs[i].store(100, Ordering::Relaxed);
+        }
         let mut gen = ProbTableGen::new(0);
         // Run 8 steps — should cycle through 4 steps twice, always firing.
         let mut fired = 0usize;
         for _ in 0..8 {
-            if gen.on_subdivision(&cfg).note_on.is_some() { fired += 1; }
+            if gen.on_subdivision(&cfg).note_on.is_some() {
+                fired += 1;
+            }
         }
         assert_eq!(fired, 8);
     }

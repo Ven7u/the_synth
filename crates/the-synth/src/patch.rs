@@ -14,12 +14,19 @@ pub use synth_engine::Patch;
 // ---------------------------------------------------------------------------
 
 fn collect_patch_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return; };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for ent in entries.flatten() {
         let p = ent.path();
         if p.is_dir() {
             collect_patch_files(&p, out);
-        } else if p.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("json")).unwrap_or(false) {
+        } else if p
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("json"))
+            .unwrap_or(false)
+        {
             out.push(p);
         }
     }
@@ -29,7 +36,8 @@ pub fn default_patches() -> Vec<Patch> {
     let mut files = Vec::new();
     collect_patch_files(std::path::Path::new("assets/patches"), &mut files);
     files.sort();
-    files.iter()
+    files
+        .iter()
         .filter_map(|p| std::fs::read_to_string(p).ok())
         .filter_map(|s| serde_json::from_str(&s).ok())
         .collect()
@@ -57,7 +65,11 @@ mod tests {
 
         let mut files = Vec::new();
         collect_patch_files(&patches_dir, &mut files);
-        assert!(!files.is_empty(), "no patch files under {}", patches_dir.display());
+        assert!(
+            !files.is_empty(),
+            "no patch files under {}",
+            patches_dir.display()
+        );
 
         let mut failures = Vec::new();
         for f in &files {
@@ -75,7 +87,8 @@ mod tests {
         assert!(
             failures.is_empty(),
             "{}/{} patch file(s) failed to deserialise:\n{}",
-            failures.len(), files.len(),
+            failures.len(),
+            files.len(),
             failures.join("\n"),
         );
     }
