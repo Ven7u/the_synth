@@ -2,7 +2,6 @@ use crate::SynthApp;
 use crate::ui::frame::SynthFrame;
 use eframe::egui;
 use egui::{Color32, Pos2, RichText, Stroke, Vec2};
-use std::sync::atomic::Ordering;
 
 pub const WAVE_LABELS: &[&str] = &["Sin", "Saw", "Sqr", "Tri"];
 

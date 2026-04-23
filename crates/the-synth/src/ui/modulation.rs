@@ -2,7 +2,6 @@ use crate::SynthApp;
 use crate::ui::frame::SynthFrame;
 use eframe::egui;
 use egui::{Color32, Pos2, RichText, Stroke};
-use std::sync::atomic::Ordering;
 
 /// (label, beats_per_cycle) — beats relative to a quarter note.
 /// rate_hz = bpm / 60.0 / beats_per_cycle
