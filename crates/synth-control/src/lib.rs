@@ -1,8 +1,10 @@
 pub mod event;
 pub mod midi;
+pub mod protocol;
 pub mod source;
 
-pub use event::{ControlEvent, ControlSender, ControlReceiver, ParamId, make_control_channel};
+pub use event::{ControlEvent, ControlSender, ControlReceiver, make_control_channel};
+pub use protocol::{ParamId, ParamKind, ParamDescriptor, all_params, Command};
 pub use source::ControlSource;
 
 /// Convert a note name and octave to a MIDI note number.

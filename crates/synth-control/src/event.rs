@@ -1,5 +1,10 @@
 //! ControlEvent — the universal language between input sources and the engine.
+//!
+//! `ParamId` used inside `ControlEvent::SetParam` is the one from
+//! [`crate::protocol`] — a single canonical identifier enum shared with the
+//! wire-ready `Command` layer.
 
+use crate::protocol::ParamId;
 use crossbeam_channel::{bounded, Receiver, Sender};
 
 /// All discrete events that any input source can produce for the audio engine.
@@ -21,16 +26,6 @@ pub enum ControlEvent {
     ArpRestart { track: u8 },
     /// Restart scale-walker timing/index state for a track.
     WalkerRestart { track: u8 },
-}
-
-/// Addressable engine parameters reachable via `ControlEvent::SetParam`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ParamId {
-    FilterCutoff,
-    FilterResonance,
-    LfoDepth,
-    MasterVolume,
-    LfoPitchMult,
 }
 
 /// Push side of the control channel (clone-able, Send).

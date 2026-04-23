@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use synth_engine::audio::build_synth_graph;
 use synth_engine::arp::{ArpState, ScaleWalker};
+use synth_engine::SynthEngineHandle;
 use synth_control::{make_control_channel, ControlSender, ControlReceiver, ControlEvent, ParamId};
 use synth_dsp::LookaheadLimiter;
 use crate::recorder::Recorder;
@@ -96,6 +97,11 @@ fn release_note(
 pub struct AudioEngine {
     pub state: Arc<AudioState>,
     pub control_tx: ControlSender,
+    /// Typed facade over `state` + `control_tx`. Clone this into any thread
+    /// that needs to talk to the engine. Stage 1 of the headless refactor
+    /// (see doc/engine-handle-plan.md) — old `state` / `control_tx` fields
+    /// remain for back-compat during per-panel migration.
+    pub handle: SynthEngineHandle,
     _stream: Stream,
 }
 
@@ -105,9 +111,11 @@ impl AudioEngine {
         let (tx, rx) = make_control_channel(1024);
         let stream = build_stream(Arc::clone(&state), rx, recorder_sink)?;
         stream.play()?;
+        let handle = SynthEngineHandle::new(Arc::clone(&state), tx.clone());
         Ok(Self {
             state,
             control_tx: tx,
+            handle,
             _stream: stream,
         })
     }
@@ -245,12 +253,17 @@ where
                         }
                     }
                     ControlEvent::SetParam { param, value } => {
+                        // Only the original five params are routed inline here;
+                        // everything else is written directly via SynthEngineHandle's
+                        // typed setters. Remaining ParamId variants reach the engine
+                        // through atomic writes, not through this channel path.
                         match param {
                             ParamId::FilterCutoff    => state.cutoff.set(value),
                             ParamId::FilterResonance => state.resonance.set(value),
                             ParamId::LfoDepth        => state.lfo_depth.set(value),
                             ParamId::MasterVolume    => state.master_vol.set(value),
                             ParamId::LfoPitchMult    => state.lfo_pitch_mult.set(value),
+                            _ => {}
                         }
                     }
                     ControlEvent::ChordHold { notes, .. } => {

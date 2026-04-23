@@ -103,6 +103,10 @@ impl PanelVisibility {
 pub(crate) struct SynthApp {
     pub(crate) _audio: AudioEngine, // keeps cpal stream alive
     pub(crate) state: Arc<AudioState>,
+    /// Typed engine facade. The UI migration (Stage 2+) will replace direct
+    /// `state.*.set(...)` writes with calls on this handle. Coexists with
+    /// `state` and `control` during Stage 1 for back-compat.
+    pub(crate) engine: synth_engine::SynthEngineHandle,
     pub(crate) midi: MidiEngine,
     pub(crate) control: ControlSender,
     pub(crate) theme: ui::theme::SynthTheme,
@@ -285,6 +289,11 @@ impl SynthApp {
         let mut midi = MidiEngine::new();
         midi.list_ports(); // populate port list at startup
 
+        // Clone the typed engine handle out of the AudioEngine before moving
+        // it into the SynthApp. Any future thread (UI, MIDI, sequencer) that
+        // needs to talk to the engine can further .clone() this.
+        let engine = audio.handle.clone();
+
         // Restore persisted layout (theme + panel visibility).
         let saved = ui::layout::load_layout();
         let theme = ui::theme::builtin_themes()
@@ -305,6 +314,7 @@ impl SynthApp {
         Self {
             _audio: audio,
             state,
+            engine,
             midi,
             control,
             theme,

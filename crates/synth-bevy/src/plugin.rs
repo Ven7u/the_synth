@@ -1065,6 +1065,7 @@ where
                         ParamId::LfoDepth => state.lfo_depth.set(value),
                         ParamId::MasterVolume => state.master_vol.set(value),
                         ParamId::LfoPitchMult => state.lfo_pitch_mult.set(value),
+                        _ => {}
                     },
                     ControlEvent::ChordHold { notes, .. } => arp.set_chord(&notes),
                     ControlEvent::ArpRestart { .. } => {
