@@ -67,7 +67,9 @@ pub fn compute_snap_positions(ctx: &Context) -> HashMap<&'static str, Pos2> {
 
         // Snap to other windows.
         for j in 0..entries.len() {
-            if i == j { continue; }
+            if i == j {
+                continue;
+            }
             let (_, _, other) = entries[j];
 
             let overlap_y = rect.top() < other.bottom() && rect.bottom() > other.top();

@@ -156,14 +156,19 @@ mod tests {
         let mut lim = PeakLimiter::new(44_100.0, 2.0, 80.0);
         let thr = 0.9;
         // Warm up: allow the attack envelope to converge (2ms attack ≈ 90 samples)
-        for _ in 0..1_000 { lim.process(4.0, thr); }
+        for _ in 0..1_000 {
+            lim.process(4.0, thr);
+        }
         // Steady-state: output must stay near or below threshold
         let mut max = 0.0_f32;
         for _ in 0..20_000 {
             let y = lim.process(4.0, thr);
             max = max.max(y.abs());
         }
-        assert!(max <= thr * 1.05, "steady-state peak {max:.4} > threshold {thr}");
+        assert!(
+            max <= thr * 1.05,
+            "steady-state peak {max:.4} > threshold {thr}"
+        );
     }
 
     #[test]
@@ -186,7 +191,10 @@ mod tests {
         for i in 0..90_000 {
             let inp = if i % 5_000 == 0 { 3.0 } else { 0.1 };
             let (l, r) = lim.process_stereo(inp, -inp, 0.9);
-            assert!(l.is_finite() && r.is_finite(), "sample {i}: not finite l={l} r={r}");
+            assert!(
+                l.is_finite() && r.is_finite(),
+                "sample {i}: not finite l={l} r={r}"
+            );
         }
     }
 
@@ -194,7 +202,9 @@ mod tests {
     fn lookahead_limiter_silence_passthrough() {
         let mut lim = LookaheadLimiter::new(44_100.0, 1.5, 100.0);
         // Skip the lookahead delay samples, then check silence passes
-        for _ in 0..100 { lim.process_stereo(0.0, 0.0, 0.9); }
+        for _ in 0..100 {
+            lim.process_stereo(0.0, 0.0, 0.9);
+        }
         for i in 0..1_000 {
             let (l, r) = lim.process_stereo(0.0, 0.0, 0.9);
             assert!(l == 0.0 && r == 0.0, "silence sample {i}: l={l} r={r}");
@@ -204,7 +214,9 @@ mod tests {
     #[test]
     fn lookahead_limiter_reset() {
         let mut lim = LookaheadLimiter::new(44_100.0, 1.5, 100.0);
-        for _ in 0..1_000 { lim.process_stereo(4.0, 4.0, 0.9); }
+        for _ in 0..1_000 {
+            lim.process_stereo(4.0, 4.0, 0.9);
+        }
         lim.reset();
         let (l, r) = lim.process_stereo(0.0, 0.0, 0.9);
         assert!(l == 0.0 && r == 0.0, "after reset: l={l} r={r}");

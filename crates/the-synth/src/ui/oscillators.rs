@@ -1,8 +1,7 @@
-use crate::SynthApp;
 use crate::ui::frame::SynthFrame;
+use crate::SynthApp;
 use eframe::egui;
 use egui::{Color32, Pos2, RichText, Stroke, Vec2};
-use std::sync::atomic::Ordering;
 
 pub const WAVE_LABELS: &[&str] = &["Sin", "Saw", "Sqr", "Tri"];
 
@@ -15,8 +14,7 @@ impl SynthApp {
 
         // Back face gets a slightly different tint via a modified frame.
         let frame = if flip {
-            SynthFrame::section(&self.theme)
-                .fill(self.theme.c(&self.theme.bg_sunken))
+            SynthFrame::section(&self.theme).fill(self.theme.c(&self.theme.bg_sunken))
         } else {
             SynthFrame::section(&self.theme)
         };
@@ -47,8 +45,12 @@ impl SynthApp {
                     .clicked()
                 {
                     self.osc_enabled[i] = !on;
-                    let vol = if self.osc_enabled[i] { self.osc_vol[i] } else { 0.0 };
-                    self.state.osc_vol[i].set(vol);
+                    let vol = if self.osc_enabled[i] {
+                        self.osc_vol[i]
+                    } else {
+                        0.0
+                    };
+                    self.engine.set_osc_vol(i as u8, vol);
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -57,10 +59,17 @@ impl SynthApp {
                         let flip_label = if flip { "‹ back" } else { "mod ›" };
                         let flip_col = self.theme.c(&self.theme.text_secondary);
                         if ui
-                            .add(egui::Label::new(
-                                RichText::new(flip_label).size(10.0).color(flip_col),
-                            ).sense(egui::Sense::click()))
-                            .on_hover_text(if flip { "Back to main controls" } else { "Sync / FM / Ring mod" })
+                            .add(
+                                egui::Label::new(
+                                    RichText::new(flip_label).size(10.0).color(flip_col),
+                                )
+                                .sense(egui::Sense::click()),
+                            )
+                            .on_hover_text(if flip {
+                                "Back to main controls"
+                            } else {
+                                "Sync / FM / Ring mod"
+                            })
                             .clicked()
                         {
                             self.osc1_mod_view = !self.osc1_mod_view;
@@ -101,7 +110,7 @@ impl SynthApp {
                         .clicked()
                     {
                         self.osc_wave[i] = w;
-                        self.state.osc_wave[i].store(w as u8, Ordering::Relaxed);
+                        self.engine.set_osc_wave(i as u8, w as u8);
                     }
                 }
             });
@@ -165,7 +174,7 @@ impl SynthApp {
                     .on_hover_text("Pulse Width — duty cycle of the square wave.\n0.5 = symmetric square (hollow/woody).\nLower or higher = thin, nasal tone.\nModulate with LFO for classic PWM sweep.\nOnly active on Sqr waveform.")
                     .changed()
                     {
-                        self.state.osc_pulse_width[i].set(self.osc_pulse_width[i]);
+                        self.engine.set_osc_pulse_width(i as u8, self.osc_pulse_width[i]);
                     }
                 });
             });
@@ -266,7 +275,9 @@ impl SynthApp {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = sp_xs;
             let on = self.hard_sync;
-            let col = self.theme.active_with(on, &self.theme.accent_hard_sync.clone());
+            let col = self
+                .theme
+                .active_with(on, &self.theme.accent_hard_sync.clone());
             if ui
                 .add_sized(
                     [44.0, 22.0],
@@ -276,7 +287,7 @@ impl SynthApp {
                 .clicked()
             {
                 self.hard_sync = !on;
-                self.state.hard_sync_enabled.store(self.hard_sync, Ordering::Relaxed);
+                self.engine.set_hard_sync_enabled(self.hard_sync);
             }
             ui.label(
                 RichText::new("→ OSC 2")
@@ -301,7 +312,8 @@ impl SynthApp {
                 .clicked()
             {
                 self.fm_enabled = !on;
-                self.state.fm_depth.set(if self.fm_enabled { self.fm_depth } else { 0.0 });
+                self.engine
+                    .set_fm_depth(if self.fm_enabled { self.fm_depth } else { 0.0 });
             }
             ui.add_enabled_ui(self.fm_enabled, |ui| {
                 if ui
@@ -312,7 +324,7 @@ impl SynthApp {
                     .on_hover_text("FM depth — ~1 subtle, 3–5 bells, 8+ chaotic sidebands")
                     .changed()
                 {
-                    self.state.fm_depth.set(self.fm_depth);
+                    self.engine.set_fm_depth(self.fm_depth);
                 }
             });
         });
@@ -333,7 +345,11 @@ impl SynthApp {
                 .clicked()
             {
                 self.ring_enabled = !on;
-                self.state.ring_depth.set(if self.ring_enabled { self.ring_depth } else { 0.0 });
+                self.engine.set_ring_depth(if self.ring_enabled {
+                    self.ring_depth
+                } else {
+                    0.0
+                });
             }
             ui.add_enabled_ui(self.ring_enabled, |ui| {
                 if ui
@@ -344,7 +360,7 @@ impl SynthApp {
                     .on_hover_text("Ring mod depth — mute OSC 1 and 2 in mixer for pure ring mod")
                     .changed()
                 {
-                    self.state.ring_depth.set(self.ring_depth);
+                    self.engine.set_ring_depth(self.ring_depth);
                 }
             });
         });
@@ -356,17 +372,19 @@ impl SynthApp {
         let oct = self.osc_octave[i] as f32;
         let cents = self.osc_detune[i];
         let mult = 2_f32.powf(oct + cents / 1200.0);
-        self.state.osc_freq_mult[i].set(mult);
+        self.engine.set_osc_freq_mult(i as u8, mult);
     }
 
     pub fn update_unison(&self, i: usize) {
         let count = self.osc_unison_count[i];
         let spread = self.osc_unison_spread[i];
+        let osc = i as u8;
 
         if !self.osc_unison_enabled[i] || count <= 1 {
             for c in 0..5 {
-                self.state.osc_unison_detune[i][c].set(1.0);
-                self.state.osc_unison_vol[i][c].set(if c == 0 { 1.0 } else { 0.0 });
+                self.engine.set_osc_unison_detune(osc, c as u8, 1.0);
+                self.engine
+                    .set_osc_unison_vol(osc, c as u8, if c == 0 { 1.0 } else { 0.0 });
             }
             return;
         }
@@ -374,14 +392,18 @@ impl SynthApp {
         let vol = 1.0 / count as f32;
         for c in 0..5 {
             if c < count {
-                let t = if count > 1 { c as f32 / (count - 1) as f32 } else { 0.5 };
+                let t = if count > 1 {
+                    c as f32 / (count - 1) as f32
+                } else {
+                    0.5
+                };
                 let cents = -spread * 0.5 + t * spread;
                 let detune = 2_f32.powf(cents / 1200.0);
-                self.state.osc_unison_detune[i][c].set(detune);
-                self.state.osc_unison_vol[i][c].set(vol);
+                self.engine.set_osc_unison_detune(osc, c as u8, detune);
+                self.engine.set_osc_unison_vol(osc, c as u8, vol);
             } else {
-                self.state.osc_unison_detune[i][c].set(1.0);
-                self.state.osc_unison_vol[i][c].set(0.0);
+                self.engine.set_osc_unison_detune(osc, c as u8, 1.0);
+                self.engine.set_osc_unison_vol(osc, c as u8, 0.0);
             }
         }
     }
@@ -404,15 +426,13 @@ impl SynthApp {
                 for i in 0..3 {
                     ui.vertical(|ui| {
                         ui.set_width(36.0);
-                        ui.label(
-                            RichText::new(format!("O{}", i + 1))
-                                .size(10.0)
-                                .color(if self.osc_enabled[i] {
-                                    self.theme.c(&self.theme.text_primary)
-                                } else {
-                                    self.theme.c(&self.theme.text_disabled)
-                                }),
-                        );
+                        ui.label(RichText::new(format!("O{}", i + 1)).size(10.0).color(
+                            if self.osc_enabled[i] {
+                                self.theme.c(&self.theme.text_primary)
+                            } else {
+                                self.theme.c(&self.theme.text_disabled)
+                            },
+                        ));
                         if ui
                             .add_sized(
                                 [20.0, 90.0],
@@ -424,7 +444,7 @@ impl SynthApp {
                             .changed()
                             && self.osc_enabled[i]
                         {
-                            self.state.osc_vol[i].set(self.osc_vol[i]);
+                            self.engine.set_osc_vol(i as u8, self.osc_vol[i]);
                         }
                     });
                 }
@@ -436,17 +456,18 @@ impl SynthApp {
                             .size(10.0)
                             .color(self.theme.c(&self.theme.text_secondary)),
                     );
+                    let mut noise_vol = self.engine.noise_vol();
                     if ui
                         .add_sized(
                             [20.0, 90.0],
-                            egui::Slider::new(&mut self.noise_vol, 0.0..=1.0)
+                            egui::Slider::new(&mut noise_vol, 0.0..=1.0)
                                 .vertical()
                                 .fixed_decimals(2),
                         )
                         .on_hover_text("White noise volume")
                         .changed()
                     {
-                        self.state.noise_vol.set(self.noise_vol);
+                        self.engine.set_noise_vol(noise_vol);
                     }
                 });
             });
@@ -456,17 +477,19 @@ impl SynthApp {
             ui.add_space(sp_xs);
 
             ui.horizontal(|ui| {
-                if super::widgets::knob(ui, &mut self.master_vol, 0.0..=1.0, "MAST", &self.theme, false)
+                let mut master = self.engine.master_volume();
+                if super::widgets::knob(ui, &mut master, 0.0..=1.0, "MAST", &self.theme, false)
                     .on_hover_text("Master output volume — applied after all FX")
                     .changed()
                 {
-                    self.state.master_vol.set(self.master_vol);
+                    self.engine.set_master_volume(master);
                 }
-                if super::widgets::knob(ui, &mut self.glide_time, 0.0..=0.5, "GLIDE", &self.theme, false)
+                let mut glide = self.engine.glide_time();
+                if super::widgets::knob(ui, &mut glide, 0.0..=0.5, "GLIDE", &self.theme, false)
                     .on_hover_text("Pitch slide time between notes (seconds)")
                     .changed()
                 {
-                    self.state.glide_time.set(self.glide_time);
+                    self.engine.set_glide_time(glide);
                 }
             });
 
@@ -491,12 +514,13 @@ impl SynthApp {
                     .clicked()
                 {
                     self.limiter_enabled = !lim_on;
-                    self.state.limiter_enabled.store(self.limiter_enabled, Ordering::Relaxed);
+                    self.engine.set_limiter_enabled(self.limiter_enabled);
                 }
                 ui.add_enabled_ui(lim_on, |ui| {
+                    let mut thr = self.engine.limiter_threshold();
                     if ui
                         .add(
-                            egui::DragValue::new(&mut self.limiter_threshold)
+                            egui::DragValue::new(&mut thr)
                                 .range(0.5..=1.0)
                                 .speed(0.005)
                                 .fixed_decimals(2),
@@ -505,7 +529,7 @@ impl SynthApp {
                         .changed()
                         && lim_on
                     {
-                        self.state.limiter_threshold.set(self.limiter_threshold);
+                        self.engine.set_limiter_threshold(thr);
                     }
                 });
             });
@@ -543,8 +567,20 @@ fn draw_wave_preview(
             let y = match wave {
                 0 => phase_rad.sin(),
                 1 => 1.0 - 2.0 * norm_phase,
-                2 => if norm_phase < pulse_width { 1.0 } else { -1.0 },
-                3 => if norm_phase < 0.5 { 4.0 * norm_phase - 1.0 } else { 3.0 - 4.0 * norm_phase },
+                2 => {
+                    if norm_phase < pulse_width {
+                        1.0
+                    } else {
+                        -1.0
+                    }
+                }
+                3 => {
+                    if norm_phase < 0.5 {
+                        4.0 * norm_phase - 1.0
+                    } else {
+                        3.0 - 4.0 * norm_phase
+                    }
+                }
                 _ => 0.0,
             };
 

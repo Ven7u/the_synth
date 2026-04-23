@@ -13,8 +13,11 @@
 //! - 1 beat = `subdivisions` subdivisions  (default 4 → 16th notes)
 //! - Position: (bar, beat, subdivision) — all zero-indexed
 
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
 use fundsp::prelude32::{shared, Shared};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 // ---------------------------------------------------------------------------
 // BeatPosition
@@ -164,7 +167,7 @@ impl BeatClock {
             return BeatEvents::default();
         }
 
-        let bpm   = shared.bpm().max(1.0) as f64;
+        let bpm = shared.bpm().max(1.0) as f64;
         let swing = shared.swing() as f64; // 0.0 – 0.5
 
         // Base samples per subdivision (no swing).
@@ -243,7 +246,9 @@ mod tests {
     use super::*;
 
     fn make() -> (BeatClock, BeatClockShared) {
-        (BeatClock::default(), BeatClockShared::new(120.0))
+        let sh = BeatClockShared::new(120.0);
+        sh.set_playing(true);
+        (BeatClock::default(), sh)
     }
 
     /// At 120 BPM, 44100 Hz, 4/4, 4 subdivisions per beat:
@@ -268,7 +273,9 @@ mod tests {
         let mut beats = 0u32;
         for _ in 0..4 {
             let ev = clk.tick(5513, sr, &sh);
-            if ev.beat { beats += 1; }
+            if ev.beat {
+                beats += 1;
+            }
         }
         assert_eq!(beats, 1, "exactly one beat crossing in 4 subdivisions");
     }
@@ -280,7 +287,9 @@ mod tests {
         let mut bars = 0u32;
         for _ in 0..16 {
             let ev = clk.tick(5513, sr, &sh);
-            if ev.bar { bars += 1; }
+            if ev.bar {
+                bars += 1;
+            }
         }
         assert_eq!(bars, 1);
     }

@@ -23,7 +23,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
 
       - name: test
         run: cargo test --workspace

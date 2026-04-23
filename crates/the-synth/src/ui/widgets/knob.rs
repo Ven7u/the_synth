@@ -45,7 +45,11 @@ pub fn knob(
     // Handle drag input.
     if response.dragged() {
         let delta = -response.drag_delta().y; // up = increase
-        let speed = if ui.input(|i| i.modifiers.shift) { 0.001 } else { 0.005 };
+        let speed = if ui.input(|i| i.modifiers.shift) {
+            0.001
+        } else {
+            0.005
+        };
         let t = (log_t(*value) + delta * speed).clamp(0.0, 1.0);
         *value = log_v(t).clamp(*range.start(), *range.end());
     }
@@ -67,20 +71,35 @@ pub fn knob(
         let t = if range_span > 0.0 { log_t(*value) } else { 0.0 };
 
         // Arc geometry: 270 degrees, starting from bottom-left going clockwise.
-        let start_angle = PI * 0.75;    // 135 degrees (bottom-left)
-        let sweep = PI * 1.5;           // 270 degrees total
+        let start_angle = PI * 0.75; // 135 degrees (bottom-left)
+        let sweep = PI * 1.5; // 270 degrees total
 
         let accent = theme.c(&theme.accent);
 
         // Track arc (dim background).
-        let track_color = Color32::from_rgba_premultiplied(
-            accent.r() / 4, accent.g() / 4, accent.b() / 4, 80,
+        let track_color =
+            Color32::from_rgba_premultiplied(accent.r() / 4, accent.g() / 4, accent.b() / 4, 80);
+        draw_arc(
+            &painter,
+            center,
+            knob_radius,
+            start_angle,
+            sweep,
+            2.5,
+            track_color,
         );
-        draw_arc(&painter, center, knob_radius, start_angle, sweep, 2.5, track_color);
 
         // Fill arc (colored portion).
         if t > 0.01 {
-            draw_arc(&painter, center, knob_radius, start_angle, sweep * t, 3.0, accent);
+            draw_arc(
+                &painter,
+                center,
+                knob_radius,
+                start_angle,
+                sweep * t,
+                3.0,
+                accent,
+            );
         }
 
         // Indicator dot at current position.
@@ -139,7 +158,9 @@ fn draw_arc(
     color: Color32,
 ) {
     let segments = (sweep.abs() * 20.0).ceil() as usize;
-    if segments < 2 { return; }
+    if segments < 2 {
+        return;
+    }
     let step = sweep / segments as f32;
     for i in 0..segments {
         let a0 = start_angle + step * i as f32;

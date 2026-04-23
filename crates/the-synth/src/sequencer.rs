@@ -39,10 +39,18 @@ pub const DEGREE_LABELS: [&str; 7] = ["I", "II", "III", "IV", "V", "VI", "VII"];
 
 impl SeqMode {
     pub fn to_u8(self) -> u8 {
-        match self { Self::NoteSeq => 0, Self::ChordSeq => 1, Self::ChordKb => 2 }
+        match self {
+            Self::NoteSeq => 0,
+            Self::ChordSeq => 1,
+            Self::ChordKb => 2,
+        }
     }
     pub fn from_u8(v: u8) -> Self {
-        match v { 1 => Self::ChordSeq, 2 => Self::ChordKb, _ => Self::NoteSeq }
+        match v {
+            1 => Self::ChordSeq,
+            2 => Self::ChordKb,
+            _ => Self::NoteSeq,
+        }
     }
 }
 
@@ -72,7 +80,9 @@ pub fn chord_quality(scale: ScaleType, degree: usize) -> &'static str {
     }
 }
 
-pub const NOTE_NAMES: [&str; 12] = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+pub const NOTE_NAMES: [&str; 12] = [
+    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+];
 
 /// Display name for a chord: root note + quality (e.g. "Cm", "F", "B°").
 pub fn chord_name(root: u8, scale: ScaleType, degree: usize) -> String {
@@ -102,38 +112,52 @@ pub fn chord_notes(root: u8, scale: ScaleType, degree: usize, octave: i32) -> [u
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ChordType {
-    Triad,   // 1-3-5
-    Maj7,    // 1-3-5-7 (major seventh)
-    Min7,    // 1-b3-5-b7
-    Dom7,    // 1-3-5-b7
-    Sus2,    // 1-2-5
-    Sus4,    // 1-4-5
-    Add9,    // 1-3-5-9
-    Power,   // 1-5
+    Triad, // 1-3-5
+    Maj7,  // 1-3-5-7 (major seventh)
+    Min7,  // 1-b3-5-b7
+    Dom7,  // 1-3-5-b7
+    Sus2,  // 1-2-5
+    Sus4,  // 1-4-5
+    Add9,  // 1-3-5-9
+    Power, // 1-5
 }
 
 impl ChordType {
     pub fn label(self) -> &'static str {
         match self {
             Self::Triad => "Triad",
-            Self::Maj7  => "Maj7",
-            Self::Min7  => "Min7",
-            Self::Dom7  => "Dom7",
-            Self::Sus2  => "Sus2",
-            Self::Sus4  => "Sus4",
-            Self::Add9  => "Add9",
+            Self::Maj7 => "Maj7",
+            Self::Min7 => "Min7",
+            Self::Dom7 => "Dom7",
+            Self::Sus2 => "Sus2",
+            Self::Sus4 => "Sus4",
+            Self::Add9 => "Add9",
             Self::Power => "Power",
         }
     }
 
     pub fn all() -> &'static [ChordType] {
-        &[Self::Triad, Self::Maj7, Self::Min7, Self::Dom7,
-          Self::Sus2, Self::Sus4, Self::Add9, Self::Power]
+        &[
+            Self::Triad,
+            Self::Maj7,
+            Self::Min7,
+            Self::Dom7,
+            Self::Sus2,
+            Self::Sus4,
+            Self::Add9,
+            Self::Power,
+        ]
     }
 }
 
 /// Compute MIDI notes for a pad config. Returns up to 4 notes (unused slots = 255).
-pub fn chord_notes_typed(root: u8, scale: ScaleType, degree: usize, octave: i32, chord_type: ChordType) -> Vec<u8> {
+pub fn chord_notes_typed(
+    root: u8,
+    scale: ScaleType,
+    degree: usize,
+    octave: i32,
+    chord_type: ChordType,
+) -> Vec<u8> {
     let intervals = scale_intervals(scale);
     let base = root as i32 + octave * 12;
 
@@ -174,26 +198,15 @@ pub fn chord_notes_typed(root: u8, scale: ScaleType, degree: usize, octave: i32,
             clamp(deg_root + 7),
             clamp(deg_root + 10),
         ],
-        ChordType::Sus2 => vec![
-            clamp(deg_root),
-            clamp(deg_root + 2),
-            clamp(deg_root + 7),
-        ],
-        ChordType::Sus4 => vec![
-            clamp(deg_root),
-            clamp(deg_root + 5),
-            clamp(deg_root + 7),
-        ],
+        ChordType::Sus2 => vec![clamp(deg_root), clamp(deg_root + 2), clamp(deg_root + 7)],
+        ChordType::Sus4 => vec![clamp(deg_root), clamp(deg_root + 5), clamp(deg_root + 7)],
         ChordType::Add9 => vec![
             clamp(deg_root),
             clamp(deg_root + if is_minor { 3 } else { 4 }),
             clamp(deg_root + 7),
             clamp(deg_root + 14),
         ],
-        ChordType::Power => vec![
-            clamp(deg_root),
-            clamp(deg_root + 7),
-        ],
+        ChordType::Power => vec![clamp(deg_root), clamp(deg_root + 7)],
     }
 }
 
@@ -206,7 +219,10 @@ pub struct PadConfig {
 
 impl PadConfig {
     pub fn new(chord_type: ChordType) -> Self {
-        Self { chord_type, custom_root: None }
+        Self {
+            chord_type,
+            custom_root: None,
+        }
     }
 }
 
@@ -227,14 +243,30 @@ impl NoteSeqState {
         let mut notes = [60u8; 24];
         // Wish You Were Here – main arpeggio run (E3 G3 A3 G3 D4 C4 D4 E3)
         use synth_control::midi_note;
-        for i in 0..8 { steps[i] = true; }
+        for i in 0..8 {
+            steps[i] = true;
+        }
         for (i, &v) in [
-            midi_note!(E, 3), midi_note!(G, 3), midi_note!(A, 3), midi_note!(G, 3),
-            midi_note!(D, 4), midi_note!(C, 4), midi_note!(D, 4), midi_note!(E, 3),
-        ].iter().enumerate() {
+            midi_note!(E, 3),
+            midi_note!(G, 3),
+            midi_note!(A, 3),
+            midi_note!(G, 3),
+            midi_note!(D, 4),
+            midi_note!(C, 4),
+            midi_note!(D, 4),
+            midi_note!(E, 3),
+        ]
+        .iter()
+        .enumerate()
+        {
             notes[i] = v;
         }
-        Self { steps, notes, length: 8, drag_accum: [0.0; 24] }
+        Self {
+            steps,
+            notes,
+            length: 8,
+            drag_accum: [0.0; 24],
+        }
     }
 }
 
@@ -247,9 +279,9 @@ pub struct ChordSeqState {
     pub degrees: [usize; 24], // 0–6 diatonic degree per step
     pub length: usize,
     pub drag_accum: [f32; 24],
-    pub root: u8,        // 0=C … 11=B
+    pub root: u8, // 0=C … 11=B
     pub scale: ScaleType,
-    pub octave: i32,     // base octave for chord voicing
+    pub octave: i32, // base octave for chord voicing
 }
 
 impl ChordSeqState {
@@ -262,13 +294,15 @@ impl ChordSeqState {
         Self {
             steps: {
                 let mut a = [false; 24];
-                for i in 0..8 { a[i] = true; }
+                for i in 0..8 {
+                    a[i] = true;
+                }
                 a
             },
             degrees,
             length: 8,
             drag_accum: [0.0; 24],
-            root: 0,          // C
+            root: 0, // C
             scale: ScaleType::Major,
             octave: 4,
         }
@@ -361,9 +395,9 @@ pub enum SeqMode {
 impl SeqMode {
     pub fn label(self) -> &'static str {
         match self {
-            Self::NoteSeq  => "Note Seq",
+            Self::NoteSeq => "Note Seq",
             Self::ChordSeq => "Chord Seq",
-            Self::ChordKb  => "Chord KB",
+            Self::ChordKb => "Chord KB",
         }
     }
 }
@@ -372,26 +406,26 @@ impl SeqMode {
 // Sequencer handle — shared state between the sequencer thread and the UI
 // ---------------------------------------------------------------------------
 
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 pub struct SequencerHandle {
     /// UI writes, thread reads: is the sequencer running?
-    pub playing:        Arc<AtomicBool>,
+    pub playing: Arc<AtomicBool>,
     /// UI writes, thread reads: BPM (eigth-note grid).
-    pub bpm:            Arc<AtomicU32>,
+    pub bpm: Arc<AtomicU32>,
     /// UI writes, thread reads: SeqMode encoded as u8.
-    pub mode:           Arc<AtomicU8>,
+    pub mode: Arc<AtomicU8>,
     /// UI writes, thread reads: align arp/walker restarts to bar boundaries.
-    pub bar_quantize:   Arc<AtomicBool>,
+    pub bar_quantize: Arc<AtomicBool>,
     /// UI writes+reads, thread reads: note sequencer pattern.
-    pub note_seq:       Arc<Mutex<NoteSeqState>>,
+    pub note_seq: Arc<Mutex<NoteSeqState>>,
     /// UI writes+reads, thread reads: chord sequencer pattern.
-    pub chord_seq:      Arc<Mutex<ChordSeqState>>,
+    pub chord_seq: Arc<Mutex<ChordSeqState>>,
     /// Thread writes, UI reads: current playhead step.
-    pub current_step:   Arc<AtomicUsize>,
+    pub current_step: Arc<AtomicUsize>,
     /// UI sets true, thread swaps to false and fires ArpRestart at bar boundary.
-    pub arp_restart:    Arc<AtomicBool>,
+    pub arp_restart: Arc<AtomicBool>,
     /// UI sets true, thread swaps to false and fires WalkerRestart at bar boundary.
     pub walker_restart: Arc<AtomicBool>,
 }
@@ -399,14 +433,14 @@ pub struct SequencerHandle {
 impl SequencerHandle {
     pub fn new() -> Self {
         Self {
-            playing:        Arc::new(AtomicBool::new(false)),
-            bpm:            Arc::new(AtomicU32::new(120)),
-            mode:           Arc::new(AtomicU8::new(SeqMode::NoteSeq.to_u8())),
-            bar_quantize:   Arc::new(AtomicBool::new(false)),
-            note_seq:       Arc::new(Mutex::new(NoteSeqState::new())),
-            chord_seq:      Arc::new(Mutex::new(ChordSeqState::new())),
-            current_step:   Arc::new(AtomicUsize::new(0)),
-            arp_restart:    Arc::new(AtomicBool::new(false)),
+            playing: Arc::new(AtomicBool::new(false)),
+            bpm: Arc::new(AtomicU32::new(120)),
+            mode: Arc::new(AtomicU8::new(SeqMode::NoteSeq.to_u8())),
+            bar_quantize: Arc::new(AtomicBool::new(false)),
+            note_seq: Arc::new(Mutex::new(NoteSeqState::new())),
+            chord_seq: Arc::new(Mutex::new(ChordSeqState::new())),
+            current_step: Arc::new(AtomicUsize::new(0)),
+            arp_restart: Arc::new(AtomicBool::new(false)),
             walker_restart: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -414,12 +448,12 @@ impl SequencerHandle {
 
 /// Spawn the sequencer on a dedicated thread.
 ///
-/// `control` — channel to send NoteOn/NoteOff/ArpRestart/WalkerRestart events.
-/// `note_on_time` — shared timestamp updated on every NoteOn (used by latency display).
+/// `engine` — typed engine handle. The sequencer calls `note_on` / `note_off`
+/// / `arp_restart` / `walker_restart` on the handle; `note_on` also records
+/// the latency-measurement timestamp internally.
 pub fn spawn_sequencer(
     handle: Arc<SequencerHandle>,
-    control: synth_control::ControlSender,
-    note_on_time: Arc<Mutex<Option<std::time::Instant>>>,
+    engine: synth_engine::SynthEngineHandle,
 ) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name("sequencer".into())
@@ -437,9 +471,7 @@ pub fn spawn_sequencer(
                 if !playing {
                     if was_playing {
                         for m in prev_notes.drain(..) {
-                            let _ = control.try_send(synth_control::ControlEvent::NoteOff {
-                                pitch: m, track: 0,
-                            });
+                            engine.note_off(m);
                         }
                         was_playing = false;
                         first_tick = true;
@@ -473,9 +505,7 @@ pub fn spawn_sequencer(
 
                 // NoteOff previous notes.
                 for m in prev_notes.drain(..) {
-                    let _ = control.try_send(synth_control::ControlEvent::NoteOff {
-                        pitch: m, track: 0,
-                    });
+                    engine.note_off(m);
                 }
 
                 // Advance step. On the very first tick after Play we play the
@@ -483,9 +513,9 @@ pub fn spawn_sequencer(
                 // ticks advance by one.
                 let mode = SeqMode::from_u8(handle.mode.load(Ordering::Relaxed));
                 let seq_length = match mode {
-                    SeqMode::NoteSeq  => handle.note_seq.lock().map(|g| g.length).unwrap_or(8),
+                    SeqMode::NoteSeq => handle.note_seq.lock().map(|g| g.length).unwrap_or(8),
                     SeqMode::ChordSeq => handle.chord_seq.lock().map(|g| g.length).unwrap_or(8),
-                    SeqMode::ChordKb  => continue,
+                    SeqMode::ChordKb => continue,
                 };
 
                 let current = if first_tick {
@@ -499,38 +529,46 @@ pub fn spawn_sequencer(
 
                 if bar_boundary {
                     if handle.arp_restart.swap(false, Ordering::Relaxed) {
-                        let _ = control.try_send(synth_control::ControlEvent::ArpRestart { track: 0 });
+                        engine.arp_restart();
                     }
                     if handle.walker_restart.swap(false, Ordering::Relaxed) {
-                        let _ = control.try_send(synth_control::ControlEvent::WalkerRestart { track: 0 });
+                        engine.walker_restart();
                     }
                 }
 
                 // Collect notes for this step.
                 let notes_to_play: Vec<u8> = match mode {
-                    SeqMode::NoteSeq => {
-                        handle.note_seq.lock().map(|ns| {
-                            if ns.steps[current] { vec![ns.notes[current]] } else { vec![] }
-                        }).unwrap_or_default()
-                    }
-                    SeqMode::ChordSeq => {
-                        handle.chord_seq.lock().map(|cs| {
-                            if cs.steps[current] { cs.step_notes(current).to_vec() } else { vec![] }
-                        }).unwrap_or_default()
-                    }
+                    SeqMode::NoteSeq => handle
+                        .note_seq
+                        .lock()
+                        .map(|ns| {
+                            if ns.steps[current] {
+                                vec![ns.notes[current]]
+                            } else {
+                                vec![]
+                            }
+                        })
+                        .unwrap_or_default(),
+                    SeqMode::ChordSeq => handle
+                        .chord_seq
+                        .lock()
+                        .map(|cs| {
+                            if cs.steps[current] {
+                                cs.step_notes(current).to_vec()
+                            } else {
+                                vec![]
+                            }
+                        })
+                        .unwrap_or_default(),
                     SeqMode::ChordKb => vec![],
                 };
 
-                // Send NoteOns. The audio thread's trigger_note guarantees a
+                // Send NoteOns. The audio thread's VoiceAllocator guarantees a
                 // clean attack even when NoteOff + NoteOn for the same pitch
                 // arrive in the same buffer, so no inter-event delay is needed.
+                // `engine.note_on` also writes the latency-measurement timestamp.
                 for m in notes_to_play {
-                    if let Ok(mut t) = note_on_time.lock() {
-                        *t = Some(Instant::now());
-                    }
-                    let _ = control.try_send(synth_control::ControlEvent::NoteOn {
-                        pitch: m, velocity: 100, track: 0,
-                    });
+                    engine.note_on(m, 100);
                     prev_notes.push(m);
                 }
             }

@@ -11,11 +11,11 @@ use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
 
-use crate::patch::AmbientPatch;
 use crate::generators::{EuclideanShared, GenerativeMode, ProbTableShared};
 use crate::markov::MarkovEngineShared;
+use crate::patch::AmbientPatch;
 
-pub use synth_engine::{TrackState, MultiTrackEngine, TRACK_COUNT, VOICE_COUNT};
+pub use synth_engine::{MultiTrackEngine, TrackState, TRACK_COUNT, VOICE_COUNT};
 
 pub const MACRO_COUNT: usize = 8;
 pub const ACTIVE_MACRO_KNOBS: usize = 6;
@@ -87,12 +87,14 @@ pub struct SceneMacro {
 /// One slot in a harmonic sequence: key, scale, and how many phrases it lasts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HarmonicSlot {
-    pub root:    u8,
-    pub scale:   u8,
+    pub root: u8,
+    pub scale: u8,
     pub phrases: u8,
 }
 
-fn default_clock_div() -> u8 { 4 }
+fn default_clock_div() -> u8 {
+    4
+}
 
 /// Serializable snapshot of the Markov engine configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -204,9 +206,9 @@ impl AmbientEngine {
             macro_set_kind: MacroSetKind::AmbientCore,
             euclidean_configs: std::array::from_fn(|_| EuclideanShared::default()),
             prob_table_configs: std::array::from_fn(|_| ProbTableShared::default()),
-            generative_modes: std::array::from_fn(|_| std::sync::Arc::new(
-                std::sync::atomic::AtomicU8::new(GenerativeMode::Off as u8)
-            )),
+            generative_modes: std::array::from_fn(|_| {
+                std::sync::Arc::new(std::sync::atomic::AtomicU8::new(GenerativeMode::Off as u8))
+            }),
             markov_shared: MarkovEngineShared::new(TRACK_COUNT),
         };
         this.apply_macro_set(MacroSetKind::AmbientCore);
@@ -239,27 +241,122 @@ impl AmbientEngine {
         self.macro_names[5] = "Texture".to_string();
 
         for ti in 0..TRACK_COUNT {
-            self.macro_targets[0].push(MacroTarget { track: Some(ti), param: MacroParam::TrackShimmerSend, min: 0.05, max: 0.85 });
-            self.macro_targets[0].push(MacroTarget { track: Some(ti), param: MacroParam::TrackCrystalSend, min: 0.0, max: 0.45 });
-            self.macro_targets[1].push(MacroTarget { track: Some(ti), param: MacroParam::TrackCutoff, min: 900.0, max: 9000.0 });
-            self.macro_targets[1].push(MacroTarget { track: Some(ti), param: MacroParam::TrackResonance, min: 0.2, max: 1.2 });
-            self.macro_targets[2].push(MacroTarget { track: Some(ti), param: MacroParam::ArpGate, min: 0.35, max: 0.85 });
-            self.macro_targets[2].push(MacroTarget { track: Some(ti), param: MacroParam::WalkerGate, min: 0.30, max: 0.85 });
-            self.macro_targets[2].push(MacroTarget { track: Some(ti), param: MacroParam::WalkerBpm, min: 90.0, max: 162.0 });
-            self.macro_targets[4].push(MacroTarget { track: Some(ti), param: MacroParam::TrackResonance, min: 0.25, max: 1.60 });
+            self.macro_targets[0].push(MacroTarget {
+                track: Some(ti),
+                param: MacroParam::TrackShimmerSend,
+                min: 0.05,
+                max: 0.85,
+            });
+            self.macro_targets[0].push(MacroTarget {
+                track: Some(ti),
+                param: MacroParam::TrackCrystalSend,
+                min: 0.0,
+                max: 0.45,
+            });
+            self.macro_targets[1].push(MacroTarget {
+                track: Some(ti),
+                param: MacroParam::TrackCutoff,
+                min: 900.0,
+                max: 9000.0,
+            });
+            self.macro_targets[1].push(MacroTarget {
+                track: Some(ti),
+                param: MacroParam::TrackResonance,
+                min: 0.2,
+                max: 1.2,
+            });
+            self.macro_targets[2].push(MacroTarget {
+                track: Some(ti),
+                param: MacroParam::ArpGate,
+                min: 0.35,
+                max: 0.85,
+            });
+            self.macro_targets[2].push(MacroTarget {
+                track: Some(ti),
+                param: MacroParam::WalkerGate,
+                min: 0.30,
+                max: 0.85,
+            });
+            self.macro_targets[2].push(MacroTarget {
+                track: Some(ti),
+                param: MacroParam::WalkerBpm,
+                min: 90.0,
+                max: 162.0,
+            });
+            self.macro_targets[4].push(MacroTarget {
+                track: Some(ti),
+                param: MacroParam::TrackResonance,
+                min: 0.25,
+                max: 1.60,
+            });
         }
 
-        self.macro_targets[0].push(MacroTarget { track: None, param: MacroParam::ShimmerMix, min: 0.12, max: 0.75 });
-        self.macro_targets[0].push(MacroTarget { track: None, param: MacroParam::ShimmerSize, min: 0.45, max: 1.00 });
-        self.macro_targets[1].push(MacroTarget { track: None, param: MacroParam::ShimmerDamp, min: 0.75, max: 0.25 });
-        self.macro_targets[2].push(MacroTarget { track: None, param: MacroParam::CrystalScatter, min: 0.10, max: 0.70 });
-        self.macro_targets[3].push(MacroTarget { track: None, param: MacroParam::CrystalMix, min: 0.00, max: 0.35 });
-        self.macro_targets[3].push(MacroTarget { track: None, param: MacroParam::CrystalFeedback, min: 0.20, max: 0.60 });
-        self.macro_targets[4].push(MacroTarget { track: None, param: MacroParam::ShimmerAmount, min: 0.25, max: 0.90 });
-        self.macro_targets[5].push(MacroTarget { track: None, param: MacroParam::CrystalGrainMs, min: 220.0, max: 70.0 });
-        self.macro_targets[5].push(MacroTarget { track: None, param: MacroParam::CrystalDelayMs, min: 420.0, max: 140.0 });
-        self.macro_targets[5].push(MacroTarget { track: None, param: MacroParam::CrystalScatter, min: 0.05, max: 0.85 });
-        self.macro_targets[5].push(MacroTarget { track: None, param: MacroParam::CrystalMix, min: 0.05, max: 0.45 });
+        self.macro_targets[0].push(MacroTarget {
+            track: None,
+            param: MacroParam::ShimmerMix,
+            min: 0.12,
+            max: 0.75,
+        });
+        self.macro_targets[0].push(MacroTarget {
+            track: None,
+            param: MacroParam::ShimmerSize,
+            min: 0.45,
+            max: 1.00,
+        });
+        self.macro_targets[1].push(MacroTarget {
+            track: None,
+            param: MacroParam::ShimmerDamp,
+            min: 0.75,
+            max: 0.25,
+        });
+        self.macro_targets[2].push(MacroTarget {
+            track: None,
+            param: MacroParam::CrystalScatter,
+            min: 0.10,
+            max: 0.70,
+        });
+        self.macro_targets[3].push(MacroTarget {
+            track: None,
+            param: MacroParam::CrystalMix,
+            min: 0.00,
+            max: 0.35,
+        });
+        self.macro_targets[3].push(MacroTarget {
+            track: None,
+            param: MacroParam::CrystalFeedback,
+            min: 0.20,
+            max: 0.60,
+        });
+        self.macro_targets[4].push(MacroTarget {
+            track: None,
+            param: MacroParam::ShimmerAmount,
+            min: 0.25,
+            max: 0.90,
+        });
+        self.macro_targets[5].push(MacroTarget {
+            track: None,
+            param: MacroParam::CrystalGrainMs,
+            min: 220.0,
+            max: 70.0,
+        });
+        self.macro_targets[5].push(MacroTarget {
+            track: None,
+            param: MacroParam::CrystalDelayMs,
+            min: 420.0,
+            max: 140.0,
+        });
+        self.macro_targets[5].push(MacroTarget {
+            track: None,
+            param: MacroParam::CrystalScatter,
+            min: 0.05,
+            max: 0.85,
+        });
+        self.macro_targets[5].push(MacroTarget {
+            track: None,
+            param: MacroParam::CrystalMix,
+            min: 0.05,
+            max: 0.45,
+        });
     }
 
     fn build_set_pulse(&mut self) {
@@ -271,16 +368,61 @@ impl AmbientEngine {
         self.macro_names[5] = "Width".to_string();
 
         for ti in 0..TRACK_COUNT {
-            self.macro_targets[0].push(MacroTarget { track: Some(ti), param: MacroParam::ArpGate, min: 0.30, max: 0.95 });
-            self.macro_targets[0].push(MacroTarget { track: Some(ti), param: MacroParam::WalkerGate, min: 0.25, max: 0.90 });
-            self.macro_targets[0].push(MacroTarget { track: Some(ti), param: MacroParam::WalkerBpm, min: 80.0, max: 180.0 });
-            self.macro_targets[2].push(MacroTarget { track: Some(ti), param: MacroParam::TrackResonance, min: 0.2, max: 2.0 });
-            self.macro_targets[3].push(MacroTarget { track: Some(ti), param: MacroParam::TrackCutoff, min: 700.0, max: 14000.0 });
+            self.macro_targets[0].push(MacroTarget {
+                track: Some(ti),
+                param: MacroParam::ArpGate,
+                min: 0.30,
+                max: 0.95,
+            });
+            self.macro_targets[0].push(MacroTarget {
+                track: Some(ti),
+                param: MacroParam::WalkerGate,
+                min: 0.25,
+                max: 0.90,
+            });
+            self.macro_targets[0].push(MacroTarget {
+                track: Some(ti),
+                param: MacroParam::WalkerBpm,
+                min: 80.0,
+                max: 180.0,
+            });
+            self.macro_targets[2].push(MacroTarget {
+                track: Some(ti),
+                param: MacroParam::TrackResonance,
+                min: 0.2,
+                max: 2.0,
+            });
+            self.macro_targets[3].push(MacroTarget {
+                track: Some(ti),
+                param: MacroParam::TrackCutoff,
+                min: 700.0,
+                max: 14000.0,
+            });
         }
-        self.macro_targets[3].push(MacroTarget { track: None, param: MacroParam::CrystalMix, min: 0.0, max: 0.25 });
-        self.macro_targets[4].push(MacroTarget { track: None, param: MacroParam::CrystalDelayMs, min: 1200.0, max: 120.0 });
-        self.macro_targets[4].push(MacroTarget { track: None, param: MacroParam::CrystalFeedback, min: 0.10, max: 0.70 });
-        self.macro_targets[5].push(MacroTarget { track: None, param: MacroParam::ShimmerMix, min: 0.05, max: 0.45 });
+        self.macro_targets[3].push(MacroTarget {
+            track: None,
+            param: MacroParam::CrystalMix,
+            min: 0.0,
+            max: 0.25,
+        });
+        self.macro_targets[4].push(MacroTarget {
+            track: None,
+            param: MacroParam::CrystalDelayMs,
+            min: 1200.0,
+            max: 120.0,
+        });
+        self.macro_targets[4].push(MacroTarget {
+            track: None,
+            param: MacroParam::CrystalFeedback,
+            min: 0.10,
+            max: 0.70,
+        });
+        self.macro_targets[5].push(MacroTarget {
+            track: None,
+            param: MacroParam::ShimmerMix,
+            min: 0.05,
+            max: 0.45,
+        });
     }
 
     fn build_set_cinematic(&mut self) {
@@ -292,18 +434,68 @@ impl AmbientEngine {
         self.macro_names[5] = "Release".to_string();
 
         for ti in 0..TRACK_COUNT {
-            self.macro_targets[0].push(MacroTarget { track: Some(ti), param: MacroParam::TrackVolume, min: 0.45, max: 0.95 });
-            self.macro_targets[1].push(MacroTarget { track: Some(ti), param: MacroParam::TrackCutoff, min: 600.0, max: 10000.0 });
-            self.macro_targets[2].push(MacroTarget { track: Some(ti), param: MacroParam::TrackResonance, min: 0.20, max: 1.40 });
-            self.macro_targets[4].push(MacroTarget { track: Some(ti), param: MacroParam::TrackVolume, min: 0.30, max: 1.00 });
+            self.macro_targets[0].push(MacroTarget {
+                track: Some(ti),
+                param: MacroParam::TrackVolume,
+                min: 0.45,
+                max: 0.95,
+            });
+            self.macro_targets[1].push(MacroTarget {
+                track: Some(ti),
+                param: MacroParam::TrackCutoff,
+                min: 600.0,
+                max: 10000.0,
+            });
+            self.macro_targets[2].push(MacroTarget {
+                track: Some(ti),
+                param: MacroParam::TrackResonance,
+                min: 0.20,
+                max: 1.40,
+            });
+            self.macro_targets[4].push(MacroTarget {
+                track: Some(ti),
+                param: MacroParam::TrackVolume,
+                min: 0.30,
+                max: 1.00,
+            });
         }
 
-        self.macro_targets[0].push(MacroTarget { track: None, param: MacroParam::ShimmerSize, min: 0.40, max: 1.00 });
-        self.macro_targets[2].push(MacroTarget { track: None, param: MacroParam::ShimmerAmount, min: 0.10, max: 0.75 });
-        self.macro_targets[3].push(MacroTarget { track: None, param: MacroParam::ShimmerMix, min: 0.10, max: 0.80 });
-        self.macro_targets[3].push(MacroTarget { track: None, param: MacroParam::ShimmerDamp, min: 0.65, max: 0.20 });
-        self.macro_targets[5].push(MacroTarget { track: None, param: MacroParam::CrystalMix, min: 0.0, max: 0.35 });
-        self.macro_targets[5].push(MacroTarget { track: None, param: MacroParam::CrystalFeedback, min: 0.10, max: 0.55 });
+        self.macro_targets[0].push(MacroTarget {
+            track: None,
+            param: MacroParam::ShimmerSize,
+            min: 0.40,
+            max: 1.00,
+        });
+        self.macro_targets[2].push(MacroTarget {
+            track: None,
+            param: MacroParam::ShimmerAmount,
+            min: 0.10,
+            max: 0.75,
+        });
+        self.macro_targets[3].push(MacroTarget {
+            track: None,
+            param: MacroParam::ShimmerMix,
+            min: 0.10,
+            max: 0.80,
+        });
+        self.macro_targets[3].push(MacroTarget {
+            track: None,
+            param: MacroParam::ShimmerDamp,
+            min: 0.65,
+            max: 0.20,
+        });
+        self.macro_targets[5].push(MacroTarget {
+            track: None,
+            param: MacroParam::CrystalMix,
+            min: 0.0,
+            max: 0.35,
+        });
+        self.macro_targets[5].push(MacroTarget {
+            track: None,
+            param: MacroParam::CrystalFeedback,
+            min: 0.10,
+            max: 0.55,
+        });
     }
 
     pub fn macro_set_kind(&self) -> MacroSetKind {
@@ -325,7 +517,12 @@ impl AmbientEngine {
         }
     }
 
-    pub fn apply_patch_to_track(&mut self, track: usize, patch_path: impl Into<String>, patch: &AmbientPatch) {
+    pub fn apply_patch_to_track(
+        &mut self,
+        track: usize,
+        patch_path: impl Into<String>,
+        patch: &AmbientPatch,
+    ) {
         if track >= TRACK_COUNT {
             return;
         }
@@ -367,7 +564,10 @@ impl AmbientEngine {
             self.core.shimmer.mix.set(shim);
             self.core.crystal.mix.set(crys);
         }
-        self.core.crystal.feedback.set(self.core.crystal.feedback.value().clamp(0.0, 0.65));
+        self.core
+            .crystal
+            .feedback
+            .set(self.core.crystal.feedback.value().clamp(0.0, 0.65));
     }
 
     fn apply_macro_target(&mut self, target: &MacroTarget, value: f32) {
@@ -414,12 +614,16 @@ impl AmbientEngine {
             }
             MacroParam::WalkerGate => {
                 if let Some(ti) = target.track.filter(|&ti| ti < TRACK_COUNT) {
-                    self.core.walker_configs[ti].gate.set(value.clamp(0.05, 1.0));
+                    self.core.walker_configs[ti]
+                        .gate
+                        .set(value.clamp(0.05, 1.0));
                 }
             }
             MacroParam::WalkerBpm => {
                 if let Some(ti) = target.track.filter(|&ti| ti < TRACK_COUNT) {
-                    self.core.walker_configs[ti].bpm.set(value.clamp(20.0, 300.0));
+                    self.core.walker_configs[ti]
+                        .bpm
+                        .set(value.clamp(20.0, 300.0));
                 }
             }
         }
@@ -443,20 +647,30 @@ impl AmbientEngine {
         let ms = &self.markov_shared;
         use std::sync::atomic::Ordering;
         let seq_len = ms.seq_len();
-        let harmonic_seq = (0..seq_len).map(|i| HarmonicSlot {
-            root:    ms.seq_root(i),
-            scale:   ms.seq_scales[i].load(Ordering::Relaxed),
-            phrases: ms.seq_phrases(i),
-        }).collect();
+        let harmonic_seq = (0..seq_len)
+            .map(|i| HarmonicSlot {
+                root: ms.seq_root(i),
+                scale: ms.seq_scales[i].load(Ordering::Relaxed),
+                phrases: ms.seq_phrases(i),
+            })
+            .collect();
         MarkovScene {
             root: ms.root.load(Ordering::Relaxed),
             scale: ms.scale.load(Ordering::Relaxed),
             density: ms.density.value(),
             bars_per_phrase: ms.bars_per_phrase.load(Ordering::Relaxed),
-            mood: (0..crate::markov::N_MOODS).map(|i| ms.mood.weight(i)).collect(),
-            voice_roles: (0..TRACK_COUNT).map(|i| ms.roles[i].load(Ordering::Relaxed)).collect(),
-            voice_densities: (0..TRACK_COUNT).map(|i| ms.voice_density[i].value()).collect(),
-            voice_enabled: (0..TRACK_COUNT).map(|i| ms.voice_enabled[i].load(Ordering::Relaxed)).collect(),
+            mood: (0..crate::markov::N_MOODS)
+                .map(|i| ms.mood.weight(i))
+                .collect(),
+            voice_roles: (0..TRACK_COUNT)
+                .map(|i| ms.roles[i].load(Ordering::Relaxed))
+                .collect(),
+            voice_densities: (0..TRACK_COUNT)
+                .map(|i| ms.voice_density[i].value())
+                .collect(),
+            voice_enabled: (0..TRACK_COUNT)
+                .map(|i| ms.voice_enabled[i].load(Ordering::Relaxed))
+                .collect(),
             chord_attraction: ms.chord_attraction.value(),
             bass_lock: ms.bass_lock.load(Ordering::Relaxed),
             dissonance_resolve: ms.dissonance_resolve.load(Ordering::Relaxed),
@@ -471,7 +685,13 @@ impl AmbientEngine {
         }
     }
 
-    pub fn capture_scene(&self, name: impl Into<String>, bpm: u32, key: u8, scale: impl Into<String>) -> Scene {
+    pub fn capture_scene(
+        &self,
+        name: impl Into<String>,
+        bpm: u32,
+        key: u8,
+        scale: impl Into<String>,
+    ) -> Scene {
         let tracks: [SceneTrack; TRACK_COUNT] = std::array::from_fn(|ti| {
             let t = &self.core.tracks[ti];
             SceneTrack {
@@ -509,13 +729,21 @@ impl AmbientEngine {
                 shimmer_amount: self.core.shimmer.shimmer.value(),
                 shimmer_size: self.core.shimmer.size.value(),
                 shimmer_damp: self.core.shimmer.damp.value(),
-                shimmer_pitch: self.core.shimmer.pitch.load(std::sync::atomic::Ordering::Relaxed),
+                shimmer_pitch: self
+                    .core
+                    .shimmer
+                    .pitch
+                    .load(std::sync::atomic::Ordering::Relaxed),
                 crystal_mix: self.core.crystal.mix.value(),
                 crystal_grain_ms: self.core.crystal.grain_ms.value(),
                 crystal_scatter: self.core.crystal.scatter.value(),
                 crystal_feedback: self.core.crystal.feedback.value(),
                 crystal_delay_ms: self.core.crystal.delay_ms.value(),
-                crystal_pitch: self.core.crystal.pitch.load(std::sync::atomic::Ordering::Relaxed),
+                crystal_pitch: self
+                    .core
+                    .crystal
+                    .pitch
+                    .load(std::sync::atomic::Ordering::Relaxed),
             },
         }
     }
@@ -533,18 +761,53 @@ impl AmbientEngine {
             t.crystal_send.set(src.crystal_send.clamp(0.0, 1.0));
         }
 
-        self.core.master_vol.set(scene.global.master_vol.clamp(0.0, 1.0));
-        self.core.shimmer.mix.set(scene.global.shimmer_mix.clamp(0.0, 1.0));
-        self.core.shimmer.shimmer.set(scene.global.shimmer_amount.clamp(0.0, 1.0));
-        self.core.shimmer.size.set(scene.global.shimmer_size.clamp(0.0, 1.0));
-        self.core.shimmer.damp.set(scene.global.shimmer_damp.clamp(0.0, 1.0));
-        self.core.shimmer.pitch.store(scene.global.shimmer_pitch, std::sync::atomic::Ordering::Relaxed);
-        self.core.crystal.mix.set(scene.global.crystal_mix.clamp(0.0, 1.0));
-        self.core.crystal.grain_ms.set(scene.global.crystal_grain_ms.clamp(10.0, 400.0));
-        self.core.crystal.scatter.set(scene.global.crystal_scatter.clamp(0.0, 1.0));
-        self.core.crystal.feedback.set(scene.global.crystal_feedback.clamp(0.0, 0.95));
-        self.core.crystal.delay_ms.set(scene.global.crystal_delay_ms.clamp(20.0, 1200.0));
-        self.core.crystal.pitch.store(scene.global.crystal_pitch, std::sync::atomic::Ordering::Relaxed);
+        self.core
+            .master_vol
+            .set(scene.global.master_vol.clamp(0.0, 1.0));
+        self.core
+            .shimmer
+            .mix
+            .set(scene.global.shimmer_mix.clamp(0.0, 1.0));
+        self.core
+            .shimmer
+            .shimmer
+            .set(scene.global.shimmer_amount.clamp(0.0, 1.0));
+        self.core
+            .shimmer
+            .size
+            .set(scene.global.shimmer_size.clamp(0.0, 1.0));
+        self.core
+            .shimmer
+            .damp
+            .set(scene.global.shimmer_damp.clamp(0.0, 1.0));
+        self.core.shimmer.pitch.store(
+            scene.global.shimmer_pitch,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        self.core
+            .crystal
+            .mix
+            .set(scene.global.crystal_mix.clamp(0.0, 1.0));
+        self.core
+            .crystal
+            .grain_ms
+            .set(scene.global.crystal_grain_ms.clamp(10.0, 400.0));
+        self.core
+            .crystal
+            .scatter
+            .set(scene.global.crystal_scatter.clamp(0.0, 1.0));
+        self.core
+            .crystal
+            .feedback
+            .set(scene.global.crystal_feedback.clamp(0.0, 0.95));
+        self.core
+            .crystal
+            .delay_ms
+            .set(scene.global.crystal_delay_ms.clamp(20.0, 1200.0));
+        self.core.crystal.pitch.store(
+            scene.global.crystal_pitch,
+            std::sync::atomic::Ordering::Relaxed,
+        );
 
         for i in 0..MACRO_COUNT {
             if let Some(sm) = scene.macros.get(i) {
@@ -563,25 +826,37 @@ impl AmbientEngine {
             ms.root.store(ms_data.root, Ordering::Relaxed);
             ms.scale.store(ms_data.scale, Ordering::Relaxed);
             ms.density.set(ms_data.density);
-            ms.bars_per_phrase.store(ms_data.bars_per_phrase, Ordering::Relaxed);
+            ms.bars_per_phrase
+                .store(ms_data.bars_per_phrase, Ordering::Relaxed);
             if ms_data.mood.len() == crate::markov::N_MOODS {
                 let arr: [f32; crate::markov::N_MOODS] = std::array::from_fn(|i| ms_data.mood[i]);
                 ms.mood.set(&arr);
             }
             for i in 0..TRACK_COUNT {
-                if let Some(&r) = ms_data.voice_roles.get(i) { ms.roles[i].store(r, Ordering::Relaxed); }
-                if let Some(&d) = ms_data.voice_densities.get(i) { ms.voice_density[i].set(d); }
-                if let Some(&e) = ms_data.voice_enabled.get(i) { ms.voice_enabled[i].store(e, Ordering::Relaxed); }
+                if let Some(&r) = ms_data.voice_roles.get(i) {
+                    ms.roles[i].store(r, Ordering::Relaxed);
+                }
+                if let Some(&d) = ms_data.voice_densities.get(i) {
+                    ms.voice_density[i].set(d);
+                }
+                if let Some(&e) = ms_data.voice_enabled.get(i) {
+                    ms.voice_enabled[i].store(e, Ordering::Relaxed);
+                }
             }
             ms.chord_attraction.set(ms_data.chord_attraction);
             ms.bass_lock.store(ms_data.bass_lock, Ordering::Relaxed);
-            ms.dissonance_resolve.store(ms_data.dissonance_resolve, Ordering::Relaxed);
-            ms.dissonance_threshold.store(ms_data.dissonance_threshold, Ordering::Relaxed);
+            ms.dissonance_resolve
+                .store(ms_data.dissonance_resolve, Ordering::Relaxed);
+            ms.dissonance_threshold
+                .store(ms_data.dissonance_threshold, Ordering::Relaxed);
             ms.register_drift.set(ms_data.register_drift);
-            ms.clock_div.store(ms_data.clock_div.max(1), Ordering::Relaxed);
+            ms.clock_div
+                .store(ms_data.clock_div.max(1), Ordering::Relaxed);
             // Restore harmonic sequence
             let seq = &ms_data.harmonic_seq;
-            let seq_len = seq.len().clamp(1, crate::markov::MarkovEngineShared::SEQ_MAX);
+            let seq_len = seq
+                .len()
+                .clamp(1, crate::markov::MarkovEngineShared::SEQ_MAX);
             ms.seq_len.store(seq_len as u8, Ordering::Relaxed);
             for (i, slot) in seq.iter().take(seq_len).enumerate() {
                 ms.seq_roots[i].store(slot.root, Ordering::Relaxed);
@@ -603,17 +878,22 @@ impl AmbientEngine {
 
 impl Deref for AmbientEngine {
     type Target = MultiTrackEngine;
-    fn deref(&self) -> &Self::Target { &self.core }
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
 }
 
 impl DerefMut for AmbientEngine {
-    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.core }
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.core
+    }
 }
 
 pub fn save_scene_json(path: impl AsRef<Path>, scene: &Scene) -> anyhow::Result<()> {
     let path = path.as_ref();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("create dir {}", parent.display()))?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create dir {}", parent.display()))?;
     }
     let json = serde_json::to_string_pretty(scene).context("serialize scene")?;
     std::fs::write(path, json).with_context(|| format!("write {}", path.display()))?;

@@ -1,14 +1,12 @@
 use ambient_engine::{
-    load_scene_json, AmbientEngine, Scene, SceneGlobal, MACRO_COUNT, TRACK_COUNT,
-    BeatClock, BeatClockShared,
-    MarkovEngine, GenerativeMode,
-    EuclideanGen, ProbTableGen,
+    load_scene_json, AmbientEngine, BeatClock, BeatClockShared, EuclideanGen, GenerativeMode,
+    MarkovEngine, ProbTableGen, Scene, SceneGlobal, MACRO_COUNT, TRACK_COUNT,
 };
 use bevy::prelude::*;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample, Stream};
-use fundsp::prelude::midi_hz;
 use fundsp::audiounit::AudioUnit;
+use fundsp::prelude::midi_hz;
 use fundsp::prelude32::{shared, BlockRateAdapter, Shared};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -178,9 +176,16 @@ pub struct SynthAudioStream(pub Stream);
 
 #[derive(Clone)]
 enum PendingEngineAction {
-    SetMacro { index: usize, value: f32 },
+    SetMacro {
+        index: usize,
+        value: f32,
+    },
     ApplyScene(Scene),
-    StartTransition { scene: Scene, frames: u32, mode: SceneTransitionMode },
+    StartTransition {
+        scene: Scene,
+        frames: u32,
+        mode: SceneTransitionMode,
+    },
 }
 
 #[derive(Resource, Default)]
@@ -210,22 +215,49 @@ impl SynthRecorderResource {
 
 #[derive(Message, Debug, Clone)]
 pub enum SynthEvent {
-    NoteOn { track: u8, pitch: u8, velocity: u8 },
-    NoteOff { track: u8, pitch: u8 },
-    ChordHold { track: u8, notes: Vec<u8> },
-    SetMacro { index: u8, value: f32 },
-    SetParam { track: u8, param: ParamId, value: f32 },
-    SceneLoad { name: String },
+    NoteOn {
+        track: u8,
+        pitch: u8,
+        velocity: u8,
+    },
+    NoteOff {
+        track: u8,
+        pitch: u8,
+    },
+    ChordHold {
+        track: u8,
+        notes: Vec<u8>,
+    },
+    SetMacro {
+        index: u8,
+        value: f32,
+    },
+    SetParam {
+        track: u8,
+        param: ParamId,
+        value: f32,
+    },
+    SceneLoad {
+        name: String,
+    },
     /// Transition to a named scene over `frames` samples using `mode`.
     /// `mode: None` falls back to `SynthBevyConfig::default_transition_mode`.
-    SceneTransition { name: String, frames: u32, mode: Option<SceneTransitionMode> },
-    Tempo { bpm: f32 },
+    SceneTransition {
+        name: String,
+        frames: u32,
+        mode: Option<SceneTransitionMode>,
+    },
+    Tempo {
+        bpm: f32,
+    },
     /// Immediately advance the timeline to the next section, ignoring remaining phrase count.
     /// The Bevy timeline resource (if any) handles the actual state update each frame.
     TimelineAdvance,
     /// Begin recording the stereo output to a WAV file at `path`.
     /// If a recording is already active it is stopped first.
-    StartRecording { path: String },
+    StartRecording {
+        path: String,
+    },
     /// Stop the active recording and finalise the WAV file.
     StopRecording,
 }
@@ -239,7 +271,10 @@ impl Plugin for SynthPlugin {
             .init_resource::<PendingEngineActions>()
             .add_message::<SynthEvent>()
             .add_systems(Startup, setup_synth_runtime)
-            .add_systems(PostUpdate, (bevy_bridge_system, process_pending_engine_actions).chain());
+            .add_systems(
+                PostUpdate,
+                (bevy_bridge_system, process_pending_engine_actions).chain(),
+            );
 
         #[cfg(feature = "inspector")]
         app.add_plugins(inspector::SynthInspectorPlugin);
@@ -253,7 +288,8 @@ fn setup_synth_runtime(world: &mut World) {
     let (control_tx, control_rx) = make_control_channel(cfg.control_capacity);
     let recorder_sink: RecorderSink = Arc::new(Mutex::new(None));
 
-    let (backend, synth_param, stream_res, scene_transition, ambient_beat_clock) = match cfg.backend {
+    let (backend, synth_param, stream_res, scene_transition, ambient_beat_clock) = match cfg.backend
+    {
         SynthBackendKind::Ambient => {
             let eng = Arc::new(Mutex::new(AmbientEngine::new(actual_sr)));
             let transition = Arc::new(Mutex::new(None));
@@ -262,8 +298,12 @@ fn setup_synth_runtime(world: &mut World) {
                     macro_values: std::array::from_fn(|i| guard.macro_values[i].clone()),
                     track_vol: std::array::from_fn(|i| guard.tracks[i].track_vol.clone()),
                     track_cutoff: std::array::from_fn(|i| guard.tracks[i].cutoff.clone()),
-                    track_shimmer_send: std::array::from_fn(|i| guard.tracks[i].shimmer_send.clone()),
-                    track_crystal_send: std::array::from_fn(|i| guard.tracks[i].crystal_send.clone()),
+                    track_shimmer_send: std::array::from_fn(|i| {
+                        guard.tracks[i].shimmer_send.clone()
+                    }),
+                    track_crystal_send: std::array::from_fn(|i| {
+                        guard.tracks[i].crystal_send.clone()
+                    }),
                     shimmer_mix: guard.shimmer.mix.clone(),
                     shimmer_size: guard.shimmer.size.clone(),
                     shimmer_amount: guard.shimmer.shimmer.clone(),
@@ -300,8 +340,19 @@ fn setup_synth_runtime(world: &mut World) {
         }
         SynthBackendKind::Mono => {
             let state = Arc::new(AudioState::new());
-            let stream_res = build_mono_stream(Arc::clone(&state), control_rx, actual_sr, Arc::clone(&recorder_sink));
-            (SynthBackendRuntime::Mono(state), SynthParam::default(), stream_res, None, None)
+            let stream_res = build_mono_stream(
+                Arc::clone(&state),
+                control_rx,
+                actual_sr,
+                Arc::clone(&recorder_sink),
+            );
+            (
+                SynthBackendRuntime::Mono(state),
+                SynthParam::default(),
+                stream_res,
+                None,
+                None,
+            )
         }
     };
 
@@ -321,7 +372,7 @@ fn setup_synth_runtime(world: &mut World) {
     };
 
     tempo.bpm = cfg.initial_bpm.max(1.0);
-    drop(tempo);
+    let _ = tempo;
     world.insert_resource(synth_param);
     world.insert_resource(SynthBevyRuntime {
         backend,
@@ -347,13 +398,21 @@ fn bevy_bridge_system(
     mut tempo: ResMut<SynthTempo>,
     recorder: Option<ResMut<SynthRecorderResource>>,
 ) {
-    let Some(runtime) = runtime else { return; };
-    let Some(params) = params else { return; };
+    let Some(runtime) = runtime else {
+        return;
+    };
+    let Some(params) = params else {
+        return;
+    };
     let mut recorder = recorder;
 
     for ev in events.read() {
         match ev {
-            SynthEvent::NoteOn { track, pitch, velocity } => {
+            SynthEvent::NoteOn {
+                track,
+                pitch,
+                velocity,
+            } => {
                 let _ = runtime.control_tx.try_send(ControlEvent::NoteOn {
                     pitch: *pitch,
                     velocity: *velocity,
@@ -382,7 +441,11 @@ fn bevy_bridge_system(
                     });
                 }
             }
-            SynthEvent::SetParam { track: _, param, value } => {
+            SynthEvent::SetParam {
+                track: _,
+                param,
+                value,
+            } => {
                 let _ = runtime.control_tx.try_send(ControlEvent::SetParam {
                     param: *param,
                     value: *value,
@@ -393,7 +456,9 @@ fn bevy_bridge_system(
                     let path = scene_path(&cfg.scene_dir, name);
                     match load_scene_json(&path) {
                         Ok(scene) => {
-                            pending.queue.push_back(PendingEngineAction::ApplyScene(scene));
+                            pending
+                                .queue
+                                .push_back(PendingEngineAction::ApplyScene(scene));
                         }
                         Err(e) => error!("synth-bevy: scene load failed '{}': {e}", path),
                     }
@@ -405,11 +470,13 @@ fn bevy_bridge_system(
                     match load_scene_json(&path) {
                         Ok(scene) => {
                             let resolved_mode = mode.unwrap_or(cfg.default_transition_mode);
-                            pending.queue.push_back(PendingEngineAction::StartTransition {
-                                scene,
-                                frames: (*frames).max(1),
-                                mode: resolved_mode,
-                            });
+                            pending
+                                .queue
+                                .push_back(PendingEngineAction::StartTransition {
+                                    scene,
+                                    frames: (*frames).max(1),
+                                    mode: resolved_mode,
+                                });
                         }
                         Err(e) => warn!("synth-bevy: scene transition load failed '{}': {e}", path),
                     }
@@ -419,7 +486,8 @@ fn bevy_bridge_system(
                 tempo.bpm = bpm.max(1.0);
             }
             SynthEvent::TimelineAdvance => {
-                params.force_timeline_advance
+                params
+                    .force_timeline_advance
                     .store(true, std::sync::atomic::Ordering::Relaxed);
             }
             SynthEvent::StartRecording { path } => {
@@ -464,13 +532,21 @@ fn process_pending_engine_actions(
     runtime: Option<Res<SynthBevyRuntime>>,
     mut pending: ResMut<PendingEngineActions>,
 ) {
-    let Some(runtime) = runtime else { return; };
-    let SynthBackendRuntime::Ambient(eng) = &runtime.backend else { return; };
-    let Ok(mut guard) = eng.try_lock() else { return; };
+    let Some(runtime) = runtime else {
+        return;
+    };
+    let SynthBackendRuntime::Ambient(eng) = &runtime.backend else {
+        return;
+    };
+    let Ok(mut guard) = eng.try_lock() else {
+        return;
+    };
 
     let mut iterations = 0usize;
     while iterations < 64 {
-        let Some(action) = pending.queue.pop_front() else { break; };
+        let Some(action) = pending.queue.pop_front() else {
+            break;
+        };
         iterations += 1;
         match action {
             PendingEngineAction::SetMacro { index, value } => {
@@ -481,7 +557,9 @@ fn process_pending_engine_actions(
                     if let Ok(mut slot) = transition.try_lock() {
                         *slot = None;
                     } else {
-                        pending.queue.push_front(PendingEngineAction::ApplyScene(scene));
+                        pending
+                            .queue
+                            .push_front(PendingEngineAction::ApplyScene(scene));
                         break;
                     }
                 }
@@ -492,33 +570,50 @@ fn process_pending_engine_actions(
                     clk.set_bpm(scene_bpm);
                 }
             }
-            PendingEngineAction::StartTransition { scene, frames, mode } => {
+            PendingEngineAction::StartTransition {
+                scene,
+                frames,
+                mode,
+            } => {
                 if let Some(transition) = &runtime.scene_transition {
                     if let Ok(mut slot) = transition.try_lock() {
                         // Capture current state for morph modes.
                         let from_snapshot = match mode {
-                            SceneTransitionMode::ParamMorph | SceneTransitionMode::MorphWithFade => {
-                                Some(SceneSnapshot {
-                                    global: SceneGlobal {
-                                        master_vol: guard.master_vol.value(),
-                                        shimmer_mix: guard.shimmer.mix.value(),
-                                        shimmer_amount: guard.shimmer.shimmer.value(),
-                                        shimmer_size: guard.shimmer.size.value(),
-                                        shimmer_damp: guard.shimmer.damp.value(),
-                                        shimmer_pitch: guard.shimmer.pitch.load(std::sync::atomic::Ordering::Relaxed),
-                                        crystal_mix: guard.crystal.mix.value(),
-                                        crystal_grain_ms: guard.crystal.grain_ms.value(),
-                                        crystal_scatter: guard.crystal.scatter.value(),
-                                        crystal_feedback: guard.crystal.feedback.value(),
-                                        crystal_delay_ms: guard.crystal.delay_ms.value(),
-                                        crystal_pitch: guard.crystal.pitch.load(std::sync::atomic::Ordering::Relaxed),
-                                    },
-                                    track_vol: std::array::from_fn(|i| guard.tracks[i].track_vol.value()),
-                                    track_cutoff: std::array::from_fn(|i| guard.tracks[i].cutoff.value()),
-                                    track_shimmer_send: std::array::from_fn(|i| guard.tracks[i].shimmer_send.value()),
-                                    track_crystal_send: std::array::from_fn(|i| guard.tracks[i].crystal_send.value()),
-                                })
-                            }
+                            SceneTransitionMode::ParamMorph
+                            | SceneTransitionMode::MorphWithFade => Some(SceneSnapshot {
+                                global: SceneGlobal {
+                                    master_vol: guard.master_vol.value(),
+                                    shimmer_mix: guard.shimmer.mix.value(),
+                                    shimmer_amount: guard.shimmer.shimmer.value(),
+                                    shimmer_size: guard.shimmer.size.value(),
+                                    shimmer_damp: guard.shimmer.damp.value(),
+                                    shimmer_pitch: guard
+                                        .shimmer
+                                        .pitch
+                                        .load(std::sync::atomic::Ordering::Relaxed),
+                                    crystal_mix: guard.crystal.mix.value(),
+                                    crystal_grain_ms: guard.crystal.grain_ms.value(),
+                                    crystal_scatter: guard.crystal.scatter.value(),
+                                    crystal_feedback: guard.crystal.feedback.value(),
+                                    crystal_delay_ms: guard.crystal.delay_ms.value(),
+                                    crystal_pitch: guard
+                                        .crystal
+                                        .pitch
+                                        .load(std::sync::atomic::Ordering::Relaxed),
+                                },
+                                track_vol: std::array::from_fn(|i| {
+                                    guard.tracks[i].track_vol.value()
+                                }),
+                                track_cutoff: std::array::from_fn(|i| {
+                                    guard.tracks[i].cutoff.value()
+                                }),
+                                track_shimmer_send: std::array::from_fn(|i| {
+                                    guard.tracks[i].shimmer_send.value()
+                                }),
+                                track_crystal_send: std::array::from_fn(|i| {
+                                    guard.tracks[i].crystal_send.value()
+                                }),
+                            }),
                             _ => None,
                         };
                         *slot = Some(SceneTransitionPlan {
@@ -530,7 +625,13 @@ fn process_pending_engine_actions(
                             from_snapshot,
                         });
                     } else {
-                        pending.queue.push_front(PendingEngineAction::StartTransition { scene, frames, mode });
+                        pending
+                            .queue
+                            .push_front(PendingEngineAction::StartTransition {
+                                scene,
+                                frames,
+                                mode,
+                            });
                         break;
                     }
                 } else {
@@ -571,15 +672,36 @@ fn build_ambient_stream(
     let config = device.default_output_config()?;
 
     match config.sample_format() {
-        cpal::SampleFormat::F32 => {
-            make_ambient_stream::<f32>(&device, &config.into(), engine, transition_plan, rx, sr, initial_bpm, recorder_sink)
-        }
-        cpal::SampleFormat::I16 => {
-            make_ambient_stream::<i16>(&device, &config.into(), engine, transition_plan, rx, sr, initial_bpm, recorder_sink)
-        }
-        cpal::SampleFormat::U16 => {
-            make_ambient_stream::<u16>(&device, &config.into(), engine, transition_plan, rx, sr, initial_bpm, recorder_sink)
-        }
+        cpal::SampleFormat::F32 => make_ambient_stream::<f32>(
+            &device,
+            &config.into(),
+            engine,
+            transition_plan,
+            rx,
+            sr,
+            initial_bpm,
+            recorder_sink,
+        ),
+        cpal::SampleFormat::I16 => make_ambient_stream::<i16>(
+            &device,
+            &config.into(),
+            engine,
+            transition_plan,
+            rx,
+            sr,
+            initial_bpm,
+            recorder_sink,
+        ),
+        cpal::SampleFormat::U16 => make_ambient_stream::<u16>(
+            &device,
+            &config.into(),
+            engine,
+            transition_plan,
+            rx,
+            sr,
+            initial_bpm,
+            recorder_sink,
+        ),
         _ => anyhow::bail!("Unsupported sample format"),
     }
 }
@@ -608,8 +730,10 @@ where
     // Markov generative engine — drives note events from the audio thread.
     let mut markov_engine = MarkovEngine::new(TRACK_COUNT, 0xABE_BEEF_C0DE_1234_u64);
     let mut markov_subdiv_counter: u8 = 0;
-    let mut euclidean_states: [EuclideanGen; TRACK_COUNT] = std::array::from_fn(|_| EuclideanGen::new());
-    let mut prob_table_states: [ProbTableGen; TRACK_COUNT] = std::array::from_fn(|i| ProbTableGen::new(0xDEAD_BEEF ^ i as u64));
+    let mut euclidean_states: [EuclideanGen; TRACK_COUNT] =
+        std::array::from_fn(|_| EuclideanGen::new());
+    let mut prob_table_states: [ProbTableGen; TRACK_COUNT] =
+        std::array::from_fn(|i| ProbTableGen::new(0xDEAD_BEEF ^ i as u64));
     let beat_clock_shared = BeatClockShared::new(initial_bpm);
     let beat_clock_shared_for_runtime = beat_clock_shared.clone();
     beat_clock_shared.set_playing(true);
@@ -642,9 +766,16 @@ where
 
             while let Ok(ev) = rx.try_recv() {
                 match ev {
-                    ControlEvent::NoteOn { pitch, velocity: _, track } => {
+                    ControlEvent::NoteOn {
+                        pitch,
+                        velocity: _,
+                        track,
+                    } => {
                         let ti = track as usize % TRACK_COUNT;
-                        if eng.arp_configs[ti].enabled.load(std::sync::atomic::Ordering::Relaxed) {
+                        if eng.arp_configs[ti]
+                            .enabled
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                        {
                             arp_states[ti].note_on(pitch);
                         } else {
                             let slot = voice_notes[ti]
@@ -656,14 +787,20 @@ where
                                     s
                                 });
                             voice_notes[ti][slot] = Some(pitch);
-                            eng.tracks[ti].voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
+                            eng.tracks[ti].voice_freq_targets[slot]
+                                .set(midi_hz(pitch as f64) as f32);
                             eng.tracks[ti].voice_gates[slot].set(1.0);
                         }
                     }
                     ControlEvent::NoteOff { pitch, track } => {
                         let ti = track as usize % TRACK_COUNT;
-                        if eng.arp_configs[ti].enabled.load(std::sync::atomic::Ordering::Relaxed) {
-                            let hold = eng.arp_configs[ti].hold.load(std::sync::atomic::Ordering::Relaxed);
+                        if eng.arp_configs[ti]
+                            .enabled
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                        {
+                            let hold = eng.arp_configs[ti]
+                                .hold
+                                .load(std::sync::atomic::Ordering::Relaxed);
                             arp_states[ti].note_off(pitch, hold);
                         } else {
                             for (slot, note) in voice_notes[ti].iter_mut().enumerate() {
@@ -741,7 +878,9 @@ where
                 ) == GenerativeMode::Markov;
 
                 if beat_ev.bar {
-                    eng.markov_shared.bar_epoch.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    eng.markov_shared
+                        .bar_epoch
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     for ti in 0..TRACK_COUNT {
                         euclidean_states[ti].reset();
                         prob_table_states[ti].reset();
@@ -751,12 +890,16 @@ where
                     }
                 }
                 if beat_ev.subdivision {
-                    eng.markov_shared.subdivision_epoch.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    eng.markov_shared
+                        .subdivision_epoch
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     if markov_active {
                         markov_subdiv_counter += 1;
                         let clock_div = eng.markov_shared.clock_div();
                         let step_now = markov_subdiv_counter >= clock_div;
-                        if step_now { markov_subdiv_counter = 0; }
+                        if step_now {
+                            markov_subdiv_counter = 0;
+                        }
 
                         let voice_events = if step_now {
                             markov_engine.on_subdivision(&eng.markov_shared)
@@ -777,16 +920,25 @@ where
                                 if !voice_notes[ti].iter().enumerate().any(|(s, &n)| {
                                     n == Some(pitch) && eng.tracks[ti].voice_gates[s].value() > 0.5
                                 }) {
-                                    let slot = voice_notes[ti].iter().position(|&n| n == Some(pitch))
-                                        .or_else(|| voice_notes[ti].iter().position(|n| n.is_none()))
-                                        .or_else(|| (0..synth_engine::VOICE_COUNT).find(|&s| eng.tracks[ti].voice_gates[s].value() < 0.5))
+                                    let slot = voice_notes[ti]
+                                        .iter()
+                                        .position(|&n| n == Some(pitch))
+                                        .or_else(|| {
+                                            voice_notes[ti].iter().position(|n| n.is_none())
+                                        })
+                                        .or_else(|| {
+                                            (0..synth_engine::VOICE_COUNT).find(|&s| {
+                                                eng.tracks[ti].voice_gates[s].value() < 0.5
+                                            })
+                                        })
                                         .unwrap_or_else(|| {
                                             let s = steal_idx[ti] % synth_engine::VOICE_COUNT;
                                             steal_idx[ti] += 1;
                                             s
                                         });
                                     voice_notes[ti][slot] = Some(pitch);
-                                    eng.tracks[ti].voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
+                                    eng.tracks[ti].voice_freq_targets[slot]
+                                        .set(midi_hz(pitch as f64) as f32);
                                     let vel = if vev.accent { 1.0f32 } else { 0.75 };
                                     eng.tracks[ti].voice_gates[slot].set(vel);
                                 }
@@ -798,10 +950,11 @@ where
                                 eng.generative_modes[ti].load(std::sync::atomic::Ordering::Relaxed),
                             );
                             let gen_ev = match mode {
-                                GenerativeMode::Euclidean =>
-                                    euclidean_states[ti].on_subdivision(&eng.euclidean_configs[ti]),
-                                GenerativeMode::ProbTable =>
-                                    prob_table_states[ti].on_subdivision(&eng.prob_table_configs[ti]),
+                                GenerativeMode::Euclidean => {
+                                    euclidean_states[ti].on_subdivision(&eng.euclidean_configs[ti])
+                                }
+                                GenerativeMode::ProbTable => prob_table_states[ti]
+                                    .on_subdivision(&eng.prob_table_configs[ti]),
                                 _ => continue,
                             };
                             if let Some(pitch) = gen_ev.note_off {
@@ -813,14 +966,17 @@ where
                                 }
                             }
                             if let Some(pitch) = gen_ev.note_on {
-                                let slot = voice_notes[ti].iter().position(|n| n.is_none())
+                                let slot = voice_notes[ti]
+                                    .iter()
+                                    .position(|n| n.is_none())
                                     .unwrap_or_else(|| {
                                         let s = steal_idx[ti] % synth_engine::VOICE_COUNT;
                                         steal_idx[ti] += 1;
                                         s
                                     });
                                 voice_notes[ti][slot] = Some(pitch);
-                                eng.tracks[ti].voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
+                                eng.tracks[ti].voice_freq_targets[slot]
+                                    .set(midi_hz(pitch as f64) as f32);
                                 eng.tracks[ti].voice_gates[slot].set(1.0);
                             }
                         }
@@ -853,7 +1009,8 @@ where
                                     1.0 - progress * 2.0
                                 } else {
                                     (progress - 0.5) * 2.0
-                                }.clamp(0.0, 1.0);
+                                }
+                                .clamp(0.0, 1.0);
                                 l *= gain;
                                 r *= gain;
                             }
@@ -886,22 +1043,54 @@ where
                                     let t = progress.min(1.0);
                                     let lerp = |a: f32, b: f32| a + (b - a) * t;
                                     let to = &plan.scene.global;
-                                    eng.shimmer.mix.set(lerp(from.global.shimmer_mix, to.shimmer_mix));
-                                    eng.shimmer.shimmer.set(lerp(from.global.shimmer_amount, to.shimmer_amount));
-                                    eng.shimmer.size.set(lerp(from.global.shimmer_size, to.shimmer_size));
-                                    eng.shimmer.damp.set(lerp(from.global.shimmer_damp, to.shimmer_damp));
-                                    eng.crystal.mix.set(lerp(from.global.crystal_mix, to.crystal_mix));
-                                    eng.crystal.grain_ms.set(lerp(from.global.crystal_grain_ms, to.crystal_grain_ms));
-                                    eng.crystal.scatter.set(lerp(from.global.crystal_scatter, to.crystal_scatter));
-                                    eng.crystal.feedback.set(lerp(from.global.crystal_feedback, to.crystal_feedback));
-                                    eng.crystal.delay_ms.set(lerp(from.global.crystal_delay_ms, to.crystal_delay_ms));
-                                    eng.master_vol.set(lerp(from.global.master_vol, to.master_vol));
+                                    eng.shimmer
+                                        .mix
+                                        .set(lerp(from.global.shimmer_mix, to.shimmer_mix));
+                                    eng.shimmer
+                                        .shimmer
+                                        .set(lerp(from.global.shimmer_amount, to.shimmer_amount));
+                                    eng.shimmer
+                                        .size
+                                        .set(lerp(from.global.shimmer_size, to.shimmer_size));
+                                    eng.shimmer
+                                        .damp
+                                        .set(lerp(from.global.shimmer_damp, to.shimmer_damp));
+                                    eng.crystal
+                                        .mix
+                                        .set(lerp(from.global.crystal_mix, to.crystal_mix));
+                                    eng.crystal.grain_ms.set(lerp(
+                                        from.global.crystal_grain_ms,
+                                        to.crystal_grain_ms,
+                                    ));
+                                    eng.crystal
+                                        .scatter
+                                        .set(lerp(from.global.crystal_scatter, to.crystal_scatter));
+                                    eng.crystal.feedback.set(lerp(
+                                        from.global.crystal_feedback,
+                                        to.crystal_feedback,
+                                    ));
+                                    eng.crystal.delay_ms.set(lerp(
+                                        from.global.crystal_delay_ms,
+                                        to.crystal_delay_ms,
+                                    ));
+                                    eng.master_vol
+                                        .set(lerp(from.global.master_vol, to.master_vol));
                                     for ti in 0..TRACK_COUNT {
                                         let tt = &plan.scene.tracks[ti];
-                                        eng.tracks[ti].track_vol.set(lerp(from.track_vol[ti], tt.volume));
-                                        eng.tracks[ti].cutoff.set(lerp(from.track_cutoff[ti], tt.cutoff));
-                                        eng.tracks[ti].shimmer_send.set(lerp(from.track_shimmer_send[ti], tt.shimmer_send));
-                                        eng.tracks[ti].crystal_send.set(lerp(from.track_crystal_send[ti], tt.crystal_send));
+                                        eng.tracks[ti]
+                                            .track_vol
+                                            .set(lerp(from.track_vol[ti], tt.volume));
+                                        eng.tracks[ti]
+                                            .cutoff
+                                            .set(lerp(from.track_cutoff[ti], tt.cutoff));
+                                        eng.tracks[ti].shimmer_send.set(lerp(
+                                            from.track_shimmer_send[ti],
+                                            tt.shimmer_send,
+                                        ));
+                                        eng.tracks[ti].crystal_send.set(lerp(
+                                            from.track_crystal_send[ti],
+                                            tt.crystal_send,
+                                        ));
                                     }
                                 }
                             }
@@ -912,7 +1101,8 @@ where
                                 const DIP_HALF: f32 = 0.05;
                                 let in_dip = (progress - 0.5).abs() < DIP_HALF;
                                 let dip_gain = if in_dip {
-                                    let t = ((progress - 0.5).abs() / DIP_HALF) * std::f32::consts::FRAC_PI_2;
+                                    let t = ((progress - 0.5).abs() / DIP_HALF)
+                                        * std::f32::consts::FRAC_PI_2;
                                     t.sin() // 0 at midpoint, 1 at edges of dip window
                                 } else {
                                     1.0
@@ -928,22 +1118,54 @@ where
                                     let t = progress.min(1.0);
                                     let lerp = |a: f32, b: f32| a + (b - a) * t;
                                     let to = &plan.scene.global;
-                                    eng.shimmer.mix.set(lerp(from.global.shimmer_mix, to.shimmer_mix));
-                                    eng.shimmer.shimmer.set(lerp(from.global.shimmer_amount, to.shimmer_amount));
-                                    eng.shimmer.size.set(lerp(from.global.shimmer_size, to.shimmer_size));
-                                    eng.shimmer.damp.set(lerp(from.global.shimmer_damp, to.shimmer_damp));
-                                    eng.crystal.mix.set(lerp(from.global.crystal_mix, to.crystal_mix));
-                                    eng.crystal.grain_ms.set(lerp(from.global.crystal_grain_ms, to.crystal_grain_ms));
-                                    eng.crystal.scatter.set(lerp(from.global.crystal_scatter, to.crystal_scatter));
-                                    eng.crystal.feedback.set(lerp(from.global.crystal_feedback, to.crystal_feedback));
-                                    eng.crystal.delay_ms.set(lerp(from.global.crystal_delay_ms, to.crystal_delay_ms));
-                                    eng.master_vol.set(lerp(from.global.master_vol, to.master_vol));
+                                    eng.shimmer
+                                        .mix
+                                        .set(lerp(from.global.shimmer_mix, to.shimmer_mix));
+                                    eng.shimmer
+                                        .shimmer
+                                        .set(lerp(from.global.shimmer_amount, to.shimmer_amount));
+                                    eng.shimmer
+                                        .size
+                                        .set(lerp(from.global.shimmer_size, to.shimmer_size));
+                                    eng.shimmer
+                                        .damp
+                                        .set(lerp(from.global.shimmer_damp, to.shimmer_damp));
+                                    eng.crystal
+                                        .mix
+                                        .set(lerp(from.global.crystal_mix, to.crystal_mix));
+                                    eng.crystal.grain_ms.set(lerp(
+                                        from.global.crystal_grain_ms,
+                                        to.crystal_grain_ms,
+                                    ));
+                                    eng.crystal
+                                        .scatter
+                                        .set(lerp(from.global.crystal_scatter, to.crystal_scatter));
+                                    eng.crystal.feedback.set(lerp(
+                                        from.global.crystal_feedback,
+                                        to.crystal_feedback,
+                                    ));
+                                    eng.crystal.delay_ms.set(lerp(
+                                        from.global.crystal_delay_ms,
+                                        to.crystal_delay_ms,
+                                    ));
+                                    eng.master_vol
+                                        .set(lerp(from.global.master_vol, to.master_vol));
                                     for ti in 0..TRACK_COUNT {
                                         let tt = &plan.scene.tracks[ti];
-                                        eng.tracks[ti].track_vol.set(lerp(from.track_vol[ti], tt.volume));
-                                        eng.tracks[ti].cutoff.set(lerp(from.track_cutoff[ti], tt.cutoff));
-                                        eng.tracks[ti].shimmer_send.set(lerp(from.track_shimmer_send[ti], tt.shimmer_send));
-                                        eng.tracks[ti].crystal_send.set(lerp(from.track_crystal_send[ti], tt.crystal_send));
+                                        eng.tracks[ti]
+                                            .track_vol
+                                            .set(lerp(from.track_vol[ti], tt.volume));
+                                        eng.tracks[ti]
+                                            .cutoff
+                                            .set(lerp(from.track_cutoff[ti], tt.cutoff));
+                                        eng.tracks[ti].shimmer_send.set(lerp(
+                                            from.track_shimmer_send[ti],
+                                            tt.shimmer_send,
+                                        ));
+                                        eng.tracks[ti].crystal_send.set(lerp(
+                                            from.track_crystal_send[ti],
+                                            tt.crystal_send,
+                                        ));
                                     }
                                 }
                             }
@@ -980,16 +1202,27 @@ where
     Ok((stream, beat_clock_shared_for_runtime))
 }
 
-fn build_mono_stream(state: Arc<AudioState>, rx: ControlReceiver, sr: f64, recorder_sink: RecorderSink) -> anyhow::Result<Stream> {
+fn build_mono_stream(
+    state: Arc<AudioState>,
+    rx: ControlReceiver,
+    sr: f64,
+    recorder_sink: RecorderSink,
+) -> anyhow::Result<Stream> {
     let host = cpal::default_host();
     let device = host
         .default_output_device()
         .ok_or_else(|| anyhow::anyhow!("No output device"))?;
     let config = device.default_output_config()?;
     match config.sample_format() {
-        cpal::SampleFormat::F32 => make_mono_stream::<f32>(&device, &config.into(), state, rx, sr, recorder_sink),
-        cpal::SampleFormat::I16 => make_mono_stream::<i16>(&device, &config.into(), state, rx, sr, recorder_sink),
-        cpal::SampleFormat::U16 => make_mono_stream::<u16>(&device, &config.into(), state, rx, sr, recorder_sink),
+        cpal::SampleFormat::F32 => {
+            make_mono_stream::<f32>(&device, &config.into(), state, rx, sr, recorder_sink)
+        }
+        cpal::SampleFormat::I16 => {
+            make_mono_stream::<i16>(&device, &config.into(), state, rx, sr, recorder_sink)
+        }
+        cpal::SampleFormat::U16 => {
+            make_mono_stream::<u16>(&device, &config.into(), state, rx, sr, recorder_sink)
+        }
         _ => anyhow::bail!("Unsupported sample format"),
     }
 }
@@ -1036,11 +1269,15 @@ where
                         if state.arp.enabled.load(std::sync::atomic::Ordering::Relaxed) {
                             arp.note_on(pitch);
                         } else {
-                            let slot = voice_notes.iter().position(|n| n.is_none()).unwrap_or_else(|| {
-                                let s = steal_idx % SYNTH_VOICE_COUNT;
-                                steal_idx += 1;
-                                s
-                            });
+                            let slot =
+                                voice_notes
+                                    .iter()
+                                    .position(|n| n.is_none())
+                                    .unwrap_or_else(|| {
+                                        let s = steal_idx % SYNTH_VOICE_COUNT;
+                                        steal_idx += 1;
+                                        s
+                                    });
                             voice_notes[slot] = Some(pitch);
                             state.voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
                             state.voice_gates[slot].set(1.0);
@@ -1065,6 +1302,7 @@ where
                         ParamId::LfoDepth => state.lfo_depth.set(value),
                         ParamId::MasterVolume => state.master_vol.set(value),
                         ParamId::LfoPitchMult => state.lfo_pitch_mult.set(value),
+                        _ => {}
                     },
                     ControlEvent::ChordHold { notes, .. } => arp.set_chord(&notes),
                     ControlEvent::ArpRestart { .. } => {
@@ -1103,11 +1341,14 @@ where
                     }
                 }
                 if let Some(p) = ev.note_on {
-                    let slot = voice_notes.iter().position(|n| n.is_none()).unwrap_or_else(|| {
-                        let s = steal_idx % SYNTH_VOICE_COUNT;
-                        steal_idx += 1;
-                        s
-                    });
+                    let slot = voice_notes
+                        .iter()
+                        .position(|n| n.is_none())
+                        .unwrap_or_else(|| {
+                            let s = steal_idx % SYNTH_VOICE_COUNT;
+                            steal_idx += 1;
+                            s
+                        });
                     voice_notes[slot] = Some(p);
                     state.voice_freq_targets[slot].set(midi_hz(p as f64) as f32);
                     state.voice_gates[slot].set(1.0);
@@ -1134,7 +1375,9 @@ where
                 state.voice_freqs[vi].set(smoothed_freqs[vi]);
             }
 
-            let limiter_on = state.limiter_enabled.load(std::sync::atomic::Ordering::Relaxed);
+            let limiter_on = state
+                .limiter_enabled
+                .load(std::sync::atomic::Ordering::Relaxed);
             let threshold = state.limiter_threshold.value();
 
             for frame in data.chunks_mut(channels) {
@@ -1169,7 +1412,8 @@ where
                     }
                     _ => {
                         state.lfo_pitch_mult.set(1.0);
-                        state.effective_cutoff
+                        state
+                            .effective_cutoff
                             .set((base_cutoff + lfo_out * base_cutoff * 0.5).clamp(80.0, 18000.0));
                     }
                 }
@@ -1235,8 +1479,12 @@ mod inspector {
         params: Option<Res<SynthParam>>,
         tempo: Option<Res<SynthTempo>>,
     ) {
-        let Some(params) = params else { return; };
-        let Some(tempo) = tempo else { return; };
+        let Some(params) = params else {
+            return;
+        };
+        let Some(tempo) = tempo else {
+            return;
+        };
 
         egui::Window::new("Synth Inspector")
             .default_width(300.0)
@@ -1244,91 +1492,145 @@ mod inspector {
                 ui.label(format!("Tempo: {:.1} BPM", tempo.bpm));
 
                 ui.separator();
-                egui::CollapsingHeader::new("Macros").default_open(true).show(ui, |ui| {
-                    for i in 0..ACTIVE_MACRO_KNOBS {
-                        let mut v = params.macro_value(i);
-                        if ui
-                            .add(egui::Slider::new(&mut v, 0.0..=1.0).text(format!("Macro {}", i + 1)))
-                            .changed()
+                egui::CollapsingHeader::new("Macros")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        for i in 0..ACTIVE_MACRO_KNOBS {
+                            let mut v = params.macro_value(i);
+                            if ui
+                                .add(
+                                    egui::Slider::new(&mut v, 0.0..=1.0)
+                                        .text(format!("Macro {}", i + 1)),
+                                )
+                                .changed()
+                            {
+                                params.set_macro(i, v);
+                            }
+                        }
+                    });
+
+                ui.separator();
+                egui::CollapsingHeader::new("Global Bus")
+                    .default_open(false)
+                    .show(ui, |ui| {
                         {
-                            params.set_macro(i, v);
+                            let mut v = params.master_vol.value();
+                            if ui
+                                .add(egui::Slider::new(&mut v, 0.0..=1.0).text("Master Vol"))
+                                .changed()
+                            {
+                                params.master_vol.set(v);
+                            }
                         }
-                    }
-                });
+                        ui.label("Shimmer");
+                        {
+                            let mut v = params.shimmer_mix.value();
+                            if ui
+                                .add(egui::Slider::new(&mut v, 0.0..=0.80).text("Mix"))
+                                .changed()
+                            {
+                                params.shimmer_mix.set(v);
+                            }
+                        }
+                        {
+                            let mut v = params.shimmer_size.value();
+                            if ui
+                                .add(egui::Slider::new(&mut v, 0.0..=1.0).text("Size"))
+                                .changed()
+                            {
+                                params.shimmer_size.set(v);
+                            }
+                        }
+                        {
+                            let mut v = params.shimmer_amount.value();
+                            if ui
+                                .add(egui::Slider::new(&mut v, 0.0..=1.0).text("Amount"))
+                                .changed()
+                            {
+                                params.shimmer_amount.set(v);
+                            }
+                        }
+                        ui.label("Crystal");
+                        {
+                            let mut v = params.crystal_mix.value();
+                            if ui
+                                .add(egui::Slider::new(&mut v, 0.0..=0.45).text("Mix"))
+                                .changed()
+                            {
+                                params.crystal_mix.set(v);
+                            }
+                        }
+                        {
+                            let mut v = params.crystal_feedback.value();
+                            if ui
+                                .add(egui::Slider::new(&mut v, 0.0..=0.65).text("Feedback"))
+                                .changed()
+                            {
+                                params.crystal_feedback.set(v);
+                            }
+                        }
+                    });
 
                 ui.separator();
-                egui::CollapsingHeader::new("Global Bus").default_open(false).show(ui, |ui| {
-                    {
-                        let mut v = params.master_vol.value();
-                        if ui.add(egui::Slider::new(&mut v, 0.0..=1.0).text("Master Vol")).changed() {
-                            params.master_vol.set(v);
+                egui::CollapsingHeader::new("Tracks")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        for i in 0..TRACK_COUNT {
+                            egui::CollapsingHeader::new(format!("Track {}", i + 1)).show(
+                                ui,
+                                |ui| {
+                                    {
+                                        let mut v = params.track_vol[i].value();
+                                        if ui
+                                            .add(
+                                                egui::Slider::new(&mut v, 0.0..=1.0).text("Volume"),
+                                            )
+                                            .changed()
+                                        {
+                                            params.track_vol[i].set(v);
+                                        }
+                                    }
+                                    {
+                                        let mut v = params.track_cutoff[i].value();
+                                        if ui
+                                            .add(
+                                                egui::Slider::new(&mut v, 80.0..=18_000.0)
+                                                    .text("Cutoff")
+                                                    .logarithmic(true),
+                                            )
+                                            .changed()
+                                        {
+                                            params.track_cutoff[i].set(v);
+                                        }
+                                    }
+                                    {
+                                        let mut v = params.track_shimmer_send[i].value();
+                                        if ui
+                                            .add(
+                                                egui::Slider::new(&mut v, 0.0..=1.0)
+                                                    .text("Shimmer Send"),
+                                            )
+                                            .changed()
+                                        {
+                                            params.track_shimmer_send[i].set(v);
+                                        }
+                                    }
+                                    {
+                                        let mut v = params.track_crystal_send[i].value();
+                                        if ui
+                                            .add(
+                                                egui::Slider::new(&mut v, 0.0..=1.0)
+                                                    .text("Crystal Send"),
+                                            )
+                                            .changed()
+                                        {
+                                            params.track_crystal_send[i].set(v);
+                                        }
+                                    }
+                                },
+                            );
                         }
-                    }
-                    ui.label("Shimmer");
-                    {
-                        let mut v = params.shimmer_mix.value();
-                        if ui.add(egui::Slider::new(&mut v, 0.0..=0.80).text("Mix")).changed() {
-                            params.shimmer_mix.set(v);
-                        }
-                    }
-                    {
-                        let mut v = params.shimmer_size.value();
-                        if ui.add(egui::Slider::new(&mut v, 0.0..=1.0).text("Size")).changed() {
-                            params.shimmer_size.set(v);
-                        }
-                    }
-                    {
-                        let mut v = params.shimmer_amount.value();
-                        if ui.add(egui::Slider::new(&mut v, 0.0..=1.0).text("Amount")).changed() {
-                            params.shimmer_amount.set(v);
-                        }
-                    }
-                    ui.label("Crystal");
-                    {
-                        let mut v = params.crystal_mix.value();
-                        if ui.add(egui::Slider::new(&mut v, 0.0..=0.45).text("Mix")).changed() {
-                            params.crystal_mix.set(v);
-                        }
-                    }
-                    {
-                        let mut v = params.crystal_feedback.value();
-                        if ui.add(egui::Slider::new(&mut v, 0.0..=0.65).text("Feedback")).changed() {
-                            params.crystal_feedback.set(v);
-                        }
-                    }
-                });
-
-                ui.separator();
-                egui::CollapsingHeader::new("Tracks").default_open(false).show(ui, |ui| {
-                    for i in 0..TRACK_COUNT {
-                        egui::CollapsingHeader::new(format!("Track {}", i + 1)).show(ui, |ui| {
-                            {
-                                let mut v = params.track_vol[i].value();
-                                if ui.add(egui::Slider::new(&mut v, 0.0..=1.0).text("Volume")).changed() {
-                                    params.track_vol[i].set(v);
-                                }
-                            }
-                            {
-                                let mut v = params.track_cutoff[i].value();
-                                if ui.add(egui::Slider::new(&mut v, 80.0..=18_000.0).text("Cutoff").logarithmic(true)).changed() {
-                                    params.track_cutoff[i].set(v);
-                                }
-                            }
-                            {
-                                let mut v = params.track_shimmer_send[i].value();
-                                if ui.add(egui::Slider::new(&mut v, 0.0..=1.0).text("Shimmer Send")).changed() {
-                                    params.track_shimmer_send[i].set(v);
-                                }
-                            }
-                            {
-                                let mut v = params.track_crystal_send[i].value();
-                                if ui.add(egui::Slider::new(&mut v, 0.0..=1.0).text("Crystal Send")).changed() {
-                                    params.track_crystal_send[i].set(v);
-                                }
-                            }
-                        });
-                    }
-                });
+                    });
             });
     }
 }

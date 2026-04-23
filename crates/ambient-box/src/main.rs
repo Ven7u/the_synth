@@ -5,8 +5,8 @@
 
 #![allow(clippy::precedence)]
 
-mod recorder;
 mod midi_recorder;
+mod recorder;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample, Stream};
@@ -15,22 +15,17 @@ use fundsp::prelude::midi_hz;
 use std::sync::Arc;
 
 use ambient_engine::{
-    ACTIVE_MACRO_KNOBS, AmbientEngine, AmbientPatch, MacroSetKind, Scene, MACRO_COUNT, TRACK_COUNT,
-    VOICE_COUNT, load_scene_json, save_scene_json,
-    BeatClock, BeatClockShared,
-    EuclideanGen, GenerativeMode, ProbTableGen,
-    MarkovEngine,
-    VoiceRole, Scale as MarkovScale, RhythmicState,
-    HarmonicFunction,
-    N_MOODS, LAUNCHPAD_COLS,
-    HARMONIC_STATES, RHYTHMIC_STATES, MELODIC_STATES,
-    MOOD_CALM, MOOD_TENSE, MOOD_DARK, MOOD_EUPHORIC, MOOD_COSMIC, MOOD_GRAVITY,
+    load_scene_json, save_scene_json, AmbientEngine, AmbientPatch, BeatClock, BeatClockShared,
+    EuclideanGen, GenerativeMode, HarmonicFunction, MacroSetKind, MarkovEngine, ProbTableGen,
+    RhythmicState, Scale as MarkovScale, Scene, VoiceRole, ACTIVE_MACRO_KNOBS, HARMONIC_STATES,
+    LAUNCHPAD_COLS, MACRO_COUNT, MELODIC_STATES, MOOD_CALM, MOOD_COSMIC, MOOD_DARK, MOOD_EUPHORIC,
+    MOOD_GRAVITY, MOOD_TENSE, N_MOODS, RHYTHMIC_STATES, TRACK_COUNT, VOICE_COUNT,
 };
-use synth_engine::arp::{ArpMode, ArpState, ClockDiv, Scale, ScaleWalker};
-use synth_control::{ControlEvent, ControlSender, make_control_channel};
-use synth_control::midi::{MidiEngine, MidiEvent};
-use synth_common::{ClockDivision, RestartBatch, SyncTransport};
 use std::sync::atomic::Ordering;
+use synth_common::{ClockDivision, RestartBatch, SyncTransport};
+use synth_control::midi::{MidiEngine, MidiEvent};
+use synth_control::{make_control_channel, ControlEvent, ControlSender};
+use synth_engine::arp::{ArpMode, ArpState, ClockDiv, Scale, ScaleWalker};
 
 #[derive(Clone)]
 struct PatchEntry {
@@ -56,7 +51,14 @@ fn main() -> eframe::Result {
 
     let recorder_sink: RecorderSink = Arc::new(std::sync::Mutex::new(None));
     let midi_sink_shared: MidiSinkShared = Arc::new(std::sync::Mutex::new(None));
-    let (beat_clock_shared, _stream) = build_stream(Arc::clone(&engine), rx, sr, Arc::clone(&recorder_sink), Arc::clone(&midi_sink_shared)).expect("Failed to build audio stream");
+    let (beat_clock_shared, _stream) = build_stream(
+        Arc::clone(&engine),
+        rx,
+        sr,
+        Arc::clone(&recorder_sink),
+        Arc::clone(&midi_sink_shared),
+    )
+    .expect("Failed to build audio stream");
     _stream.play().expect("Failed to start audio stream");
 
     let options = eframe::NativeOptions {
@@ -70,9 +72,17 @@ fn main() -> eframe::Result {
         "Ambient Box",
         options,
         Box::new(move |cc| {
-            let last_scene = cc.storage
-                .and_then(|s| s.get_string("last_scene"));
-            Ok(Box::new(AmbientBoxApp::new(engine, tx, _stream, beat_clock_shared, last_scene, recorder_sink, midi_sink_shared, sr as u32)))
+            let last_scene = cc.storage.and_then(|s| s.get_string("last_scene"));
+            Ok(Box::new(AmbientBoxApp::new(
+                engine,
+                tx,
+                _stream,
+                beat_clock_shared,
+                last_scene,
+                recorder_sink,
+                midi_sink_shared,
+                sr as u32,
+            )))
         }),
     )
 }
@@ -100,14 +110,39 @@ fn build_stream(
     midi_sink: MidiSinkShared,
 ) -> anyhow::Result<(BeatClockShared, Stream)> {
     let host = cpal::default_host();
-    let device = host.default_output_device()
+    let device = host
+        .default_output_device()
         .ok_or_else(|| anyhow::anyhow!("No output device"))?;
     let config = device.default_output_config()?;
 
     let (shared, stream) = match config.sample_format() {
-        cpal::SampleFormat::F32 => make_stream::<f32>(&device, &config.into(), engine, rx, sr, recorder_sink, midi_sink)?,
-        cpal::SampleFormat::I16 => make_stream::<i16>(&device, &config.into(), engine, rx, sr, recorder_sink, midi_sink)?,
-        cpal::SampleFormat::U16 => make_stream::<u16>(&device, &config.into(), engine, rx, sr, recorder_sink, midi_sink)?,
+        cpal::SampleFormat::F32 => make_stream::<f32>(
+            &device,
+            &config.into(),
+            engine,
+            rx,
+            sr,
+            recorder_sink,
+            midi_sink,
+        )?,
+        cpal::SampleFormat::I16 => make_stream::<i16>(
+            &device,
+            &config.into(),
+            engine,
+            rx,
+            sr,
+            recorder_sink,
+            midi_sink,
+        )?,
+        cpal::SampleFormat::U16 => make_stream::<u16>(
+            &device,
+            &config.into(),
+            engine,
+            rx,
+            sr,
+            recorder_sink,
+            midi_sink,
+        )?,
         _ => anyhow::bail!("Unsupported sample format"),
     };
     Ok((shared, stream))
@@ -118,8 +153,7 @@ fn fill_buffer_with_silence<T>(
     channels: usize,
     last_out_l: &mut f32,
     last_out_r: &mut f32,
-)
-where
+) where
     T: SizedSample + FromSample<f32>,
 {
     let mut l = *last_out_l;
@@ -163,12 +197,14 @@ where
     let mut last_out_r: f32 = 0.0;
 
     // Per-track arpeggiator and scale walker (audio-thread state only)
-    let mut arp_states:    [ArpState;    TRACK_COUNT] = std::array::from_fn(|_| ArpState::new());
+    let mut arp_states: [ArpState; TRACK_COUNT] = std::array::from_fn(|_| ArpState::new());
     let mut walker_states: [ScaleWalker; TRACK_COUNT] = std::array::from_fn(|_| ScaleWalker::new());
 
     // Per-track generative pattern generators (Phase 8.2)
-    let mut euclidean_states: [EuclideanGen; TRACK_COUNT] = std::array::from_fn(|_| EuclideanGen::new());
-    let mut prob_table_states: [ProbTableGen; TRACK_COUNT] = std::array::from_fn(|i| ProbTableGen::new(0xDEAD_BEEF ^ i as u64));
+    let mut euclidean_states: [EuclideanGen; TRACK_COUNT] =
+        std::array::from_fn(|_| EuclideanGen::new());
+    let mut prob_table_states: [ProbTableGen; TRACK_COUNT] =
+        std::array::from_fn(|i| ProbTableGen::new(0xDEAD_BEEF ^ i as u64));
     // Global Markov engine (Phase 8.3) — audio-thread state only.
     let mut markov_engine = MarkovEngine::new(TRACK_COUNT, 0xC0DE_CAFE_BEEF_1234);
     // Clock division counter: Markov steps only fire every N subdivisions.
@@ -183,9 +219,9 @@ where
 
     // Debug counters (audio-thread local, printed to stderr periodically).
     let mut dbg_callback_count: u64 = 0;
-    let mut dbg_steal_count:    [u32; TRACK_COUNT] = [0; TRACK_COUNT];
-    let mut dbg_miss_noteoff:   [u32; TRACK_COUNT] = [0; TRACK_COUNT];
-    let mut dbg_nan_count:      u32 = 0;
+    let mut dbg_steal_count: [u32; TRACK_COUNT] = [0; TRACK_COUNT];
+    let mut dbg_miss_noteoff: [u32; TRACK_COUNT] = [0; TRACK_COUNT];
+    let mut dbg_nan_count: u32 = 0;
 
     let stream = device.build_output_stream(
         config,
@@ -549,10 +585,10 @@ where
 // ---------------------------------------------------------------------------
 
 struct AmbientBoxApp {
-    engine:       Arc<std::sync::Mutex<AmbientEngine>>,
-    control:      ControlSender,
-    _stream:      Stream,
-    midi:         MidiEngine,
+    engine: Arc<std::sync::Mutex<AmbientEngine>>,
+    control: ControlSender,
+    _stream: Stream,
+    midi: MidiEngine,
     active_track: usize,
     beat_clock_shared: BeatClockShared,
 
@@ -561,21 +597,21 @@ struct AmbientBoxApp {
     piano_octave: i32,
 
     // Per-track arp UI state (mirrors AtomicU8 config in engine)
-    arp_bpm:      [f32; TRACK_COUNT],
-    arp_mode:     [u8;  TRACK_COUNT],
-    arp_division: [u8;  TRACK_COUNT],
-    arp_oct:      [u8;  TRACK_COUNT],
-    arp_gate:     [f32; TRACK_COUNT],
+    arp_bpm: [f32; TRACK_COUNT],
+    arp_mode: [u8; TRACK_COUNT],
+    arp_division: [u8; TRACK_COUNT],
+    arp_oct: [u8; TRACK_COUNT],
+    arp_gate: [f32; TRACK_COUNT],
 
     // Per-track scale walker UI state
-    walker_bpm:   [f32; TRACK_COUNT],
-    walker_scale: [u8;  TRACK_COUNT],
-    walker_root:  [u8;  TRACK_COUNT],
-    walker_oct:   [u8;  TRACK_COUNT],
-    walker_div:   [u8;  TRACK_COUNT],
-    walker_gate:  [f32; TRACK_COUNT],
+    walker_bpm: [f32; TRACK_COUNT],
+    walker_scale: [u8; TRACK_COUNT],
+    walker_root: [u8; TRACK_COUNT],
+    walker_oct: [u8; TRACK_COUNT],
+    walker_div: [u8; TRACK_COUNT],
+    walker_gate: [f32; TRACK_COUNT],
     arp_enabled_ui: [bool; TRACK_COUNT],
-    arp_hold_ui:    [bool; TRACK_COUNT],
+    arp_hold_ui: [bool; TRACK_COUNT],
     walker_enabled_ui: [bool; TRACK_COUNT],
     transport_sync: SyncTransport<TRACK_COUNT>,
 
@@ -622,21 +658,21 @@ struct AmbientBoxApp {
     timeline_status: Option<ambient_engine::TimelineStatus>,
 
     // Global shimmer UI state
-    shimmer_on:    bool,
-    shimmer_mix:   f32,
-    shimmer_amt:   f32,
-    shimmer_size:  f32,
-    shimmer_damp:  f32,
+    shimmer_on: bool,
+    shimmer_mix: f32,
+    shimmer_amt: f32,
+    shimmer_size: f32,
+    shimmer_damp: f32,
     shimmer_pitch: u8,
 
     // Global crystallizer UI state
-    crystal_on:       bool,
-    crystal_mix:      f32,
+    crystal_on: bool,
+    crystal_mix: f32,
     crystal_grain_ms: f32,
-    crystal_scatter:  f32,
+    crystal_scatter: f32,
     crystal_feedback: f32,
     crystal_delay_ms: f32,
-    crystal_pitch:    u8,
+    crystal_pitch: u8,
 
     // Macro + scene UI state (Phase 6)
     macro_ui_values: [f32; MACRO_COUNT],
@@ -670,20 +706,20 @@ struct AmbientBoxApp {
     swing_ui: f32, // 0–50 (maps to 0.0–0.5 in BeatClockShared)
 
     // LFO per-voice UI state
-    lfo_enabled_ui:  [bool; TRACK_COUNT],
-    lfo_depth_ui:    [f32;  TRACK_COUNT],
-    lfo_dest_ui:     [u8;   TRACK_COUNT],  // 0=Pitch 1=Filter 2=Amp
-    lfo_shape_ui:    [u8;   TRACK_COUNT],  // 0=Sin 1=Tri 2=Saw
-    lfo_sync_ui:     [bool; TRACK_COUNT],
-    lfo_division_ui: [u8;   TRACK_COUNT],  // ClockDivision index
-    lfo_rate_ui:     [f32;  TRACK_COUNT],  // Hz when free
+    lfo_enabled_ui: [bool; TRACK_COUNT],
+    lfo_depth_ui: [f32; TRACK_COUNT],
+    lfo_dest_ui: [u8; TRACK_COUNT],  // 0=Pitch 1=Filter 2=Amp
+    lfo_shape_ui: [u8; TRACK_COUNT], // 0=Sin 1=Tri 2=Saw
+    lfo_sync_ui: [bool; TRACK_COUNT],
+    lfo_division_ui: [u8; TRACK_COUNT], // ClockDivision index
+    lfo_rate_ui: [f32; TRACK_COUNT],    // Hz when free
 
     // Motif lock per-voice UI state
-    motif_lock_ui:   [bool; TRACK_COUNT],
-    motif_length_ui: [u8;   TRACK_COUNT],  // 4/8/16/32
+    motif_lock_ui: [bool; TRACK_COUNT],
+    motif_length_ui: [u8; TRACK_COUNT], // 4/8/16/32
 
     // Crystal BPM-sync
-    crystal_delay_sync_ui:     bool,
+    crystal_delay_sync_ui: bool,
     crystal_delay_division_ui: u8, // ClockDivision index
 
     // WAV recording
@@ -698,12 +734,19 @@ struct AmbientBoxApp {
 
 impl AmbientBoxApp {
     fn collect_patch_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return; };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for ent in entries.flatten() {
             let p = ent.path();
             if p.is_dir() {
                 Self::collect_patch_files(&p, out);
-            } else if p.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("json")).unwrap_or(false) {
+            } else if p
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("json"))
+                .unwrap_or(false)
+            {
                 out.push(p);
             }
         }
@@ -734,10 +777,16 @@ impl AmbientBoxApp {
     fn list_scene_files() -> Vec<String> {
         let mut out = Vec::new();
         let dir = std::path::Path::new("scenes");
-        let Ok(entries) = std::fs::read_dir(dir) else { return out; };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return out;
+        };
         for ent in entries.flatten() {
             let p = ent.path();
-            if p.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("json")).unwrap_or(false) {
+            if p.extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("json"))
+                .unwrap_or(false)
+            {
                 if let Some(s) = p.file_stem().and_then(|s| s.to_str()) {
                     out.push(s.to_string());
                 }
@@ -750,7 +799,9 @@ impl AmbientBoxApp {
     fn scene_preview_for_name(name: &str) -> [String; TRACK_COUNT] {
         let mut out: [String; TRACK_COUNT] = std::array::from_fn(|_| "—".to_string());
         let path = format!("scenes/{name}.json");
-        let Ok(scene) = load_scene_json(&path) else { return out; };
+        let Ok(scene) = load_scene_json(&path) else {
+            return out;
+        };
         for (i, t) in scene.tracks.iter().enumerate() {
             let nm = t.patch.name.trim();
             out[i] = if !nm.is_empty() {
@@ -792,17 +843,17 @@ impl AmbientBoxApp {
             beat_clock_shared,
             held_midi: std::array::from_fn(|_| std::collections::HashSet::new()),
             piano_octave: 4,
-            arp_bpm:      [120.0; TRACK_COUNT],
-            arp_mode:     [0;     TRACK_COUNT],
-            arp_division: [1;     TRACK_COUNT],
-            arp_oct:      [1;     TRACK_COUNT],
-            arp_gate:     [0.7;   TRACK_COUNT],
-            walker_bpm:   [120.0; TRACK_COUNT],
-            walker_scale: [0;     TRACK_COUNT],
-            walker_root:  [60;    TRACK_COUNT],
-            walker_oct:   [2;     TRACK_COUNT],
-            walker_div:   [1;     TRACK_COUNT],
-            walker_gate:  [0.6;   TRACK_COUNT],
+            arp_bpm: [120.0; TRACK_COUNT],
+            arp_mode: [0; TRACK_COUNT],
+            arp_division: [1; TRACK_COUNT],
+            arp_oct: [1; TRACK_COUNT],
+            arp_gate: [0.7; TRACK_COUNT],
+            walker_bpm: [120.0; TRACK_COUNT],
+            walker_scale: [0; TRACK_COUNT],
+            walker_root: [60; TRACK_COUNT],
+            walker_oct: [2; TRACK_COUNT],
+            walker_div: [1; TRACK_COUNT],
+            walker_gate: [0.6; TRACK_COUNT],
             arp_enabled_ui: [false; TRACK_COUNT],
             arp_hold_ui: [false; TRACK_COUNT],
             walker_enabled_ui: [false; TRACK_COUNT],
@@ -847,19 +898,19 @@ impl AmbientBoxApp {
             timeline: ambient_engine::Timeline::inactive(),
             timeline_last_epoch: 0,
             timeline_status: None,
-            shimmer_on:    false,
-            shimmer_mix:   0.4,
-            shimmer_amt:   0.5,
-            shimmer_size:  0.6,
-            shimmer_damp:  0.5,
+            shimmer_on: false,
+            shimmer_mix: 0.4,
+            shimmer_amt: 0.5,
+            shimmer_size: 0.6,
+            shimmer_damp: 0.5,
             shimmer_pitch: 1,
-            crystal_on:       false,
-            crystal_mix:      0.35,
+            crystal_on: false,
+            crystal_mix: 0.35,
             crystal_grain_ms: 120.0,
-            crystal_scatter:  0.25,
+            crystal_scatter: 0.25,
             crystal_feedback: 0.35,
             crystal_delay_ms: 260.0,
-            crystal_pitch:    2,
+            crystal_pitch: 2,
             macro_ui_values: [0.0; MACRO_COUNT],
             macro_set_ui: MacroSetKind::AmbientCore,
             scene_name: "ambient_01".to_string(),
@@ -885,16 +936,16 @@ impl AmbientBoxApp {
             pending_scene_load_path: last_scene.map(|name| format!("scenes/{name}.json")),
             pending_scene_load: None,
             swing_ui: 0.0,
-            lfo_enabled_ui:  [false; TRACK_COUNT],
-            lfo_depth_ui:    [0.0;   TRACK_COUNT],
-            lfo_dest_ui:     [1;     TRACK_COUNT], // Filter
-            lfo_shape_ui:    [0;     TRACK_COUNT], // Sin
-            lfo_sync_ui:     [false; TRACK_COUNT],
-            lfo_division_ui: [3;     TRACK_COUNT], // Eighth
-            lfo_rate_ui:     [2.0;   TRACK_COUNT],
-            motif_lock_ui:   [false; TRACK_COUNT],
-            motif_length_ui: [16;    TRACK_COUNT],
-            crystal_delay_sync_ui:     false,
+            lfo_enabled_ui: [false; TRACK_COUNT],
+            lfo_depth_ui: [0.0; TRACK_COUNT],
+            lfo_dest_ui: [1; TRACK_COUNT],  // Filter
+            lfo_shape_ui: [0; TRACK_COUNT], // Sin
+            lfo_sync_ui: [false; TRACK_COUNT],
+            lfo_division_ui: [3; TRACK_COUNT], // Eighth
+            lfo_rate_ui: [2.0; TRACK_COUNT],
+            motif_lock_ui: [false; TRACK_COUNT],
+            motif_length_ui: [16; TRACK_COUNT],
+            crystal_delay_sync_ui: false,
             crystal_delay_division_ui: 8, // DottedEighth
             recorder_sink,
             rec_status: String::new(),
@@ -934,10 +985,14 @@ impl AmbientBoxApp {
     fn dispatch_restarts(&self, batch: RestartBatch<TRACK_COUNT>) {
         for ti in 0..TRACK_COUNT {
             if batch.arp[ti] {
-                let _ = self.control.try_send(ControlEvent::ArpRestart { track: ti as u8 });
+                let _ = self
+                    .control
+                    .try_send(ControlEvent::ArpRestart { track: ti as u8 });
             }
             if batch.walker[ti] {
-                let _ = self.control.try_send(ControlEvent::WalkerRestart { track: ti as u8 });
+                let _ = self
+                    .control
+                    .try_send(ControlEvent::WalkerRestart { track: ti as u8 });
             }
         }
     }
@@ -947,15 +1002,22 @@ impl AmbientBoxApp {
     fn auto_load_ambient_patches(&mut self) {
         // (track_index, preferred_name, fallback_category)
         let assignments: [(usize, &str, &str); TRACK_COUNT] = [
-            (0, "Ambient Bass",     "Ambient"),
-            (1, "Ambient Pad",      "Ambient"),
-            (2, "Eno Space",        "Ambient"),
-            (3, "Ambient Texture",  "Ambient"),
+            (0, "Ambient Bass", "Ambient"),
+            (1, "Ambient Pad", "Ambient"),
+            (2, "Eno Space", "Ambient"),
+            (3, "Ambient Texture", "Ambient"),
         ];
         for (track, preferred, fallback_cat) in assignments {
             // Try preferred name first, then fallback category
-            let idx = self.patch_library.iter().position(|p| p.name == preferred)
-                .or_else(|| self.patch_library.iter().position(|p| p.category == fallback_cat));
+            let idx = self
+                .patch_library
+                .iter()
+                .position(|p| p.name == preferred)
+                .or_else(|| {
+                    self.patch_library
+                        .iter()
+                        .position(|p| p.category == fallback_cat)
+                });
             if let Some(idx) = idx {
                 self.track_patch_choice[track] = idx;
                 self.pending_patch_load.push_back((track, idx));
@@ -970,13 +1032,17 @@ impl AmbientBoxApp {
 
     fn schedule_or_restart_arp(&mut self, track: usize) {
         if self.transport_sync.schedule_or_restart_arp(track) {
-            let _ = self.control.try_send(ControlEvent::ArpRestart { track: track as u8 });
+            let _ = self
+                .control
+                .try_send(ControlEvent::ArpRestart { track: track as u8 });
         }
     }
 
     fn schedule_or_restart_walker(&mut self, track: usize) {
         if self.transport_sync.schedule_or_restart_walker(track) {
-            let _ = self.control.try_send(ControlEvent::WalkerRestart { track: track as u8 });
+            let _ = self
+                .control
+                .try_send(ControlEvent::WalkerRestart { track: track as u8 });
         }
     }
 
@@ -1008,10 +1074,7 @@ fn draw_heatmap(
     let total_w = label_w + n as f32 * (cell + gap) - gap;
     let total_h = label_h + n as f32 * (cell + gap) - gap;
 
-    let (resp, painter) = ui.allocate_painter(
-        egui::vec2(total_w, total_h),
-        egui::Sense::hover(),
-    );
+    let (resp, painter) = ui.allocate_painter(egui::vec2(total_w, total_h), egui::Sense::hover());
     let origin = resp.rect.min;
 
     // Column labels across the top
@@ -1056,7 +1119,11 @@ fn draw_heatmap(
             // Value text for cells above ~8% (smaller ones are too cluttered)
             if p > 0.07 {
                 let luma = 0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32;
-                let txt_color = if luma > 100.0 { egui::Color32::BLACK } else { egui::Color32::from_gray(200) };
+                let txt_color = if luma > 100.0 {
+                    egui::Color32::BLACK
+                } else {
+                    egui::Color32::from_gray(200)
+                };
                 painter.text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
@@ -1069,9 +1136,19 @@ fn draw_heatmap(
             // Tooltip on hover
             if let Some(pos) = ui.ctx().pointer_hover_pos() {
                 if rect.contains(pos) {
-                    egui::show_tooltip_at_pointer(ui.ctx(), ui.layer_id(), egui::Id::new("hm_tip").with(i).with(j), |ui| {
-                        ui.label(format!("{} → {}: {:.1}%", row_labels[i], col_labels[j], p * 100.0));
-                    });
+                    egui::show_tooltip_at_pointer(
+                        ui.ctx(),
+                        ui.layer_id(),
+                        egui::Id::new("hm_tip").with(i).with(j),
+                        |ui| {
+                            ui.label(format!(
+                                "{} → {}: {:.1}%",
+                                row_labels[i],
+                                col_labels[j],
+                                p * 100.0
+                            ));
+                        },
+                    );
                 }
             }
         }
@@ -1084,15 +1161,19 @@ fn draw_heatmap(
 
 fn voice_role_color(role: VoiceRole) -> egui::Color32 {
     match role {
-        VoiceRole::Bass    => egui::Color32::from_rgb(255, 160, 60),
-        VoiceRole::Pad     => egui::Color32::from_rgb(80, 160, 255),
-        VoiceRole::Melody  => egui::Color32::from_rgb(60, 220, 120),
+        VoiceRole::Bass => egui::Color32::from_rgb(255, 160, 60),
+        VoiceRole::Pad => egui::Color32::from_rgb(80, 160, 255),
+        VoiceRole::Melody => egui::Color32::from_rgb(60, 220, 120),
         VoiceRole::Texture => egui::Color32::from_rgb(200, 100, 255),
-        VoiceRole::Pulse   => egui::Color32::from_rgb(255, 80, 80),
+        VoiceRole::Pulse => egui::Color32::from_rgb(255, 80, 80),
     }
 }
 
-fn launchpad_cell_color(state: RhythmicState, base: egui::Color32, is_current: bool) -> egui::Color32 {
+fn launchpad_cell_color(
+    state: RhythmicState,
+    base: egui::Color32,
+    is_current: bool,
+) -> egui::Color32 {
     let dim = |c: egui::Color32, factor: f32| -> egui::Color32 {
         egui::Color32::from_rgb(
             (c.r() as f32 * factor) as u8,
@@ -1101,8 +1182,8 @@ fn launchpad_cell_color(state: RhythmicState, base: egui::Color32, is_current: b
         )
     };
     let col = match state {
-        RhythmicState::Rest   => egui::Color32::from_gray(20),
-        RhythmicState::Hold   => egui::Color32::from_gray(60),
+        RhythmicState::Rest => egui::Color32::from_gray(20),
+        RhythmicState::Hold => egui::Color32::from_gray(60),
         RhythmicState::Single => base,
         RhythmicState::Double => egui::Color32::WHITE,
         RhythmicState::Accent => dim(base, 1.4f32.min(2.0)),
@@ -1121,10 +1202,18 @@ fn launchpad_cell_color(state: RhythmicState, base: egui::Color32, is_current: b
 
 // Keyboard note mapping (same as the_synth)
 const KEY_MAP: &[(egui::Key, i32)] = &[
-    (egui::Key::A, 0), (egui::Key::W, 1), (egui::Key::S, 2),
-    (egui::Key::E, 3), (egui::Key::D, 4), (egui::Key::F, 5),
-    (egui::Key::T, 6), (egui::Key::G, 7), (egui::Key::Y, 8),
-    (egui::Key::H, 9), (egui::Key::U, 10), (egui::Key::J, 11),
+    (egui::Key::A, 0),
+    (egui::Key::W, 1),
+    (egui::Key::S, 2),
+    (egui::Key::E, 3),
+    (egui::Key::D, 4),
+    (egui::Key::F, 5),
+    (egui::Key::T, 6),
+    (egui::Key::G, 7),
+    (egui::Key::Y, 8),
+    (egui::Key::H, 9),
+    (egui::Key::U, 10),
+    (egui::Key::J, 11),
     (egui::Key::K, 12),
 ];
 

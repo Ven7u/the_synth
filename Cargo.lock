@@ -7204,6 +7204,7 @@ dependencies = [
  "anyhow",
  "crossbeam-channel",
  "midir",
+ "serde",
 ]
 
 [[package]]
@@ -7218,7 +7219,10 @@ name = "synth-engine"
 version = "0.1.0"
 dependencies = [
  "fundsp",
+ "serde",
+ "serde_json",
  "synth-common",
+ "synth-control",
  "synth-dsp",
 ]
 

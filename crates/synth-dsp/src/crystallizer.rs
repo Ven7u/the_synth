@@ -29,18 +29,20 @@ pub struct CrystallizerShared {
 impl CrystallizerShared {
     pub fn new() -> Self {
         Self {
-            mix:      shared(0.0),
+            mix: shared(0.0),
             grain_ms: shared(120.0),
-            scatter:  shared(0.25),
+            scatter: shared(0.25),
             feedback: shared(0.35),
             delay_ms: shared(260.0),
-            pitch:    Arc::new(AtomicU8::new(2)), // 2.0x default
+            pitch: Arc::new(AtomicU8::new(2)), // 2.0x default
         }
     }
 }
 
 impl Default for CrystallizerShared {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// 2.5 seconds at 44.1kHz, enough for ambient grain offset ranges.
@@ -209,12 +211,19 @@ mod tests {
         let mut max_out: f32 = 0.0;
         for i in 0..three_min {
             // Periodic short bursts every 4 bars (~12.6s at 76 BPM) — like chord notes
-            let inp = if i % ((SR * 12.6) as usize) < (SR * 0.05) as usize { 0.4 } else { 0.0 };
+            let inp = if i % ((SR * 12.6) as usize) < (SR * 0.05) as usize {
+                0.4
+            } else {
+                0.0
+            };
             let x = c.tick(inp, 180.0, 0.55, 0.62, 394.0, 1);
             assert!(x.is_finite(), "NaN/Inf at sample {i}");
             max_out = max_out.max(x.abs());
         }
-        assert!(max_out < 2.0, "output grew beyond expected bounds: {max_out}");
+        assert!(
+            max_out < 2.0,
+            "output grew beyond expected bounds: {max_out}"
+        );
     }
 
     /// Feed silence after priming the buffer, verify output decays to near-zero.
@@ -237,7 +246,10 @@ mod tests {
         }
         // Output must have decayed significantly (not necessarily to zero — feedback sustains)
         // but must not have grown beyond what the priming produced
-        assert!(last.abs() < 0.5, "output still loud after 5s of silence: {last}");
+        assert!(
+            last.abs() < 0.5,
+            "output still loud after 5s of silence: {last}"
+        );
     }
 
     /// Feedback at the clamped ceiling (0.95) must not cause unbounded growth.

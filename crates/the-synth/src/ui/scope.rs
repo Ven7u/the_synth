@@ -1,5 +1,4 @@
 use crate::SynthApp;
-use crate::audio::AudioState;
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, Rounding, Sense, Stroke, Vec2};
 
@@ -15,13 +14,16 @@ impl SynthApp {
             ui.add_space(8.0);
             let scope_ctrl = self.theme.c(&self.theme.scope_label);
             ui.label(egui::RichText::new("X").small().color(scope_ctrl))
-                .on_hover_text("Horizontal zoom — drag to stretch or compress the waveform in time.");
+                .on_hover_text(
+                    "Horizontal zoom — drag to stretch or compress the waveform in time.",
+                );
             ui.add(
                 egui::DragValue::new(&mut self.scope_x_scale)
                     .speed(0.02)
                     .range(0.25_f32..=8.0)
                     .suffix("×"),
-            ).on_hover_text("Horizontal zoom (0.25–8×). Drag left/right to adjust.");
+            )
+            .on_hover_text("Horizontal zoom (0.25–8×). Drag left/right to adjust.");
             ui.add_space(8.0);
             ui.label(egui::RichText::new("Y").small().color(scope_ctrl))
                 .on_hover_text("Vertical zoom — drag to scale the waveform amplitude.");
@@ -30,16 +32,16 @@ impl SynthApp {
                     .speed(0.02)
                     .range(0.25_f32..=8.0)
                     .suffix("×"),
-            ).on_hover_text("Vertical zoom (0.25–8×). Drag left/right to adjust.");
+            )
+            .on_hover_text("Vertical zoom (0.25–8×). Drag left/right to adjust.");
         });
 
-        let buf = self.state.osc_buffer.lock().unwrap().clone();
+        let buf = self.engine.scope_buffer_snapshot();
         let width = ui.available_width();
 
         // Update peak meter state (L channel drives display; R tracked separately)
-        use std::sync::atomic::Ordering;
-        let peak_raw_l = f32::from_bits(self.state.peak_l.load(Ordering::Relaxed));
-        let peak_raw_r = f32::from_bits(self.state.peak_r.load(Ordering::Relaxed));
+        let peak_raw_l = self.engine.peak_l();
+        let peak_raw_r = self.engine.peak_r();
         let dt = 1.0 / 60.0_f32;
         self.peak_display = (self.peak_display * 0.85 + peak_raw_l * 0.15).max(peak_raw_l * 0.3);
         let peak_raw_max = peak_raw_l.max(peak_raw_r);
@@ -63,10 +65,17 @@ impl SynthApp {
             Pos2::new(row.right() - METER_W, row.top()),
             Vec2::new(METER_W, row.height()),
         );
-        let rect = Rect::from_min_max(row.min, Pos2::new(row.right() - METER_W - METER_GAP, row.max.y));
+        let rect = Rect::from_min_max(
+            row.min,
+            Pos2::new(row.right() - METER_W - METER_GAP, row.max.y),
+        );
 
         // CRT background (scope only)
-        painter.rect_filled(rect, Rounding::same(4.0), self.theme.c(&self.theme.scope_bg));
+        painter.rect_filled(
+            rect,
+            Rounding::same(4.0),
+            self.theme.c(&self.theme.scope_bg),
+        );
 
         if !buf.is_empty() {
             // Scanlines
@@ -84,7 +93,10 @@ impl SynthApp {
 
             // Zero line
             painter.line_segment(
-                [Pos2::new(rect.left(), mid_y), Pos2::new(rect.right(), mid_y)],
+                [
+                    Pos2::new(rect.left(), mid_y),
+                    Pos2::new(rect.right(), mid_y),
+                ],
                 Stroke::new(1.0, self.theme.c(&self.theme.scope_zero)),
             );
 
@@ -118,7 +130,11 @@ impl SynthApp {
         // Vertical stereo peak meter — drawn into the right strip using the same painter
         {
             let ch_w = (METER_W - 1.0) / 2.0;
-            painter.rect_filled(meter_rect, Rounding::same(2.0), self.theme.c(&self.theme.meter_bg));
+            painter.rect_filled(
+                meter_rect,
+                Rounding::same(2.0),
+                self.theme.c(&self.theme.meter_bg),
+            );
 
             for (ci, peak_raw) in [peak_raw_l, peak_raw_r].iter().enumerate() {
                 let x_left = meter_rect.left() + ci as f32 * (ch_w + 1.0);
@@ -160,7 +176,10 @@ impl SynthApp {
                     Color32::WHITE
                 };
                 painter.line_segment(
-                    [Pos2::new(ch_rect.left(), hold_y), Pos2::new(ch_rect.right(), hold_y)],
+                    [
+                        Pos2::new(ch_rect.left(), hold_y),
+                        Pos2::new(ch_rect.right(), hold_y),
+                    ],
                     Stroke::new(1.5, hold_color),
                 );
             }
@@ -205,12 +224,15 @@ impl SynthApp {
     }
 }
 
-pub fn draw_latency_bar(ui: &mut egui::Ui, state: &AudioState, attack_s: f32, theme: &super::theme::SynthTheme) {
-    use std::sync::atomic::Ordering;
-
-    let sr = state.sample_rate.load(Ordering::Relaxed);
-    let frames = state.buffer_frames.load(Ordering::Relaxed);
-    let measured_us = state.last_latency_us.load(Ordering::Relaxed);
+pub fn draw_latency_bar(
+    ui: &mut egui::Ui,
+    engine: &synth_engine::SynthEngineHandle,
+    attack_s: f32,
+    theme: &super::theme::SynthTheme,
+) {
+    let sr = engine.sample_rate();
+    let frames = engine.buffer_frames();
+    let measured_us = engine.last_latency_us();
 
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Latency:").weak().small());
@@ -260,7 +282,12 @@ pub fn draw_latency_bar(ui: &mut egui::Ui, state: &AudioState, attack_s: f32, th
     });
 }
 
-pub fn draw_peak_meter(ui: &mut egui::Ui, level: f32, peak_hold: f32, theme: &super::theme::SynthTheme) {
+pub fn draw_peak_meter(
+    ui: &mut egui::Ui,
+    level: f32,
+    peak_hold: f32,
+    theme: &super::theme::SynthTheme,
+) {
     let (resp, painter) =
         ui.allocate_painter(Vec2::new(ui.available_width(), 14.0), Sense::hover());
     let rect = resp.rect;

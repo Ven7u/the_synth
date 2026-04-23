@@ -18,35 +18,45 @@
 use fundsp::prelude32::*;
 
 #[derive(Clone, Copy, PartialEq)]
-enum AdsrStage { Idle, Attack, Decay, Sustain, Release }
+enum AdsrStage {
+    Idle,
+    Attack,
+    Decay,
+    Sustain,
+    Release,
+}
 
 #[derive(Clone)]
 pub struct LiveAdsr {
-    pub attack:  Shared,
-    pub decay:   Shared,
+    pub attack: Shared,
+    pub decay: Shared,
     pub sustain: Shared,
     pub release: Shared,
-    pub cursor:  Option<Shared>, // written each sample for UI
+    pub cursor: Option<Shared>, // written each sample for UI
 
-    stage:       AdsrStage,
-    level:       f32,
-    progress:    f32, // 0..1 within current timed stage
+    stage: AdsrStage,
+    level: f32,
+    progress: f32,    // 0..1 within current timed stage
     start_level: f32, // level snapshot at stage entry (for click-free transitions)
-    sr:          f32,
-    prev_gate:   f32,
+    sr: f32,
+    prev_gate: f32,
 }
 
 impl LiveAdsr {
     pub fn new(
-        attack:  Shared,
-        decay:   Shared,
+        attack: Shared,
+        decay: Shared,
         sustain: Shared,
         release: Shared,
-        cursor:  Option<Shared>,
-        sr:      f32,
+        cursor: Option<Shared>,
+        sr: f32,
     ) -> Self {
         Self {
-            attack, decay, sustain, release, cursor,
+            attack,
+            decay,
+            sustain,
+            release,
+            cursor,
             stage: AdsrStage::Idle,
             level: 0.0,
             start_level: 0.0,
@@ -59,15 +69,15 @@ impl LiveAdsr {
 
 impl AudioNode for LiveAdsr {
     const ID: u64 = 0x4c697665_41647372; // "LiveAdsr"
-    type Inputs  = U1;
+    type Inputs = U1;
     type Outputs = U1;
 
     fn reset(&mut self) {
-        self.stage       = AdsrStage::Idle;
-        self.level       = 0.0;
+        self.stage = AdsrStage::Idle;
+        self.level = 0.0;
         self.start_level = 0.0;
-        self.progress    = 0.0;
-        self.prev_gate   = 0.0;
+        self.progress = 0.0;
+        self.prev_gate = 0.0;
     }
 
     fn set_sample_rate(&mut self, sr: f64) {
@@ -84,15 +94,15 @@ impl AudioNode for LiveAdsr {
 
         // Gate rising edge → restart attack from current level (avoids click on retrigger)
         if gate > 0.5 && self.prev_gate <= 0.5 {
-            self.stage       = AdsrStage::Attack;
+            self.stage = AdsrStage::Attack;
             self.start_level = self.level;
-            self.progress    = 0.0;
+            self.progress = 0.0;
         }
         // Gate falling edge → release from current level (avoids click when releasing early)
         if gate <= 0.5 && self.prev_gate > 0.5 {
-            self.stage       = AdsrStage::Release;
+            self.stage = AdsrStage::Release;
             self.start_level = self.level;
-            self.progress    = 0.0;
+            self.progress = 0.0;
         }
         self.prev_gate = gate;
 
@@ -107,7 +117,7 @@ impl AudioNode for LiveAdsr {
                 // Ramp from start_level → 1.0 so retriggers don't click
                 self.level = self.start_level + (1.0 - self.start_level) * self.progress.min(1.0);
                 if self.progress >= 1.0 {
-                    self.stage    = AdsrStage::Decay;
+                    self.stage = AdsrStage::Decay;
                     self.progress = 0.0;
                 }
             }
@@ -115,9 +125,9 @@ impl AudioNode for LiveAdsr {
                 self.progress += dt / d;
                 self.level = 1.0 - (1.0 - s) * self.progress.min(1.0);
                 if self.progress >= 1.0 {
-                    self.stage    = AdsrStage::Sustain;
+                    self.stage = AdsrStage::Sustain;
                     self.progress = 0.0;
-                    self.level    = s;
+                    self.level = s;
                 }
             }
             AdsrStage::Sustain => {
@@ -128,8 +138,8 @@ impl AudioNode for LiveAdsr {
                 // Ramp from start_level → 0 so early releases don't click
                 self.level = self.start_level * (1.0 - self.progress.min(1.0));
                 if self.progress >= 1.0 {
-                    self.stage    = AdsrStage::Idle;
-                    self.level    = 0.0;
+                    self.stage = AdsrStage::Idle;
+                    self.level = 0.0;
                     self.progress = 0.0;
                 }
             }
@@ -138,9 +148,9 @@ impl AudioNode for LiveAdsr {
         // Write cursor for UI
         if let Some(cur) = &self.cursor {
             let v = match self.stage {
-                AdsrStage::Idle    => 0.0,
-                AdsrStage::Attack  => 1.0 + self.progress.min(0.99),
-                AdsrStage::Decay   => 2.0 + self.progress.min(0.99),
+                AdsrStage::Idle => 0.0,
+                AdsrStage::Attack => 1.0 + self.progress.min(0.99),
+                AdsrStage::Decay => 2.0 + self.progress.min(0.99),
                 AdsrStage::Sustain => 3.0,
                 AdsrStage::Release => 4.0 + self.progress.min(0.99),
             };
@@ -166,7 +176,9 @@ mod tests {
 
     fn run_gate(adsr: &mut LiveAdsr, gate: f32, samples: usize) -> f32 {
         let mut last = 0.0;
-        for _ in 0..samples { last = tick_gate(adsr, gate); }
+        for _ in 0..samples {
+            last = tick_gate(adsr, gate);
+        }
         last
     }
 
@@ -182,7 +194,10 @@ mod tests {
         // Release
         run_gate(&mut adsr, 0.0, (44100.0 * 1.0) as usize);
         let level = tick_gate(&mut adsr, 0.0);
-        assert!(level < 0.01, "expected near zero after release, got {level}");
+        assert!(
+            level < 0.01,
+            "expected near zero after release, got {level}"
+        );
     }
 
     /// Retrigger mid-sustain: attack must restart from current level (no click jump to 0).
@@ -197,8 +212,11 @@ mod tests {
         // Gate off then on in same "buffer" boundary (simulates steal-retrigger)
         tick_gate(&mut adsr, 0.0); // falling edge
         let after_fall = tick_gate(&mut adsr, 1.0); // rising edge: attack starts from start_level
-        // start_level was captured at the falling edge, so attack begins from ~sustain level
-        assert!(after_fall > 0.5, "retrigger should start from current level, not zero, got {after_fall}");
+                                                    // start_level was captured at the falling edge, so attack begins from ~sustain level
+        assert!(
+            after_fall > 0.5,
+            "retrigger should start from current level, not zero, got {after_fall}"
+        );
     }
 
     /// Retrigger mid-release: must start attack from release level, not from 0.
@@ -210,7 +228,10 @@ mod tests {
         // Gate off, run 300ms into 2s release
         run_gate(&mut adsr, 0.0, (44100.0 * 0.3) as usize);
         let release_level = adsr.level;
-        assert!(release_level > 0.2, "should still be audible mid-release, got {release_level}");
+        assert!(
+            release_level > 0.2,
+            "should still be audible mid-release, got {release_level}"
+        );
 
         // Retrigger
         let after_retrigger = tick_gate(&mut adsr, 1.0);
@@ -227,8 +248,10 @@ mod tests {
         for i in 0..88200 {
             let gate = if (i / 4410) % 2 == 0 { 1.0 } else { 0.0 };
             let level = tick_gate(&mut adsr, gate);
-            assert!(level >= -0.001 && level <= 1.001,
-                "level {level} out of [0,1] at sample {i}");
+            assert!(
+                level >= -0.001 && level <= 1.001,
+                "level {level} out of [0,1] at sample {i}"
+            );
         }
     }
 }

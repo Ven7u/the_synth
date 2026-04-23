@@ -19,11 +19,11 @@
 //! Mutable state (`MarkovVoice`, `HarmonicChain`, etc.) lives on the audio thread only.
 //! `MarkovEngineShared` is `Clone + Send` and can be held by the UI / Bevy thread.
 
+use fundsp::prelude32::{shared, Shared};
 use std::sync::{
     atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
     Arc,
 };
-use fundsp::prelude32::{shared, Shared};
 
 // ---------------------------------------------------------------------------
 // LCG — identical to synth-engine's private copy; duplicated to avoid coupling
@@ -32,10 +32,13 @@ use fundsp::prelude32::{shared, Shared};
 struct Lcg(u64);
 
 impl Lcg {
-    fn new(seed: u64) -> Self { Self(seed | 1) }
+    fn new(seed: u64) -> Self {
+        Self(seed | 1)
+    }
 
     fn next_u32(&mut self) -> u32 {
-        self.0 = self.0
+        self.0 = self
+            .0
             .wrapping_mul(6_364_136_223_846_793_005)
             .wrapping_add(1_442_695_040_888_963_407);
         ((self.0 >> 33) ^ self.0) as u32
@@ -48,7 +51,9 @@ impl Lcg {
         let mut acc = 0.0f32;
         for (i, &p) in row.iter().enumerate() {
             acc += p;
-            if r < acc { return i; }
+            if r < acc {
+                return i;
+            }
         }
         row.len().saturating_sub(1)
     }
@@ -63,11 +68,11 @@ impl Lcg {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Scale {
     #[default]
-    Major      = 0,
-    Minor      = 1,  // natural minor
-    Dorian     = 2,
-    Phrygian   = 3,
-    Lydian     = 4,
+    Major = 0,
+    Minor = 1, // natural minor
+    Dorian = 2,
+    Phrygian = 3,
+    Lydian = 4,
     Mixolydian = 5,
     HarmonicMinor = 6,
 }
@@ -76,28 +81,43 @@ impl Scale {
     /// Semitone offsets for degrees 0–6 (scale degrees 1–7).
     pub fn intervals(self) -> &'static [u8; 7] {
         match self {
-            Self::Major         => &[0, 2, 4, 5, 7, 9, 11],
-            Self::Minor         => &[0, 2, 3, 5, 7, 8, 10],
-            Self::Dorian        => &[0, 2, 3, 5, 7, 9, 10],
-            Self::Phrygian      => &[0, 1, 3, 5, 7, 8, 10],
-            Self::Lydian        => &[0, 2, 4, 6, 7, 9, 11],
-            Self::Mixolydian    => &[0, 2, 4, 5, 7, 9, 10],
+            Self::Major => &[0, 2, 4, 5, 7, 9, 11],
+            Self::Minor => &[0, 2, 3, 5, 7, 8, 10],
+            Self::Dorian => &[0, 2, 3, 5, 7, 9, 10],
+            Self::Phrygian => &[0, 1, 3, 5, 7, 8, 10],
+            Self::Lydian => &[0, 2, 4, 6, 7, 9, 11],
+            Self::Mixolydian => &[0, 2, 4, 5, 7, 9, 10],
             Self::HarmonicMinor => &[0, 2, 3, 5, 7, 8, 11],
         }
     }
 
     pub const ALL: &'static [Self] = &[
-        Self::Major, Self::Minor, Self::Dorian, Self::Phrygian,
-        Self::Lydian, Self::Mixolydian, Self::HarmonicMinor,
+        Self::Major,
+        Self::Minor,
+        Self::Dorian,
+        Self::Phrygian,
+        Self::Lydian,
+        Self::Mixolydian,
+        Self::HarmonicMinor,
     ];
     pub const LABELS: &'static [&'static str] = &[
-        "Major", "Minor", "Dorian", "Phrygian", "Lydian", "Mixolyd.", "Harm.Minor",
+        "Major",
+        "Minor",
+        "Dorian",
+        "Phrygian",
+        "Lydian",
+        "Mixolyd.",
+        "Harm.Minor",
     ];
 
     pub fn from_u8(v: u8) -> Self {
         match v {
-            1 => Self::Minor, 2 => Self::Dorian, 3 => Self::Phrygian,
-            4 => Self::Lydian, 5 => Self::Mixolydian, 6 => Self::HarmonicMinor,
+            1 => Self::Minor,
+            2 => Self::Dorian,
+            3 => Self::Phrygian,
+            4 => Self::Lydian,
+            5 => Self::Mixolydian,
+            6 => Self::HarmonicMinor,
             _ => Self::Major,
         }
     }
@@ -107,9 +127,7 @@ impl Scale {
     pub fn degree_to_midi(self, root: u8, degree: usize, octave_offset: i8) -> u8 {
         let semitone = self.intervals()[degree % 7];
         let extra_octave = (degree / 7) as i8;
-        let raw = root as i32
-            + semitone as i32
-            + (octave_offset + extra_octave) as i32 * 12;
+        let raw = root as i32 + semitone as i32 + (octave_offset + extra_octave) as i32 * 12;
         raw.clamp(0, 127) as u8
     }
 }
@@ -124,13 +142,13 @@ impl Scale {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum HarmonicFunction {
     #[default]
-    Tonic         = 0, // I / i
-    Supertonic    = 1, // II / ii
-    Mediant       = 2, // III / iii / bIII
-    Subdominant   = 3, // IV / iv
-    Dominant      = 4, // V / V7
-    Submediant    = 5, // VI / vi / bVI
-    LeadingTone   = 6, // VII / vii / bVII
+    Tonic = 0, // I / i
+    Supertonic = 1,  // II / ii
+    Mediant = 2,     // III / iii / bIII
+    Subdominant = 3, // IV / iv
+    Dominant = 4,    // V / V7
+    Submediant = 5,  // VI / vi / bVI
+    LeadingTone = 6, // VII / vii / bVII
 }
 
 impl HarmonicFunction {
@@ -145,14 +163,17 @@ impl HarmonicFunction {
 
     pub fn from_usize(v: usize) -> Self {
         match v {
-            1 => Self::Supertonic, 2 => Self::Mediant, 3 => Self::Subdominant,
-            4 => Self::Dominant,   5 => Self::Submediant, 6 => Self::LeadingTone,
+            1 => Self::Supertonic,
+            2 => Self::Mediant,
+            3 => Self::Subdominant,
+            4 => Self::Dominant,
+            5 => Self::Submediant,
+            6 => Self::LeadingTone,
             _ => Self::Tonic,
         }
     }
 
-    pub const LABELS: &'static [&'static str] =
-        &["I", "ii", "iii", "IV", "V", "vi", "vii"];
+    pub const LABELS: &'static [&'static str] = &["I", "ii", "iii", "IV", "V", "vi", "vii"];
 }
 
 // ---------------------------------------------------------------------------
@@ -161,11 +182,11 @@ impl HarmonicFunction {
 
 pub const HARMONIC_STATES: usize = HarmonicFunction::N; // 7
 pub const RHYTHMIC_STATES: usize = 5;
-pub const MELODIC_STATES:  usize = 7; // scale degrees 1–7
+pub const MELODIC_STATES: usize = 7; // scale degrees 1–7
 
 pub type HarmonicMatrix = [[f32; HARMONIC_STATES]; HARMONIC_STATES];
 pub type RhythmicMatrix = [[f32; RHYTHMIC_STATES]; RHYTHMIC_STATES];
-pub type MelodicMatrix  = [[f32; MELODIC_STATES];  MELODIC_STATES];
+pub type MelodicMatrix = [[f32; MELODIC_STATES]; MELODIC_STATES];
 
 /// Blend two matrices element-wise: `a * (1-t) + b * t`.
 /// Blend two matrices: used by the training phase (8.4) to interpolate learned matrices.
@@ -204,9 +225,10 @@ pub fn blend_melodic(a: &MelodicMatrix, b: &MelodicMatrix, t: f32) -> MelodicMat
 
 /// Apply a bias vector to a matrix row and renormalize.
 /// `bias[j]` is a positive multiplier for column j. Zero = forbidden.
-fn apply_bias_and_normalize(row: &[f32; MELODIC_STATES], bias: &[f32; MELODIC_STATES])
-    -> [f32; MELODIC_STATES]
-{
+fn apply_bias_and_normalize(
+    row: &[f32; MELODIC_STATES],
+    bias: &[f32; MELODIC_STATES],
+) -> [f32; MELODIC_STATES] {
     let mut out = [0.0f32; MELODIC_STATES];
     let mut total = 0.0f32;
     for j in 0..MELODIC_STATES {
@@ -214,10 +236,14 @@ fn apply_bias_and_normalize(row: &[f32; MELODIC_STATES], bias: &[f32; MELODIC_ST
         total += out[j];
     }
     if total > 0.0 {
-        for j in 0..MELODIC_STATES { out[j] /= total; }
+        for j in 0..MELODIC_STATES {
+            out[j] /= total;
+        }
     } else {
         // fallback: uniform
-        for j in 0..MELODIC_STATES { out[j] = 1.0 / MELODIC_STATES as f32; }
+        for j in 0..MELODIC_STATES {
+            out[j] = 1.0 / MELODIC_STATES as f32;
+        }
     }
     out
 }
@@ -228,7 +254,11 @@ fn apply_density(row: &[f32; RHYTHMIC_STATES], density: f32) -> [f32; RHYTHMIC_S
     // density=0 → keep matrix as-is; density=1 → rest column → 0
     out[RhythmicState::Rest as usize] *= 1.0 - density.clamp(0.0, 1.0);
     let total: f32 = out.iter().sum();
-    if total > 0.0 { for v in &mut out { *v /= total; } }
+    if total > 0.0 {
+        for v in &mut out {
+            *v /= total;
+        }
+    }
     out
 }
 
@@ -240,8 +270,8 @@ fn apply_density(row: &[f32; RHYTHMIC_STATES], density: f32) -> [f32; RHYTHMIC_S
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum RhythmicState {
     #[default]
-    Rest   = 0,
-    Hold   = 1,
+    Rest = 0,
+    Hold = 1,
     Single = 2,
     Double = 3,
     Accent = 4,
@@ -249,7 +279,13 @@ pub enum RhythmicState {
 
 impl RhythmicState {
     pub fn from_usize(v: usize) -> Self {
-        match v { 1 => Self::Hold, 2 => Self::Single, 3 => Self::Double, 4 => Self::Accent, _ => Self::Rest }
+        match v {
+            1 => Self::Hold,
+            2 => Self::Single,
+            3 => Self::Double,
+            4 => Self::Accent,
+            _ => Self::Rest,
+        }
     }
     pub const LABELS: &'static [&'static str] = &["Rest", "Hold", "Single", "Double", "Accent"];
 }
@@ -261,10 +297,10 @@ impl RhythmicState {
 /// A named mood: three matrices, a display label, and behavioural hints.
 #[derive(Clone)]
 pub struct MoodSet {
-    pub name:       &'static str,
-    pub harmonic:   HarmonicMatrix,
-    pub rhythmic:   RhythmicMatrix,
-    pub melodic:    MelodicMatrix,
+    pub name: &'static str,
+    pub harmonic: HarmonicMatrix,
+    pub rhythmic: RhythmicMatrix,
+    pub melodic: MelodicMatrix,
     /// How long notes sustain relative to the step interval (0.0=1 subdiv, 1.0=16 subdivs).
     pub gate_length: f32,
     /// Rhythmic speed multiplier. 1.0 = use role's base divisor as-is.
@@ -294,37 +330,37 @@ pub struct MoodSet {
 /// Rhythmic signature: extremely sparse, Rest/Hold dominate, Double/Accent near-zero.
 pub const MOOD_CALM: MoodSet = MoodSet {
     name: "Calm",
-    gate_length: 0.85, // long, breathing sustains
-    rhythmic_speed: 0.7, // slower pulse — Satie's unhurried tempo
-    chord_change_prob: 0.4, // chords linger — I↔IV pendulum is slow
+    gate_length: 0.85,          // long, breathing sustains
+    rhythmic_speed: 0.7,        // slower pulse — Satie's unhurried tempo
+    chord_change_prob: 0.4,     // chords linger — I↔IV pendulum is slow
     gate_length_variance: 0.05, // very consistent — meditative, predictable sustains
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
-        [0.40,  0.05,  0.02,  0.35,  0.05,  0.10,  0.03], // I   — sits, then → IV
-        [0.10,  0.10,  0.05,  0.15,  0.40,  0.15,  0.05], // ii  → V (when it appears)
-        [0.10,  0.05,  0.05,  0.35,  0.10,  0.30,  0.05], // iii → IV or vi
-        [0.55,  0.05,  0.03,  0.15,  0.10,  0.10,  0.02], // IV  → I (plagal resolution)
-        [0.65,  0.05,  0.03,  0.10,  0.05,  0.10,  0.02], // V   → I (immediate resolve)
-        [0.15,  0.10,  0.05,  0.40,  0.10,  0.15,  0.05], // vi  → IV
-        [0.50,  0.05,  0.05,  0.15,  0.10,  0.10,  0.05], // vii → I
+        [0.40, 0.05, 0.02, 0.35, 0.05, 0.10, 0.03], // I   — sits, then → IV
+        [0.10, 0.10, 0.05, 0.15, 0.40, 0.15, 0.05], // ii  → V (when it appears)
+        [0.10, 0.05, 0.05, 0.35, 0.10, 0.30, 0.05], // iii → IV or vi
+        [0.55, 0.05, 0.03, 0.15, 0.10, 0.10, 0.02], // IV  → I (plagal resolution)
+        [0.65, 0.05, 0.03, 0.10, 0.05, 0.10, 0.02], // V   → I (immediate resolve)
+        [0.15, 0.10, 0.05, 0.40, 0.10, 0.15, 0.05], // vi  → IV
+        [0.50, 0.05, 0.05, 0.15, 0.10, 0.10, 0.05], // vii → I
     ],
     rhythmic: [
         //  Rest   Hold   Single Double Accent
-        [0.50,  0.20,  0.25,  0.03,  0.02], // Rest  — stays silent
-        [0.10,  0.55,  0.30,  0.03,  0.02], // Hold  — long sustains
-        [0.30,  0.25,  0.35,  0.06,  0.04], // Single
-        [0.45,  0.15,  0.30,  0.07,  0.03], // Double → rest (transient)
-        [0.45,  0.20,  0.28,  0.05,  0.02], // Accent → rest (transient)
+        [0.50, 0.20, 0.25, 0.03, 0.02], // Rest  — stays silent
+        [0.10, 0.55, 0.30, 0.03, 0.02], // Hold  — long sustains
+        [0.30, 0.25, 0.35, 0.06, 0.04], // Single
+        [0.45, 0.15, 0.30, 0.07, 0.03], // Double → rest (transient)
+        [0.45, 0.20, 0.28, 0.05, 0.02], // Accent → rest (transient)
     ],
     melodic: [
         //  1      2      3      4      5      6      7
-        [0.25,  0.40,  0.15,  0.03,  0.12,  0.03,  0.02], // 1 → 2 (stepwise)
-        [0.30,  0.15,  0.35,  0.10,  0.05,  0.03,  0.02], // 2 → 1 or 3
-        [0.10,  0.35,  0.20,  0.20,  0.10,  0.03,  0.02], // 3 → 2 (stepwise back)
-        [0.05,  0.10,  0.35,  0.15,  0.30,  0.03,  0.02], // 4 → 3 or 5
-        [0.20,  0.05,  0.10,  0.15,  0.25,  0.15,  0.10], // 5
-        [0.08,  0.05,  0.05,  0.05,  0.35,  0.20,  0.22], // 6 → 5
-        [0.55,  0.05,  0.05,  0.03,  0.12,  0.10,  0.10], // 7 → 1 (resolve)
+        [0.25, 0.40, 0.15, 0.03, 0.12, 0.03, 0.02], // 1 → 2 (stepwise)
+        [0.30, 0.15, 0.35, 0.10, 0.05, 0.03, 0.02], // 2 → 1 or 3
+        [0.10, 0.35, 0.20, 0.20, 0.10, 0.03, 0.02], // 3 → 2 (stepwise back)
+        [0.05, 0.10, 0.35, 0.15, 0.30, 0.03, 0.02], // 4 → 3 or 5
+        [0.20, 0.05, 0.10, 0.15, 0.25, 0.15, 0.10], // 5
+        [0.08, 0.05, 0.05, 0.05, 0.35, 0.20, 0.22], // 6 → 5
+        [0.55, 0.05, 0.05, 0.03, 0.12, 0.10, 0.10], // 7 → 1 (resolve)
     ],
 };
 
@@ -335,37 +371,37 @@ pub const MOOD_CALM: MoodSet = MoodSet {
 /// Rhythmic signature: bursts — Rest explodes into Double/Accent, then collapses.
 pub const MOOD_TENSE: MoodSet = MoodSet {
     name: "Tense",
-    gate_length: 0.20, // short, stabby, agitated
-    rhythmic_speed: 1.5, // frantic pace — Herrmann's relentless tension
-    chord_change_prob: 0.9, // harmony shifts restlessly — unresolved Wagner chromaticism
+    gate_length: 0.20,          // short, stabby, agitated
+    rhythmic_speed: 1.5,        // frantic pace — Herrmann's relentless tension
+    chord_change_prob: 0.9,     // harmony shifts restlessly — unresolved Wagner chromaticism
     gate_length_variance: 0.30, // wildly unpredictable — the uncertainty IS the tension
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
-        [0.05,  0.15,  0.05,  0.10,  0.40,  0.10,  0.15], // I   — destabilizes to V/vii
-        [0.03,  0.08,  0.05,  0.10,  0.55,  0.10,  0.09], // ii  → V (dominant pull)
-        [0.05,  0.12,  0.05,  0.15,  0.35,  0.15,  0.13], // iii → V
-        [0.08,  0.10,  0.05,  0.05,  0.45,  0.12,  0.15], // IV  → V
-        [0.15,  0.12,  0.05,  0.08,  0.30,  0.15,  0.15], // V   — hangs (self-loop 0.30)
-        [0.05,  0.25,  0.08,  0.12,  0.30,  0.08,  0.12], // vi  → ii or V
-        [0.12,  0.15,  0.08,  0.10,  0.30,  0.10,  0.15], // vii — circles with V
+        [0.05, 0.15, 0.05, 0.10, 0.40, 0.10, 0.15], // I   — destabilizes to V/vii
+        [0.03, 0.08, 0.05, 0.10, 0.55, 0.10, 0.09], // ii  → V (dominant pull)
+        [0.05, 0.12, 0.05, 0.15, 0.35, 0.15, 0.13], // iii → V
+        [0.08, 0.10, 0.05, 0.05, 0.45, 0.12, 0.15], // IV  → V
+        [0.15, 0.12, 0.05, 0.08, 0.30, 0.15, 0.15], // V   — hangs (self-loop 0.30)
+        [0.05, 0.25, 0.08, 0.12, 0.30, 0.08, 0.12], // vi  → ii or V
+        [0.12, 0.15, 0.08, 0.10, 0.30, 0.10, 0.15], // vii — circles with V
     ],
     rhythmic: [
         //  Rest   Hold   Single Double Accent
-        [0.15,  0.03,  0.30,  0.32,  0.20], // Rest  → burst (Double/Accent)
-        [0.15,  0.10,  0.35,  0.25,  0.15], // Hold  → breaks into attack
-        [0.12,  0.05,  0.30,  0.33,  0.20], // Single → Double/Accent
-        [0.25,  0.03,  0.30,  0.27,  0.15], // Double → Rest (collapse)
-        [0.30,  0.03,  0.30,  0.22,  0.15], // Accent → Rest (collapse)
+        [0.15, 0.03, 0.30, 0.32, 0.20], // Rest  → burst (Double/Accent)
+        [0.15, 0.10, 0.35, 0.25, 0.15], // Hold  → breaks into attack
+        [0.12, 0.05, 0.30, 0.33, 0.20], // Single → Double/Accent
+        [0.25, 0.03, 0.30, 0.27, 0.15], // Double → Rest (collapse)
+        [0.30, 0.03, 0.30, 0.22, 0.15], // Accent → Rest (collapse)
     ],
     melodic: [
         //  1      2      3      4      5      6      7
-        [0.05,  0.08,  0.12,  0.20,  0.25,  0.15,  0.15], // 1 → 4/5/7 (leaps out)
-        [0.08,  0.05,  0.12,  0.20,  0.15,  0.25,  0.15], // 2 → 4/6 (avoid tonic)
-        [0.10,  0.08,  0.05,  0.12,  0.25,  0.15,  0.25], // 3 → 5/7 (tritone)
-        [0.08,  0.10,  0.15,  0.05,  0.30,  0.12,  0.20], // 4 → 5/7 (tritone pair)
-        [0.10,  0.05,  0.10,  0.25,  0.10,  0.20,  0.20], // 5 → 4/6/7 (destabilize)
-        [0.08,  0.05,  0.08,  0.15,  0.25,  0.10,  0.29], // 6 → 7 (leading to nowhere)
-        [0.12,  0.08,  0.10,  0.20,  0.25,  0.15,  0.10], // 7 → 4/5 (avoids 1!)
+        [0.05, 0.08, 0.12, 0.20, 0.25, 0.15, 0.15], // 1 → 4/5/7 (leaps out)
+        [0.08, 0.05, 0.12, 0.20, 0.15, 0.25, 0.15], // 2 → 4/6 (avoid tonic)
+        [0.10, 0.08, 0.05, 0.12, 0.25, 0.15, 0.25], // 3 → 5/7 (tritone)
+        [0.08, 0.10, 0.15, 0.05, 0.30, 0.12, 0.20], // 4 → 5/7 (tritone pair)
+        [0.10, 0.05, 0.10, 0.25, 0.10, 0.20, 0.20], // 5 → 4/6/7 (destabilize)
+        [0.08, 0.05, 0.08, 0.15, 0.25, 0.10, 0.29], // 6 → 7 (leading to nowhere)
+        [0.12, 0.08, 0.10, 0.20, 0.25, 0.15, 0.10], // 7 → 4/5 (avoids 1!)
     ],
 };
 
@@ -376,37 +412,37 @@ pub const MOOD_TENSE: MoodSet = MoodSet {
 /// Rhythmic signature: sparse with sudden stabs — silence, then violent Accent, then silence.
 pub const MOOD_DARK: MoodSet = MoodSet {
     name: "Dark",
-    gate_length: 0.90, // heavy, drone-like sustains when notes appear
-    rhythmic_speed: 0.6, // slow, brooding — Radiohead's sparse pacing
-    chord_change_prob: 0.35, // chords hang in darkness — Aeolian cadence is unhurried
+    gate_length: 0.90,          // heavy, drone-like sustains when notes appear
+    rhythmic_speed: 0.6,        // slow, brooding — Radiohead's sparse pacing
+    chord_change_prob: 0.35,    // chords hang in darkness — Aeolian cadence is unhurried
     gate_length_variance: 0.20, // moderate variance — sparse notes with unpredictable decay
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
-        [0.10,  0.03,  0.08,  0.12,  0.10,  0.35,  0.22], // I   → vi/vii (darkens)
-        [0.05,  0.08,  0.05,  0.12,  0.30,  0.30,  0.10], // ii  → V or vi
-        [0.08,  0.05,  0.05,  0.25,  0.10,  0.30,  0.17], // iii → vi
-        [0.15,  0.05,  0.05,  0.10,  0.15,  0.25,  0.25], // IV  → vi/vii
-        [0.15,  0.05,  0.03,  0.07,  0.10,  0.40,  0.20], // V   → vi (deceptive!)
-        [0.10,  0.05,  0.08,  0.25,  0.12,  0.12,  0.28], // vi  → IV/vii (Andalusian)
-        [0.30,  0.05,  0.05,  0.10,  0.12,  0.28,  0.10], // vii → I or vi
+        [0.10, 0.03, 0.08, 0.12, 0.10, 0.35, 0.22], // I   → vi/vii (darkens)
+        [0.05, 0.08, 0.05, 0.12, 0.30, 0.30, 0.10], // ii  → V or vi
+        [0.08, 0.05, 0.05, 0.25, 0.10, 0.30, 0.17], // iii → vi
+        [0.15, 0.05, 0.05, 0.10, 0.15, 0.25, 0.25], // IV  → vi/vii
+        [0.15, 0.05, 0.03, 0.07, 0.10, 0.40, 0.20], // V   → vi (deceptive!)
+        [0.10, 0.05, 0.08, 0.25, 0.12, 0.12, 0.28], // vi  → IV/vii (Andalusian)
+        [0.30, 0.05, 0.05, 0.10, 0.12, 0.28, 0.10], // vii → I or vi
     ],
     rhythmic: [
         //  Rest   Hold   Single Double Accent
-        [0.50,  0.18,  0.15,  0.03,  0.14], // Rest  — silence, then sudden stab
-        [0.12,  0.55,  0.18,  0.03,  0.12], // Hold  — long drone sustains
-        [0.35,  0.15,  0.25,  0.08,  0.17], // Single → often back to Rest
-        [0.40,  0.10,  0.25,  0.10,  0.15], // Double → Rest (collapses)
-        [0.55,  0.10,  0.20,  0.05,  0.10], // Accent → Rest (jump-scare dies)
+        [0.50, 0.18, 0.15, 0.03, 0.14], // Rest  — silence, then sudden stab
+        [0.12, 0.55, 0.18, 0.03, 0.12], // Hold  — long drone sustains
+        [0.35, 0.15, 0.25, 0.08, 0.17], // Single → often back to Rest
+        [0.40, 0.10, 0.25, 0.10, 0.15], // Double → Rest (collapses)
+        [0.55, 0.10, 0.20, 0.05, 0.10], // Accent → Rest (jump-scare dies)
     ],
     melodic: [
         //  1      2      3      4      5      6      7
-        [0.15,  0.10,  0.20,  0.05,  0.12,  0.15,  0.23], // 1 → 3/7 (descending feel)
-        [0.15,  0.10,  0.30,  0.12,  0.08,  0.15,  0.10], // 2 → 3 (minor 3rd)
-        [0.18,  0.15,  0.15,  0.22,  0.12,  0.10,  0.08], // 3 → 4 (descending)
-        [0.05,  0.08,  0.30,  0.12,  0.25,  0.12,  0.08], // 4 → 3/5
-        [0.12,  0.05,  0.10,  0.15,  0.15,  0.25,  0.18], // 5 → 6 (descending)
-        [0.10,  0.05,  0.12,  0.08,  0.25,  0.15,  0.25], // 6 → 5/7 (b6 oscillation)
-        [0.25,  0.05,  0.08,  0.05,  0.10,  0.30,  0.17], // 7 → 6 (descends, not resolves)
+        [0.15, 0.10, 0.20, 0.05, 0.12, 0.15, 0.23], // 1 → 3/7 (descending feel)
+        [0.15, 0.10, 0.30, 0.12, 0.08, 0.15, 0.10], // 2 → 3 (minor 3rd)
+        [0.18, 0.15, 0.15, 0.22, 0.12, 0.10, 0.08], // 3 → 4 (descending)
+        [0.05, 0.08, 0.30, 0.12, 0.25, 0.12, 0.08], // 4 → 3/5
+        [0.12, 0.05, 0.10, 0.15, 0.15, 0.25, 0.18], // 5 → 6 (descending)
+        [0.10, 0.05, 0.12, 0.08, 0.25, 0.15, 0.25], // 6 → 5/7 (b6 oscillation)
+        [0.25, 0.05, 0.08, 0.05, 0.10, 0.30, 0.17], // 7 → 6 (descends, not resolves)
     ],
 };
 
@@ -417,37 +453,37 @@ pub const MOOD_DARK: MoodSet = MoodSet {
 /// Rhythmic signature: steady energetic pulse, Single dominates, Rest is rare.
 pub const MOOD_EUPHORIC: MoodSet = MoodSet {
     name: "Euphoric",
-    gate_length: 0.30, // short, bright, bouncy
-    rhythmic_speed: 1.8, // fast energetic pulse — EDM build energy
-    chord_change_prob: 1.0, // harmony always moves forward — Pachelbel never stops
+    gate_length: 0.30,          // short, bright, bouncy
+    rhythmic_speed: 1.8,        // fast energetic pulse — EDM build energy
+    chord_change_prob: 1.0,     // harmony always moves forward — Pachelbel never stops
     gate_length_variance: 0.10, // slight bounce — energetic but not chaotic
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
-        [0.08,  0.05,  0.05,  0.25,  0.40,  0.12,  0.05], // I   → V/IV (moves forward)
-        [0.05,  0.05,  0.05,  0.15,  0.50,  0.15,  0.05], // ii  → V
-        [0.08,  0.05,  0.05,  0.45,  0.15,  0.15,  0.07], // iii → IV (Pachelbel)
-        [0.55,  0.03,  0.03,  0.05,  0.25,  0.05,  0.04], // IV  → I (plagal lift!)
-        [0.55,  0.03,  0.03,  0.05,  0.05,  0.25,  0.04], // V   → I or vi
-        [0.08,  0.05,  0.15,  0.45,  0.12,  0.08,  0.07], // vi  → IV (the pop cycle)
-        [0.50,  0.05,  0.05,  0.15,  0.15,  0.05,  0.05], // vii → I
+        [0.08, 0.05, 0.05, 0.25, 0.40, 0.12, 0.05], // I   → V/IV (moves forward)
+        [0.05, 0.05, 0.05, 0.15, 0.50, 0.15, 0.05], // ii  → V
+        [0.08, 0.05, 0.05, 0.45, 0.15, 0.15, 0.07], // iii → IV (Pachelbel)
+        [0.55, 0.03, 0.03, 0.05, 0.25, 0.05, 0.04], // IV  → I (plagal lift!)
+        [0.55, 0.03, 0.03, 0.05, 0.05, 0.25, 0.04], // V   → I or vi
+        [0.08, 0.05, 0.15, 0.45, 0.12, 0.08, 0.07], // vi  → IV (the pop cycle)
+        [0.50, 0.05, 0.05, 0.15, 0.15, 0.05, 0.05], // vii → I
     ],
     rhythmic: [
         //  Rest   Hold   Single Double Accent
-        [0.05,  0.03,  0.50,  0.27,  0.15], // Rest  → Single (immediate pulse)
-        [0.05,  0.08,  0.50,  0.25,  0.12], // Hold  → Single
-        [0.08,  0.05,  0.40,  0.30,  0.17], // Single → Single/Double (steady)
-        [0.10,  0.05,  0.40,  0.28,  0.17], // Double
-        [0.10,  0.05,  0.45,  0.25,  0.15], // Accent
+        [0.05, 0.03, 0.50, 0.27, 0.15], // Rest  → Single (immediate pulse)
+        [0.05, 0.08, 0.50, 0.25, 0.12], // Hold  → Single
+        [0.08, 0.05, 0.40, 0.30, 0.17], // Single → Single/Double (steady)
+        [0.10, 0.05, 0.40, 0.28, 0.17], // Double
+        [0.10, 0.05, 0.45, 0.25, 0.15], // Accent
     ],
     melodic: [
         //  1      2      3      4      5      6      7
-        [0.10,  0.25,  0.25,  0.05,  0.25,  0.05,  0.05], // 1 → 2/3/5 (ascend)
-        [0.10,  0.08,  0.40,  0.10,  0.20,  0.07,  0.05], // 2 → 3 (ascending)
-        [0.08,  0.08,  0.10,  0.10,  0.45,  0.12,  0.07], // 3 → 5 (leap up)
-        [0.05,  0.05,  0.15,  0.05,  0.50,  0.12,  0.08], // 4 → 5
-        [0.10,  0.03,  0.08,  0.05,  0.12,  0.42,  0.20], // 5 → 6 (ascending)
-        [0.08,  0.03,  0.05,  0.03,  0.10,  0.12,  0.59], // 6 → 7 (climbing)
-        [0.60,  0.05,  0.08,  0.03,  0.12,  0.07,  0.05], // 7 → 1 (triumphant resolve)
+        [0.10, 0.25, 0.25, 0.05, 0.25, 0.05, 0.05], // 1 → 2/3/5 (ascend)
+        [0.10, 0.08, 0.40, 0.10, 0.20, 0.07, 0.05], // 2 → 3 (ascending)
+        [0.08, 0.08, 0.10, 0.10, 0.45, 0.12, 0.07], // 3 → 5 (leap up)
+        [0.05, 0.05, 0.15, 0.05, 0.50, 0.12, 0.08], // 4 → 5
+        [0.10, 0.03, 0.08, 0.05, 0.12, 0.42, 0.20], // 5 → 6 (ascending)
+        [0.08, 0.03, 0.05, 0.03, 0.10, 0.12, 0.59], // 6 → 7 (climbing)
+        [0.60, 0.05, 0.08, 0.03, 0.12, 0.07, 0.05], // 7 → 1 (triumphant resolve)
     ],
 };
 
@@ -458,37 +494,37 @@ pub const MOOD_EUPHORIC: MoodSet = MoodSet {
 /// Rhythmic signature: extremely sparse — a note event is a rare cosmic occurrence.
 pub const MOOD_COSMIC: MoodSet = MoodSet {
     name: "Cosmic",
-    gate_length: 0.95, // near-infinite sustain, drone-like
-    rhythmic_speed: 0.4, // glacial — Vangelis/Tangerine Dream timelessness
-    chord_change_prob: 0.15, // chords barely change — Interstellar organ sits for minutes
+    gate_length: 0.95,          // near-infinite sustain, drone-like
+    rhythmic_speed: 0.4,        // glacial — Vangelis/Tangerine Dream timelessness
+    chord_change_prob: 0.15,    // chords barely change — Interstellar organ sits for minutes
     gate_length_variance: 0.03, // near-zero — drone-like, unchanging sustain
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
-        [0.45,  0.02,  0.03,  0.35,  0.02,  0.10,  0.03], // I   — sits, then → IV
-        [0.15,  0.10,  0.05,  0.30,  0.10,  0.25,  0.05], // ii  → IV/vi
-        [0.10,  0.05,  0.10,  0.30,  0.05,  0.35,  0.05], // iii → IV/vi
-        [0.50,  0.03,  0.03,  0.20,  0.04,  0.15,  0.05], // IV  → I (plagal return)
-        [0.40,  0.05,  0.05,  0.30,  0.05,  0.10,  0.05], // V   → I/IV (V is lost here)
-        [0.20,  0.05,  0.08,  0.40,  0.05,  0.15,  0.07], // vi  → IV
-        [0.35,  0.05,  0.05,  0.25,  0.10,  0.15,  0.05], // vii → I
+        [0.45, 0.02, 0.03, 0.35, 0.02, 0.10, 0.03], // I   — sits, then → IV
+        [0.15, 0.10, 0.05, 0.30, 0.10, 0.25, 0.05], // ii  → IV/vi
+        [0.10, 0.05, 0.10, 0.30, 0.05, 0.35, 0.05], // iii → IV/vi
+        [0.50, 0.03, 0.03, 0.20, 0.04, 0.15, 0.05], // IV  → I (plagal return)
+        [0.40, 0.05, 0.05, 0.30, 0.05, 0.10, 0.05], // V   → I/IV (V is lost here)
+        [0.20, 0.05, 0.08, 0.40, 0.05, 0.15, 0.07], // vi  → IV
+        [0.35, 0.05, 0.05, 0.25, 0.10, 0.15, 0.05], // vii → I
     ],
     rhythmic: [
         //  Rest   Hold   Single Double Accent
-        [0.60,  0.25,  0.12,  0.02,  0.01], // Rest  — vast silence
-        [0.05,  0.70,  0.20,  0.03,  0.02], // Hold  — infinite sustain
-        [0.40,  0.25,  0.25,  0.06,  0.04], // Single → back to Rest/Hold
-        [0.50,  0.15,  0.25,  0.07,  0.03], // Double → Rest (transient)
-        [0.50,  0.20,  0.22,  0.05,  0.03], // Accent → Rest (transient)
+        [0.60, 0.25, 0.12, 0.02, 0.01], // Rest  — vast silence
+        [0.05, 0.70, 0.20, 0.03, 0.02], // Hold  — infinite sustain
+        [0.40, 0.25, 0.25, 0.06, 0.04], // Single → back to Rest/Hold
+        [0.50, 0.15, 0.25, 0.07, 0.03], // Double → Rest (transient)
+        [0.50, 0.20, 0.22, 0.05, 0.03], // Accent → Rest (transient)
     ],
     melodic: [
         //  1      2      3      4      5      6      7
-        [0.40,  0.20,  0.08,  0.05,  0.20,  0.04,  0.03], // 1 → 1/2/5 (drone + 5th)
-        [0.30,  0.20,  0.22,  0.10,  0.10,  0.05,  0.03], // 2 → 1 (return to drone)
-        [0.12,  0.28,  0.22,  0.18,  0.12,  0.05,  0.03], // 3 → 2 (stepwise)
-        [0.08,  0.10,  0.25,  0.22,  0.25,  0.07,  0.03], // 4 → 3/5
-        [0.30,  0.05,  0.08,  0.12,  0.30,  0.10,  0.05], // 5 → 1/5 (organ 5th)
-        [0.15,  0.05,  0.05,  0.08,  0.30,  0.22,  0.15], // 6 → 5
-        [0.40,  0.05,  0.05,  0.05,  0.18,  0.15,  0.12], // 7 → 1 (resolve)
+        [0.40, 0.20, 0.08, 0.05, 0.20, 0.04, 0.03], // 1 → 1/2/5 (drone + 5th)
+        [0.30, 0.20, 0.22, 0.10, 0.10, 0.05, 0.03], // 2 → 1 (return to drone)
+        [0.12, 0.28, 0.22, 0.18, 0.12, 0.05, 0.03], // 3 → 2 (stepwise)
+        [0.08, 0.10, 0.25, 0.22, 0.25, 0.07, 0.03], // 4 → 3/5
+        [0.30, 0.05, 0.08, 0.12, 0.30, 0.10, 0.05], // 5 → 1/5 (organ 5th)
+        [0.15, 0.05, 0.05, 0.08, 0.30, 0.22, 0.15], // 6 → 5
+        [0.40, 0.05, 0.05, 0.05, 0.18, 0.15, 0.12], // 7 → 1 (resolve)
     ],
 };
 
@@ -500,43 +536,47 @@ pub const MOOD_COSMIC: MoodSet = MoodSet {
 /// Rhythmic signature: mechanical Single pulse, clock-like, the machine never stops.
 pub const MOOD_GRAVITY: MoodSet = MoodSet {
     name: "Gravity",
-    gate_length: 0.55, // medium — deliberate, mechanical
-    rhythmic_speed: 1.4, // mechanical clock-pulse — Glass's relentless arpeggiation
-    chord_change_prob: 0.85, // tight chord cycles — minimalist loops advance steadily
+    gate_length: 0.55,          // medium — deliberate, mechanical
+    rhythmic_speed: 1.4,        // mechanical clock-pulse — Glass's relentless arpeggiation
+    chord_change_prob: 0.85,    // tight chord cycles — minimalist loops advance steadily
     gate_length_variance: 0.04, // very consistent — mechanical precision, Glass-like
     harmonic: [
         //  I      ii     iii    IV     V      vi     vii
-        [0.08,  0.05,  0.03,  0.12,  0.50,  0.15,  0.07], // I   → V (pushes forward)
-        [0.05,  0.05,  0.03,  0.10,  0.50,  0.20,  0.07], // ii  → V
-        [0.08,  0.05,  0.05,  0.30,  0.20,  0.25,  0.07], // iii → IV/vi
-        [0.45,  0.05,  0.03,  0.05,  0.20,  0.17,  0.05], // IV  → I (return)
-        [0.15,  0.05,  0.03,  0.05,  0.08,  0.55,  0.09], // V   → vi (deceptive!)
-        [0.08,  0.08,  0.05,  0.50,  0.15,  0.08,  0.06], // vi  → IV (the cycle)
-        [0.20,  0.05,  0.05,  0.15,  0.35,  0.15,  0.05], // vii → V
+        [0.08, 0.05, 0.03, 0.12, 0.50, 0.15, 0.07], // I   → V (pushes forward)
+        [0.05, 0.05, 0.03, 0.10, 0.50, 0.20, 0.07], // ii  → V
+        [0.08, 0.05, 0.05, 0.30, 0.20, 0.25, 0.07], // iii → IV/vi
+        [0.45, 0.05, 0.03, 0.05, 0.20, 0.17, 0.05], // IV  → I (return)
+        [0.15, 0.05, 0.03, 0.05, 0.08, 0.55, 0.09], // V   → vi (deceptive!)
+        [0.08, 0.08, 0.05, 0.50, 0.15, 0.08, 0.06], // vi  → IV (the cycle)
+        [0.20, 0.05, 0.05, 0.15, 0.35, 0.15, 0.05], // vii → V
     ],
     rhythmic: [
         //  Rest   Hold   Single Double Accent
-        [0.08,  0.10,  0.55,  0.15,  0.12], // Rest  → Single (machine starts)
-        [0.08,  0.15,  0.50,  0.15,  0.12], // Hold  → Single
-        [0.10,  0.12,  0.45,  0.20,  0.13], // Single → Single (steady pulse)
-        [0.12,  0.08,  0.45,  0.22,  0.13], // Double
-        [0.15,  0.08,  0.45,  0.20,  0.12], // Accent
+        [0.08, 0.10, 0.55, 0.15, 0.12], // Rest  → Single (machine starts)
+        [0.08, 0.15, 0.50, 0.15, 0.12], // Hold  → Single
+        [0.10, 0.12, 0.45, 0.20, 0.13], // Single → Single (steady pulse)
+        [0.12, 0.08, 0.45, 0.22, 0.13], // Double
+        [0.15, 0.08, 0.45, 0.20, 0.12], // Accent
     ],
     melodic: [
         //  1      2      3      4      5      6      7
-        [0.15,  0.12,  0.25,  0.05,  0.35,  0.05,  0.03], // 1 → 3/5 (ostinato)
-        [0.25,  0.10,  0.30,  0.10,  0.15,  0.07,  0.03], // 2 → 1/3
-        [0.15,  0.15,  0.12,  0.15,  0.30,  0.08,  0.05], // 3 → 5 (arpeggio up)
-        [0.08,  0.10,  0.25,  0.10,  0.35,  0.08,  0.04], // 4 → 3/5
-        [0.35,  0.08,  0.15,  0.10,  0.15,  0.10,  0.07], // 5 → 1 (arpeggio down)
-        [0.15,  0.05,  0.10,  0.08,  0.30,  0.15,  0.17], // 6 → 5
-        [0.40,  0.08,  0.10,  0.05,  0.20,  0.10,  0.07], // 7 → 1 (resolve)
+        [0.15, 0.12, 0.25, 0.05, 0.35, 0.05, 0.03], // 1 → 3/5 (ostinato)
+        [0.25, 0.10, 0.30, 0.10, 0.15, 0.07, 0.03], // 2 → 1/3
+        [0.15, 0.15, 0.12, 0.15, 0.30, 0.08, 0.05], // 3 → 5 (arpeggio up)
+        [0.08, 0.10, 0.25, 0.10, 0.35, 0.08, 0.04], // 4 → 3/5
+        [0.35, 0.08, 0.15, 0.10, 0.15, 0.10, 0.07], // 5 → 1 (arpeggio down)
+        [0.15, 0.05, 0.10, 0.08, 0.30, 0.15, 0.17], // 6 → 5
+        [0.40, 0.08, 0.10, 0.05, 0.20, 0.10, 0.07], // 7 → 1 (resolve)
     ],
 };
 
 pub const ALL_MOODS: &[&MoodSet] = &[
-    &MOOD_CALM, &MOOD_TENSE, &MOOD_DARK, &MOOD_EUPHORIC,
-    &MOOD_COSMIC, &MOOD_GRAVITY,
+    &MOOD_CALM,
+    &MOOD_TENSE,
+    &MOOD_DARK,
+    &MOOD_EUPHORIC,
+    &MOOD_COSMIC,
+    &MOOD_GRAVITY,
 ];
 pub const N_MOODS: usize = 6;
 
@@ -546,13 +586,13 @@ pub const N_MOODS: usize = 6;
 
 pub const PHRASE_BOUNDARY_HARMONIC: HarmonicMatrix = [
     //  I      ii     iii    IV     V      vi     vii
-    [0.10,  0.10,  0.10,  0.15,  0.15,  0.25,  0.15], // I   → vi (relative shift)
-    [0.10,  0.05,  0.10,  0.15,  0.25,  0.25,  0.10], // ii
-    [0.10,  0.10,  0.05,  0.20,  0.15,  0.25,  0.15], // iii
-    [0.15,  0.10,  0.10,  0.05,  0.20,  0.25,  0.15], // IV
-    [0.25,  0.10,  0.10,  0.15,  0.05,  0.25,  0.10], // V
-    [0.25,  0.15,  0.10,  0.15,  0.15,  0.10,  0.10], // vi → I (relative shift)
-    [0.20,  0.10,  0.10,  0.15,  0.20,  0.15,  0.10], // vii
+    [0.10, 0.10, 0.10, 0.15, 0.15, 0.25, 0.15], // I   → vi (relative shift)
+    [0.10, 0.05, 0.10, 0.15, 0.25, 0.25, 0.10], // ii
+    [0.10, 0.10, 0.05, 0.20, 0.15, 0.25, 0.15], // iii
+    [0.15, 0.10, 0.10, 0.05, 0.20, 0.25, 0.15], // IV
+    [0.25, 0.10, 0.10, 0.15, 0.05, 0.25, 0.10], // V
+    [0.25, 0.15, 0.10, 0.15, 0.15, 0.10, 0.10], // vi → I (relative shift)
+    [0.20, 0.10, 0.10, 0.15, 0.20, 0.15, 0.10], // vii
 ];
 
 // ---------------------------------------------------------------------------
@@ -564,25 +604,25 @@ pub const PHRASE_BOUNDARY_HARMONIC: HarmonicMatrix = [
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum VoiceRole {
     #[default]
-    Bass    = 0,
-    Pad     = 1,
-    Melody  = 2,
+    Bass = 0,
+    Pad = 1,
+    Melody = 2,
     Texture = 3,
     /// Rhythmic pulse voice — fast, root-locked, designed for percussive/sequencer patches.
     /// Use with short-envelope patches (saw stabs, FM hits, noise bursts) to add
     /// rhythmic drive to a scene without breaking the ambient harmonic framework.
-    Pulse   = 4,
+    Pulse = 4,
 }
 
 impl VoiceRole {
     /// MIDI note range [low, high] for this role.
     pub fn register(self) -> (u8, u8) {
         match self {
-            Self::Bass    => (24, 47),
-            Self::Pad     => (48, 71),
-            Self::Melody  => (60, 83),
+            Self::Bass => (24, 47),
+            Self::Pad => (48, 71),
+            Self::Melody => (60, 83),
             Self::Texture => (72, 95),
-            Self::Pulse   => (36, 60), // low-mid: rhythmic stabs and bass hits
+            Self::Pulse => (36, 60), // low-mid: rhythmic stabs and bass hits
         }
     }
 
@@ -590,11 +630,11 @@ impl VoiceRole {
     /// toward the active harmony. Higher = more chord-locked.
     pub fn chord_attraction(self) -> f32 {
         match self {
-            Self::Bass    => 3.5, // almost always root/fifth
-            Self::Pad     => 2.5, // chord tones strongly preferred
-            Self::Melody  => 1.6, // mild pull; passing tones still happen
+            Self::Bass => 3.5,    // almost always root/fifth
+            Self::Pad => 2.5,     // chord tones strongly preferred
+            Self::Melody => 1.6,  // mild pull; passing tones still happen
             Self::Texture => 1.2, // mostly free, slight harmonic gravity
-            Self::Pulse   => 4.0, // very chord-locked — rhythmic parts need harmonic clarity
+            Self::Pulse => 4.0,   // very chord-locked — rhythmic parts need harmonic clarity
         }
     }
 
@@ -602,30 +642,42 @@ impl VoiceRole {
     /// 0.0 = forbidden, 1.0 = neutral, >1.0 = preferred.
     pub fn degree_bias(self) -> [f32; MELODIC_STATES] {
         match self {
-            Self::Bass    => [3.0, 0.8, 0.0, 0.0, 2.5, 0.0, 0.0],
-            Self::Pad     => [2.0, 0.5, 2.0, 0.3, 2.0, 0.5, 0.3],
-            Self::Melody  => [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            Self::Bass => [3.0, 0.8, 0.0, 0.0, 2.5, 0.0, 0.0],
+            Self::Pad => [2.0, 0.5, 2.0, 0.3, 2.0, 0.5, 0.3],
+            Self::Melody => [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
             Self::Texture => [0.2, 1.5, 1.2, 0.5, 0.5, 2.0, 1.8],
-            Self::Pulse   => [4.0, 0.3, 0.0, 0.0, 3.0, 0.0, 0.3], // root + fifth only
+            Self::Pulse => [4.0, 0.3, 0.0, 0.0, 3.0, 0.0, 0.3], // root + fifth only
         }
     }
 
     /// How many subdivisions between rhythmic steps (1 = every subdiv, 2 = every other).
     pub fn rhythmic_divisor(self) -> u32 {
         match self {
-            Self::Bass    => 2,
-            Self::Pad     => 2,
-            Self::Melody  => 1,
+            Self::Bass => 2,
+            Self::Pad => 2,
+            Self::Melody => 1,
             Self::Texture => 4,
-            Self::Pulse   => 1, // fastest — mood rhythmic_speed controls actual rate
+            Self::Pulse => 1, // fastest — mood rhythmic_speed controls actual rate
         }
     }
 
-    pub const ALL: &'static [Self] = &[Self::Bass, Self::Pad, Self::Melody, Self::Texture, Self::Pulse];
+    pub const ALL: &'static [Self] = &[
+        Self::Bass,
+        Self::Pad,
+        Self::Melody,
+        Self::Texture,
+        Self::Pulse,
+    ];
     pub const LABELS: &'static [&'static str] = &["Bass", "Pad", "Melody", "Texture", "Pulse"];
 
     pub fn from_u8(v: u8) -> Self {
-        match v { 1 => Self::Pad, 2 => Self::Melody, 3 => Self::Texture, 4 => Self::Pulse, _ => Self::Bass }
+        match v {
+            1 => Self::Pad,
+            2 => Self::Melody,
+            3 => Self::Texture,
+            4 => Self::Pulse,
+            _ => Self::Bass,
+        }
     }
 }
 
@@ -641,7 +693,10 @@ pub struct HarmonicChain {
 
 impl HarmonicChain {
     pub fn new(seed: u64) -> Self {
-        Self { state: HarmonicFunction::Tonic, rng: Lcg::new(seed) }
+        Self {
+            state: HarmonicFunction::Tonic,
+            rng: Lcg::new(seed),
+        }
     }
 
     /// Advance the chain using the blended mood matrix.
@@ -671,7 +726,11 @@ pub struct RhythmicChain {
 
 impl RhythmicChain {
     pub fn new(seed: u64) -> Self {
-        Self { state: RhythmicState::Rest, rng: Lcg::new(seed), subdiv_counter: 0 }
+        Self {
+            state: RhythmicState::Rest,
+            rng: Lcg::new(seed),
+            subdiv_counter: 0,
+        }
     }
 
     /// Call once per subdivision. Returns the new state only when the role's
@@ -718,7 +777,10 @@ pub struct MelodicChain {
 
 impl MelodicChain {
     pub fn new(seed: u64, start_degree: usize) -> Self {
-        Self { degree: start_degree % MELODIC_STATES, rng: Lcg::new(seed) }
+        Self {
+            degree: start_degree % MELODIC_STATES,
+            rng: Lcg::new(seed),
+        }
     }
 
     /// Advance the melodic chain and resolve to a MIDI pitch.
@@ -754,7 +816,11 @@ impl MelodicChain {
             }
             // Renormalize after attraction boost
             let total: f32 = attracted.iter().sum();
-            if total > 0.0 { for v in &mut attracted { *v /= total; } }
+            if total > 0.0 {
+                for v in &mut attracted {
+                    *v /= total;
+                }
+            }
 
             self.degree = self.rng.sample_row(&attracted);
         }
@@ -765,8 +831,12 @@ impl MelodicChain {
 
         // If out of register, shift by octaves
         let mut midi = raw;
-        while midi < lo && midi + 12 <= hi { midi += 12; }
-        while midi > hi && midi >= lo + 12 { midi -= 12; }
+        while midi < lo && midi + 12 <= hi {
+            midi += 12;
+        }
+        while midi > hi && midi >= lo + 12 {
+            midi -= 12;
+        }
 
         midi.clamp(lo, hi)
     }
@@ -794,7 +864,11 @@ pub struct PhraseEvents {
 
 impl PhraseCounter {
     pub fn new(bars_per_phrase: u32) -> Self {
-        Self { bar: 0, bars_per_phrase: bars_per_phrase.max(1), bars_in_phrase: 0 }
+        Self {
+            bar: 0,
+            bars_per_phrase: bars_per_phrase.max(1),
+            bars_in_phrase: 0,
+        }
     }
 
     /// Call when `BeatEvents::bar` fires.
@@ -802,8 +876,13 @@ impl PhraseCounter {
         self.bar += 1;
         self.bars_in_phrase += 1;
         let phrase_boundary = self.bars_in_phrase >= self.bars_per_phrase;
-        if phrase_boundary { self.bars_in_phrase = 0; }
-        PhraseEvents { new_bar: true, phrase_boundary }
+        if phrase_boundary {
+            self.bars_in_phrase = 0;
+        }
+        PhraseEvents {
+            new_bar: true,
+            phrase_boundary,
+        }
     }
 
     pub fn reset(&mut self) {
@@ -881,12 +960,19 @@ impl MoodBlend {
 
     /// Blend gate_length from mood weights. Returns value in [0.0, 1.0].
     pub fn blend_gate_length(&self, moods: &[&MoodSet; N_MOODS]) -> f32 {
-        moods.iter().enumerate().map(|(i, m)| self.weight(i) * m.gate_length).sum::<f32>().clamp(0.0, 1.0)
+        moods
+            .iter()
+            .enumerate()
+            .map(|(i, m)| self.weight(i) * m.gate_length)
+            .sum::<f32>()
+            .clamp(0.0, 1.0)
     }
 
     /// Blend rhythmic_speed from mood weights. Returns multiplier (>0).
     pub fn blend_rhythmic_speed(&self, moods: &[&MoodSet; N_MOODS]) -> f32 {
-        moods.iter().enumerate()
+        moods
+            .iter()
+            .enumerate()
             .map(|(i, m)| self.weight(i) * m.rhythmic_speed)
             .sum::<f32>()
             .max(0.1) // never fully stop
@@ -894,7 +980,9 @@ impl MoodBlend {
 
     /// Blend chord_change_prob from mood weights. Returns probability in [0.0, 1.0].
     pub fn blend_chord_change_prob(&self, moods: &[&MoodSet; N_MOODS]) -> f32 {
-        moods.iter().enumerate()
+        moods
+            .iter()
+            .enumerate()
             .map(|(i, m)| self.weight(i) * m.chord_change_prob)
             .sum::<f32>()
             .clamp(0.0, 1.0)
@@ -902,7 +990,9 @@ impl MoodBlend {
 
     /// Blend gate_length_variance from mood weights. Returns value >= 0.
     pub fn blend_gate_length_variance(&self, moods: &[&MoodSet; N_MOODS]) -> f32 {
-        moods.iter().enumerate()
+        moods
+            .iter()
+            .enumerate()
             .map(|(i, m)| self.weight(i) * m.gate_length_variance)
             .sum::<f32>()
             .max(0.0)
@@ -926,21 +1016,37 @@ impl MoodBlend {
     }
 }
 
-impl Default for MoodBlend { fn default() -> Self { Self::new() } }
+impl Default for MoodBlend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 fn scale_harmonic(m: &HarmonicMatrix, w: f32) -> HarmonicMatrix {
     let mut out = [[0.0f32; HARMONIC_STATES]; HARMONIC_STATES];
-    for r in 0..HARMONIC_STATES { for c in 0..HARMONIC_STATES { out[r][c] = m[r][c] * w; } }
+    for r in 0..HARMONIC_STATES {
+        for c in 0..HARMONIC_STATES {
+            out[r][c] = m[r][c] * w;
+        }
+    }
     out
 }
 fn scale_rhythmic(m: &RhythmicMatrix, w: f32) -> RhythmicMatrix {
     let mut out = [[0.0f32; RHYTHMIC_STATES]; RHYTHMIC_STATES];
-    for r in 0..RHYTHMIC_STATES { for c in 0..RHYTHMIC_STATES { out[r][c] = m[r][c] * w; } }
+    for r in 0..RHYTHMIC_STATES {
+        for c in 0..RHYTHMIC_STATES {
+            out[r][c] = m[r][c] * w;
+        }
+    }
     out
 }
 fn scale_melodic(m: &MelodicMatrix, w: f32) -> MelodicMatrix {
     let mut out = [[0.0f32; MELODIC_STATES]; MELODIC_STATES];
-    for r in 0..MELODIC_STATES { for c in 0..MELODIC_STATES { out[r][c] = m[r][c] * w; } }
+    for r in 0..MELODIC_STATES {
+        for c in 0..MELODIC_STATES {
+            out[r][c] = m[r][c] * w;
+        }
+    }
     out
 }
 
@@ -955,11 +1061,11 @@ pub const LAUNCHPAD_COLS: usize = 16;
 #[derive(Clone)]
 pub struct MarkovEngineShared {
     /// MIDI root note (0-127).
-    pub root:    Arc<AtomicU8>,
+    pub root: Arc<AtomicU8>,
     /// Scale (Scale enum as u8).
-    pub scale:   Arc<AtomicU8>,
+    pub scale: Arc<AtomicU8>,
     /// Mood blend weights.
-    pub mood:    MoodBlend,
+    pub mood: MoodBlend,
     /// Global density (0.0-1.0). Per-voice density can add on top.
     pub density: Shared,
     /// Bars per phrase.
@@ -994,7 +1100,7 @@ pub struct MarkovEngineShared {
     // ── Motif lock (per-voice) ───────────────────────────────────────────────
     /// When true for voice i, the engine switches to motif-lock mode.
     /// Setting to true triggers the Capturing phase; false returns to Off.
-    pub motif_lock:   Vec<Arc<AtomicBool>>,
+    pub motif_lock: Vec<Arc<AtomicBool>>,
     /// Capture length in steps (4, 8, 16, or 32). Clamped to MOTIF_BUF_MAX.
     pub motif_length: Vec<Arc<AtomicU8>>,
     /// Read-only flag written by the audio thread: true when voice is in Replaying phase.
@@ -1022,9 +1128,9 @@ pub struct MarkovEngineShared {
     /// Number of active chord slots in the sequence (1–8). 1 = static key (legacy).
     pub seq_len: Arc<AtomicU8>,
     /// Root MIDI note for each sequence slot (8 slots max).
-    pub seq_roots:   Vec<Arc<AtomicU8>>,
+    pub seq_roots: Vec<Arc<AtomicU8>>,
     /// Scale (Scale enum as u8) for each sequence slot.
-    pub seq_scales:  Vec<Arc<AtomicU8>>,
+    pub seq_scales: Vec<Arc<AtomicU8>>,
     /// Number of phrases each slot lasts before advancing (1–16).
     pub seq_phrases: Vec<Arc<AtomicU8>>,
 }
@@ -1034,52 +1140,86 @@ impl MarkovEngineShared {
 
     pub fn new(n_voices: usize) -> Self {
         Self {
-            root:    Arc::new(AtomicU8::new(60)), // C4
-            scale:   Arc::new(AtomicU8::new(Scale::Minor as u8)),
-            mood:    MoodBlend::new(),
+            root: Arc::new(AtomicU8::new(60)), // C4
+            scale: Arc::new(AtomicU8::new(Scale::Minor as u8)),
+            mood: MoodBlend::new(),
             density: shared(0.5),
             bars_per_phrase: Arc::new(std::sync::atomic::AtomicU32::new(4)),
-            roles:         (0..n_voices).map(|i| Arc::new(AtomicU8::new(match i % 4 {
-                0 => VoiceRole::Bass as u8,
-                1 => VoiceRole::Pad as u8,
-                2 => VoiceRole::Melody as u8,
-                _ => VoiceRole::Texture as u8,
-            }))).collect(),
-            voice_density:  (0..n_voices).map(|_| shared(0.0)).collect(),
-            voice_enabled:  (0..n_voices).map(|_| Arc::new(AtomicBool::new(true))).collect(),
-            voice_octave:   (0..n_voices).map(|_| Arc::new(AtomicU8::new(64))).collect(),
+            roles: (0..n_voices)
+                .map(|i| {
+                    Arc::new(AtomicU8::new(match i % 4 {
+                        0 => VoiceRole::Bass as u8,
+                        1 => VoiceRole::Pad as u8,
+                        2 => VoiceRole::Melody as u8,
+                        _ => VoiceRole::Texture as u8,
+                    }))
+                })
+                .collect(),
+            voice_density: (0..n_voices).map(|_| shared(0.0)).collect(),
+            voice_enabled: (0..n_voices)
+                .map(|_| Arc::new(AtomicBool::new(true)))
+                .collect(),
+            voice_octave: (0..n_voices).map(|_| Arc::new(AtomicU8::new(64))).collect(),
             launchpad: Arc::new(
-                (0..n_voices).map(|_| std::array::from_fn(|_| AtomicU8::new(0))).collect()
+                (0..n_voices)
+                    .map(|_| std::array::from_fn(|_| AtomicU8::new(0)))
+                    .collect(),
             ),
             launchpad_col: Arc::new(AtomicUsize::new(0)),
-            chord_attraction:     shared(0.5),
-            bass_lock:            Arc::new(AtomicBool::new(true)),
-            dissonance_resolve:   Arc::new(AtomicBool::new(true)),
+            chord_attraction: shared(0.5),
+            bass_lock: Arc::new(AtomicBool::new(true)),
+            dissonance_resolve: Arc::new(AtomicBool::new(true)),
             dissonance_threshold: Arc::new(AtomicU8::new(1)),
-            register_drift:       shared(0.2),
-            motif_lock:   (0..n_voices).map(|_| Arc::new(AtomicBool::new(false))).collect(),
+            register_drift: shared(0.2),
+            motif_lock: (0..n_voices)
+                .map(|_| Arc::new(AtomicBool::new(false)))
+                .collect(),
             motif_length: (0..n_voices).map(|_| Arc::new(AtomicU8::new(16))).collect(),
-            motif_active: (0..n_voices).map(|_| Arc::new(AtomicBool::new(false))).collect(),
-            clock_div:            Arc::new(AtomicU8::new(4)), // one step per beat by default
-            phrase_epoch:             Arc::new(AtomicUsize::new(0)),
-            bar_epoch:                Arc::new(AtomicUsize::new(0)),
-            subdivision_epoch:        Arc::new(AtomicUsize::new(0)),
-            force_timeline_advance:   Arc::new(AtomicBool::new(false)),
-            seq_len:              Arc::new(AtomicU8::new(1)),
-            seq_roots:   (0..Self::SEQ_MAX).map(|_| Arc::new(AtomicU8::new(60))).collect(),
-            seq_scales:  (0..Self::SEQ_MAX).map(|_| Arc::new(AtomicU8::new(0))).collect(),
-            seq_phrases: (0..Self::SEQ_MAX).map(|_| Arc::new(AtomicU8::new(4))).collect(),
+            motif_active: (0..n_voices)
+                .map(|_| Arc::new(AtomicBool::new(false)))
+                .collect(),
+            clock_div: Arc::new(AtomicU8::new(4)), // one step per beat by default
+            phrase_epoch: Arc::new(AtomicUsize::new(0)),
+            bar_epoch: Arc::new(AtomicUsize::new(0)),
+            subdivision_epoch: Arc::new(AtomicUsize::new(0)),
+            force_timeline_advance: Arc::new(AtomicBool::new(false)),
+            seq_len: Arc::new(AtomicU8::new(1)),
+            seq_roots: (0..Self::SEQ_MAX)
+                .map(|_| Arc::new(AtomicU8::new(60)))
+                .collect(),
+            seq_scales: (0..Self::SEQ_MAX)
+                .map(|_| Arc::new(AtomicU8::new(0)))
+                .collect(),
+            seq_phrases: (0..Self::SEQ_MAX)
+                .map(|_| Arc::new(AtomicU8::new(4)))
+                .collect(),
         }
     }
 
-    pub fn root(&self) -> u8 { self.root.load(Ordering::Relaxed) }
-    pub fn scale(&self) -> Scale { Scale::from_u8(self.scale.load(Ordering::Relaxed)) }
-    pub fn density(&self) -> f32 { self.density.value() }
-    pub fn chord_attraction(&self) -> f32 { self.chord_attraction.value().clamp(0.0, 1.0) }
-    pub fn bass_lock(&self) -> bool { self.bass_lock.load(Ordering::Relaxed) }
-    pub fn dissonance_resolve(&self) -> bool { self.dissonance_resolve.load(Ordering::Relaxed) }
-    pub fn dissonance_threshold(&self) -> u8 { self.dissonance_threshold.load(Ordering::Relaxed) }
-    pub fn register_drift(&self) -> f32 { self.register_drift.value().clamp(0.0, 1.0) }
+    pub fn root(&self) -> u8 {
+        self.root.load(Ordering::Relaxed)
+    }
+    pub fn scale(&self) -> Scale {
+        Scale::from_u8(self.scale.load(Ordering::Relaxed))
+    }
+    pub fn density(&self) -> f32 {
+        self.density.value()
+    }
+    pub fn chord_attraction(&self) -> f32 {
+        self.chord_attraction.value().clamp(0.0, 1.0)
+    }
+    pub fn bass_lock(&self) -> bool {
+        self.bass_lock.load(Ordering::Relaxed)
+    }
+    pub fn dissonance_resolve(&self) -> bool {
+        self.dissonance_resolve.load(Ordering::Relaxed)
+    }
+    pub fn dissonance_threshold(&self) -> u8 {
+        self.dissonance_threshold.load(Ordering::Relaxed)
+    }
+    pub fn register_drift(&self) -> f32 {
+        self.register_drift.value().clamp(0.0, 1.0)
+    }
 
     pub fn role(&self, i: usize) -> VoiceRole {
         VoiceRole::from_u8(self.roles[i].load(Ordering::Relaxed))
@@ -1087,7 +1227,11 @@ impl MarkovEngineShared {
 
     pub fn voice_density(&self, i: usize) -> f32 {
         let vd = self.voice_density[i].value();
-        if vd > 0.0 { vd } else { self.density() }
+        if vd > 0.0 {
+            vd
+        } else {
+            self.density()
+        }
     }
 
     pub fn voice_enabled(&self, i: usize) -> bool {
@@ -1119,7 +1263,9 @@ impl MarkovEngineShared {
     }
 
     pub fn seq_phrases(&self, slot: usize) -> u8 {
-        self.seq_phrases[slot.min(Self::SEQ_MAX - 1)].load(Ordering::Relaxed).max(1)
+        self.seq_phrases[slot.min(Self::SEQ_MAX - 1)]
+            .load(Ordering::Relaxed)
+            .max(1)
     }
 }
 
@@ -1149,7 +1295,7 @@ pub const MOTIF_BUF_MAX: usize = 32;
 /// Audio-thread-only state for one voice.
 pub struct MarkovVoice {
     pub rhythmic: RhythmicChain,
-    pub melodic:  MelodicChain,
+    pub melodic: MelodicChain,
     pub current_note: Option<u8>,
     /// Set by on_bar for Bass voices; consumed on the next attack to force root snap.
     pending_root_snap: bool,
@@ -1159,20 +1305,20 @@ pub struct MarkovVoice {
     note_age_subdivs: u32,
     // ── Motif lock ────────────────────────────────────────────────────────────
     motif_phase: MotifPhase,
-    motif_buf:   [RhythmicState; MOTIF_BUF_MAX],
-    motif_len:   u8,  // captured length (4–32 steps)
-    motif_pos:   u8,  // current replay cursor
+    motif_buf: [RhythmicState; MOTIF_BUF_MAX],
+    motif_len: u8, // captured length (4–32 steps)
+    motif_pos: u8, // current replay cursor
 }
 
 /// Events emitted by a single voice per subdivision.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct VoiceEvent {
-    pub note_on:  Option<u8>,
+    pub note_on: Option<u8>,
     pub note_off: Option<u8>,
     /// True if this was an Accent (caller can use for velocity).
-    pub accent:   bool,
+    pub accent: bool,
     /// True if this was a Double (caller should fire two rapid NoteOns).
-    pub double:   bool,
+    pub double: bool,
     /// The rhythmic state that produced this event (used by Launchpad display).
     pub rhythmic: RhythmicState,
 }
@@ -1181,15 +1327,15 @@ impl MarkovVoice {
     pub fn new(seed: u64) -> Self {
         Self {
             rhythmic: RhythmicChain::new(seed),
-            melodic:  MelodicChain::new(seed ^ 0xDEAD_BEEF, 0),
+            melodic: MelodicChain::new(seed ^ 0xDEAD_BEEF, 0),
             current_note: None,
             pending_root_snap: false,
             octave_drift: 0,
             note_age_subdivs: 0,
             motif_phase: MotifPhase::Off,
-            motif_buf:   [RhythmicState::Rest; MOTIF_BUF_MAX],
-            motif_len:   16,
-            motif_pos:   0,
+            motif_buf: [RhythmicState::Rest; MOTIF_BUF_MAX],
+            motif_len: 16,
+            motif_pos: 0,
         }
     }
 
@@ -1217,7 +1363,9 @@ impl MarkovVoice {
                     // Start capturing.
                     self.motif_len = capture_len;
                     self.motif_pos = 0;
-                    self.motif_phase = MotifPhase::Capturing { steps_remaining: capture_len };
+                    self.motif_phase = MotifPhase::Capturing {
+                        steps_remaining: capture_len,
+                    };
                     shared.motif_active[voice_idx].store(false, Ordering::Relaxed);
                 }
             }
@@ -1233,11 +1381,16 @@ impl MarkovVoice {
         match self.motif_phase {
             MotifPhase::Off => {
                 // Normal Markov path.
-                self.rhythmic.on_subdivision(rhythmic_matrix, density, role, rhythmic_speed)
+                self.rhythmic
+                    .on_subdivision(rhythmic_matrix, density, role, rhythmic_speed)
             }
-            MotifPhase::Capturing { ref mut steps_remaining } => {
+            MotifPhase::Capturing {
+                ref mut steps_remaining,
+            } => {
                 // Run chain normally and record the output.
-                let state = self.rhythmic.on_subdivision(rhythmic_matrix, density, role, rhythmic_speed)?;
+                let state =
+                    self.rhythmic
+                        .on_subdivision(rhythmic_matrix, density, role, rhythmic_speed)?;
                 let idx = (self.motif_len - *steps_remaining) as usize;
                 self.motif_buf[idx.min(MOTIF_BUF_MAX - 1)] = state;
                 *steps_remaining -= 1;
@@ -1265,19 +1418,22 @@ impl MarkovVoice {
     pub fn on_subdivision(
         &mut self,
         rhythmic_matrix: &RhythmicMatrix,
-        melodic_matrix:  &MelodicMatrix,
-        harmonic:        &HarmonicChain,
-        shared:          &MarkovEngineShared,
-        voice_idx:       usize,
-        gate_subdivs:    u32,
-        rhythmic_speed:  f32,
+        melodic_matrix: &MelodicMatrix,
+        harmonic: &HarmonicChain,
+        shared: &MarkovEngineShared,
+        voice_idx: usize,
+        gate_subdivs: u32,
+        rhythmic_speed: f32,
     ) -> VoiceEvent {
         if !shared.voice_enabled(voice_idx) {
             let note_off = self.current_note.take();
-            return VoiceEvent { note_off, ..Default::default() };
+            return VoiceEvent {
+                note_off,
+                ..Default::default()
+            };
         }
 
-        let role    = shared.role(voice_idx);
+        let role = shared.role(voice_idx);
         let density = shared.voice_density(voice_idx);
 
         // Increment age of any sustained note and auto-off if gate expired.
@@ -1293,12 +1449,20 @@ impl MarkovVoice {
         }
 
         let Some(rhythmic_state) = self.rhythmic_step(
-            rhythmic_matrix, density, role, rhythmic_speed, shared, voice_idx
+            rhythmic_matrix,
+            density,
+            role,
+            rhythmic_speed,
+            shared,
+            voice_idx,
         ) else {
             return VoiceEvent::default();
         };
 
-        let mut ev = VoiceEvent { rhythmic: rhythmic_state, ..Default::default() };
+        let mut ev = VoiceEvent {
+            rhythmic: rhythmic_state,
+            ..Default::default()
+        };
 
         match rhythmic_state {
             RhythmicState::Rest => {
@@ -1327,8 +1491,8 @@ impl MarkovVoice {
                 self.current_note = Some(pitch);
                 self.note_age_subdivs = 0;
                 ev.note_on = Some(pitch);
-                ev.accent  = rhythmic_state == RhythmicState::Accent;
-                ev.double  = rhythmic_state == RhythmicState::Double;
+                ev.accent = rhythmic_state == RhythmicState::Accent;
+                ev.double = rhythmic_state == RhythmicState::Double;
             }
         }
 
@@ -1342,14 +1506,14 @@ impl MarkovVoice {
 
 /// Full Markov engine, audio thread only.
 pub struct MarkovEngine {
-    pub voices:   Vec<MarkovVoice>,
+    pub voices: Vec<MarkovVoice>,
     pub harmonic: HarmonicChain,
-    pub phrase:   PhraseCounter,
-    moods:        [&'static MoodSet; N_MOODS],
+    pub phrase: PhraseCounter,
+    moods: [&'static MoodSet; N_MOODS],
     /// RNG used for phrase-level decisions (register drift, chord change).
-    phrase_rng:   Lcg,
+    phrase_rng: Lcg,
     /// RNG used for per-note gate length variance.
-    gate_rng:     Lcg,
+    gate_rng: Lcg,
     /// Current slot index in the harmonic sequence.
     pub seq_slot: usize,
     /// Number of phrases elapsed in the current sequence slot.
@@ -1359,12 +1523,21 @@ pub struct MarkovEngine {
 impl MarkovEngine {
     pub fn new(n_voices: usize, seed: u64) -> Self {
         Self {
-            voices:      (0..n_voices).map(|i| MarkovVoice::new(seed ^ (i as u64 * 0x1111_1111))).collect(),
-            harmonic:    HarmonicChain::new(seed ^ 0xFEED_FACE),
-            phrase:      PhraseCounter::new(4),
-            moods:       [&MOOD_CALM, &MOOD_TENSE, &MOOD_DARK, &MOOD_EUPHORIC, &MOOD_COSMIC, &MOOD_GRAVITY],
-            phrase_rng:  Lcg::new(seed ^ 0xA5A5_B6B6),
-            gate_rng:    Lcg::new(seed ^ 0x7777_CAFE),
+            voices: (0..n_voices)
+                .map(|i| MarkovVoice::new(seed ^ (i as u64 * 0x1111_1111)))
+                .collect(),
+            harmonic: HarmonicChain::new(seed ^ 0xFEED_FACE),
+            phrase: PhraseCounter::new(4),
+            moods: [
+                &MOOD_CALM,
+                &MOOD_TENSE,
+                &MOOD_DARK,
+                &MOOD_EUPHORIC,
+                &MOOD_COSMIC,
+                &MOOD_GRAVITY,
+            ],
+            phrase_rng: Lcg::new(seed ^ 0xA5A5_B6B6),
+            gate_rng: Lcg::new(seed ^ 0x7777_CAFE),
             seq_slot: 0,
             phrases_in_slot: 0,
         }
@@ -1374,7 +1547,7 @@ impl MarkovEngine {
     /// Returns one `VoiceEvent` per voice.
     pub fn on_subdivision(&mut self, shared: &MarkovEngineShared) -> Vec<VoiceEvent> {
         let rhythmic = shared.mood.blend_rhythmic(&self.moods);
-        let melodic  = shared.mood.blend_melodic(&self.moods);
+        let melodic = shared.mood.blend_melodic(&self.moods);
 
         // Blend gate length from moods: 0.0 → 1 step, 1.0 → 16 steps.
         let gate_blend = shared.mood.blend_gate_length(&self.moods).clamp(0.0, 1.0);
@@ -1397,10 +1570,21 @@ impl MarkovEngine {
             gate_per_voice.push(((effective_gate * 15.0) as u32 + 1).max(1));
         }
 
-        let mut events: Vec<VoiceEvent> = self.voices
+        let mut events: Vec<VoiceEvent> = self
+            .voices
             .iter_mut()
             .enumerate()
-            .map(|(i, v)| v.on_subdivision(&rhythmic, &melodic, &self.harmonic, shared, i, gate_per_voice[i], rhythmic_speed))
+            .map(|(i, v)| {
+                v.on_subdivision(
+                    &rhythmic,
+                    &melodic,
+                    &self.harmonic,
+                    shared,
+                    i,
+                    gate_per_voice[i],
+                    rhythmic_speed,
+                )
+            })
             .collect();
 
         // ── Dissonance resolution post-pass ──────────────────────────────────
@@ -1457,8 +1641,13 @@ impl MarkovEngine {
                     self.phrases_in_slot = 0;
                     self.seq_slot = (self.seq_slot + 1) % seq_len;
                     // Update the active root + scale atomics so voices pick them up.
-                    shared.root.store(shared.seq_root(self.seq_slot), Ordering::Relaxed);
-                    shared.scale.store(shared.seq_scales[self.seq_slot].load(Ordering::Relaxed), Ordering::Relaxed);
+                    shared
+                        .root
+                        .store(shared.seq_root(self.seq_slot), Ordering::Relaxed);
+                    shared.scale.store(
+                        shared.seq_scales[self.seq_slot].load(Ordering::Relaxed),
+                        Ordering::Relaxed,
+                    );
                 }
             }
             self.harmonic.advance(&PHRASE_BOUNDARY_HARMONIC);
@@ -1493,10 +1682,16 @@ impl MarkovEngine {
             if drift_prob > 0.0 {
                 for (i, voice) in self.voices.iter_mut().enumerate() {
                     let role = shared.role(i);
-                    if role == VoiceRole::Bass || role == VoiceRole::Pulse { continue; }
+                    if role == VoiceRole::Bass || role == VoiceRole::Pulse {
+                        continue;
+                    }
                     let r = (self.phrase_rng.next_u32() as f32) / (u32::MAX as f32);
                     if r < drift_prob {
-                        let dir: i8 = if self.phrase_rng.next_u32() & 1 == 0 { 1 } else { -1 };
+                        let dir: i8 = if self.phrase_rng.next_u32() & 1 == 0 {
+                            1
+                        } else {
+                            -1
+                        };
                         voice.octave_drift = (voice.octave_drift + dir).clamp(-1, 1);
                     }
                 }
@@ -1506,7 +1701,9 @@ impl MarkovEngine {
         phrase_ev
     }
 
-    pub fn n_voices(&self) -> usize { self.voices.len() }
+    pub fn n_voices(&self) -> usize {
+        self.voices.len()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1544,7 +1741,6 @@ pub struct TimelineSection {
     pub transition_phrases: u32,
 
     // ── Target values (all optional — omitted = carry forward from previous) ──
-
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mood: Option<Vec<f32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1634,22 +1830,42 @@ impl ResolvedState {
                 out.mood[i] = w;
             }
         }
-        if let Some(d) = section.density { out.density = d; }
-        if let Some(r) = section.root { out.root = r; }
-        if let Some(s) = section.scale { out.scale = s; }
-        if let Some(b) = section.bars_per_phrase { out.bars_per_phrase = b; }
+        if let Some(d) = section.density {
+            out.density = d;
+        }
+        if let Some(r) = section.root {
+            out.root = r;
+        }
+        if let Some(s) = section.scale {
+            out.scale = s;
+        }
+        if let Some(b) = section.bars_per_phrase {
+            out.bars_per_phrase = b;
+        }
         if let Some(ref ve) = section.voice_enabled {
             for (i, &v) in ve.iter().enumerate().take(4) {
                 out.voice_enabled[i] = v;
             }
         }
         if let Some(ref fx) = section.effects {
-            if let Some(v) = fx.shimmer_mix { out.shimmer_mix = v; }
-            if let Some(v) = fx.shimmer_amount { out.shimmer_amount = v; }
-            if let Some(v) = fx.shimmer_size { out.shimmer_size = v; }
-            if let Some(v) = fx.crystal_mix { out.crystal_mix = v; }
-            if let Some(v) = fx.crystal_feedback { out.crystal_feedback = v; }
-            if let Some(v) = fx.crystal_delay_ms { out.crystal_delay_ms = v; }
+            if let Some(v) = fx.shimmer_mix {
+                out.shimmer_mix = v;
+            }
+            if let Some(v) = fx.shimmer_amount {
+                out.shimmer_amount = v;
+            }
+            if let Some(v) = fx.shimmer_size {
+                out.shimmer_size = v;
+            }
+            if let Some(v) = fx.crystal_mix {
+                out.crystal_mix = v;
+            }
+            if let Some(v) = fx.crystal_feedback {
+                out.crystal_feedback = v;
+            }
+            if let Some(v) = fx.crystal_delay_ms {
+                out.crystal_delay_ms = v;
+            }
         }
         out
     }
@@ -1671,8 +1887,16 @@ impl ResolvedState {
             density: self.density * (1.0 - t) + other.density * t,
             root: if snap { other.root } else { self.root },
             scale: if snap { other.scale } else { self.scale },
-            bars_per_phrase: if snap { other.bars_per_phrase } else { self.bars_per_phrase },
-            voice_enabled: if snap { other.voice_enabled } else { self.voice_enabled },
+            bars_per_phrase: if snap {
+                other.bars_per_phrase
+            } else {
+                self.bars_per_phrase
+            },
+            voice_enabled: if snap {
+                other.voice_enabled
+            } else {
+                self.voice_enabled
+            },
             shimmer_mix: self.shimmer_mix * (1.0 - t) + other.shimmer_mix * t,
             shimmer_amount: self.shimmer_amount * (1.0 - t) + other.shimmer_amount * t,
             shimmer_size: self.shimmer_size * (1.0 - t) + other.shimmer_size * t,
@@ -1820,7 +2044,10 @@ impl Timeline {
         // Jump phrase_in_sect to the section boundary to trigger advance logic.
         self.phrase_in_sect = self.sections[self.cursor].phrases.saturating_sub(1);
         self.on_phrase_boundary();
-        self.sections.get(self.cursor).map(|s| s.name.clone()).unwrap_or_default()
+        self.sections
+            .get(self.cursor)
+            .map(|s| s.name.clone())
+            .unwrap_or_default()
     }
 
     /// Write the current interpolated state to the engine's shared atomics.
@@ -1842,7 +2069,9 @@ impl Timeline {
         shared.scale.store(state.scale, Ordering::Relaxed);
 
         // Bars per phrase.
-        shared.bars_per_phrase.store(state.bars_per_phrase, Ordering::Relaxed);
+        shared
+            .bars_per_phrase
+            .store(state.bars_per_phrase, Ordering::Relaxed);
 
         // Voice enabled.
         for (i, &v) in state.voice_enabled.iter().enumerate() {
@@ -1897,7 +2126,10 @@ mod tests {
     use super::*;
 
     fn make_engine(n: usize) -> (MarkovEngine, MarkovEngineShared) {
-        (MarkovEngine::new(n, 0xABCD_1234), MarkovEngineShared::new(n))
+        (
+            MarkovEngine::new(n, 0xABCD_1234),
+            MarkovEngineShared::new(n),
+        )
     }
 
     #[test]
@@ -1908,7 +2140,10 @@ mod tests {
         let mut changed = false;
         for _ in 0..100 {
             chain.advance(&MOOD_CALM.harmonic);
-            if chain.state != initial { changed = true; break; }
+            if chain.state != initial {
+                changed = true;
+                break;
+            }
         }
         assert!(changed, "harmonic chain should advance");
     }
@@ -1920,8 +2155,11 @@ mod tests {
         chain.state = RhythmicState::Single;
         let mut rest_count = 0u32;
         for _ in 0..200 {
-            if let Some(st) = chain.on_subdivision(&MOOD_CALM.rhythmic, 0.0, VoiceRole::Melody, 1.0) {
-                if st == RhythmicState::Rest { rest_count += 1; }
+            if let Some(st) = chain.on_subdivision(&MOOD_CALM.rhythmic, 0.0, VoiceRole::Melody, 1.0)
+            {
+                if st == RhythmicState::Rest {
+                    rest_count += 1;
+                }
             }
         }
         assert!(rest_count > 0, "some rests expected at density=0");
@@ -1933,8 +2171,11 @@ mod tests {
         chain.state = RhythmicState::Single;
         let mut rest_count = 0u32;
         for _ in 0..200 {
-            if let Some(st) = chain.on_subdivision(&MOOD_CALM.rhythmic, 1.0, VoiceRole::Melody, 1.0) {
-                if st == RhythmicState::Rest { rest_count += 1; }
+            if let Some(st) = chain.on_subdivision(&MOOD_CALM.rhythmic, 1.0, VoiceRole::Melody, 1.0)
+            {
+                if st == RhythmicState::Rest {
+                    rest_count += 1;
+                }
             }
         }
         assert_eq!(rest_count, 0, "no rests at density=1");
@@ -1949,11 +2190,17 @@ mod tests {
                 &MOOD_CALM.melodic,
                 VoiceRole::Melody,
                 &harmonic,
-                60, Scale::Major, 0, false, 0.5,
+                60,
+                Scale::Major,
+                0,
+                false,
+                0.5,
             );
             let (lo, hi) = VoiceRole::Melody.register();
-            assert!(pitch >= lo && pitch <= hi,
-                "pitch {pitch} out of melody register {lo}-{hi}");
+            assert!(
+                pitch >= lo && pitch <= hi,
+                "pitch {pitch} out of melody register {lo}-{hi}"
+            );
         }
     }
 
@@ -1961,8 +2208,14 @@ mod tests {
     fn bass_role_avoids_forbidden_degrees() {
         // Bias for Bass: degrees 2 (index 2) and 3 (index 3) have bias 0.0.
         let bias = VoiceRole::Bass.degree_bias();
-        assert_eq!(bias[2], 0.0, "degree 3 (index 2) should be forbidden for bass");
-        assert_eq!(bias[3], 0.0, "degree 4 (index 3) should be forbidden for bass");
+        assert_eq!(
+            bias[2], 0.0,
+            "degree 3 (index 2) should be forbidden for bass"
+        );
+        assert_eq!(
+            bias[3], 0.0,
+            "degree 4 (index 3) should be forbidden for bass"
+        );
     }
 
     #[test]
@@ -1971,7 +2224,9 @@ mod tests {
         let mut fired = false;
         for _ in 0..4 {
             let ev = counter.on_bar();
-            if ev.phrase_boundary { fired = true; }
+            if ev.phrase_boundary {
+                fired = true;
+            }
         }
         assert!(fired, "phrase boundary should fire after 4 bars");
     }
@@ -1980,7 +2235,14 @@ mod tests {
     fn mood_blend_uniform_gives_average() {
         let blend = MoodBlend::new();
         blend.set(&[0.166, 0.166, 0.166, 0.166, 0.166, 0.17]);
-        let moods = [&MOOD_CALM, &MOOD_TENSE, &MOOD_DARK, &MOOD_EUPHORIC, &MOOD_COSMIC, &MOOD_GRAVITY];
+        let moods = [
+            &MOOD_CALM,
+            &MOOD_TENSE,
+            &MOOD_DARK,
+            &MOOD_EUPHORIC,
+            &MOOD_COSMIC,
+            &MOOD_GRAVITY,
+        ];
         let mat = blend.blend_rhythmic(&moods);
         // Each row should still sum to ~1.0
         for row in &mat {
@@ -1997,9 +2259,16 @@ mod tests {
         for _ in 0..64 {
             let evs = eng.on_subdivision(&shared);
             assert_eq!(evs.len(), 4);
-            for ev in &evs { if ev.note_on.is_some() { total_note_ons += 1; } }
+            for ev in &evs {
+                if ev.note_on.is_some() {
+                    total_note_ons += 1;
+                }
+            }
         }
-        assert!(total_note_ons > 0, "at least some note_ons expected over 64 subdivisions");
+        assert!(
+            total_note_ons > 0,
+            "at least some note_ons expected over 64 subdivisions"
+        );
     }
 
     #[test]
@@ -2009,7 +2278,10 @@ mod tests {
         let mut changed = false;
         for _ in 0..32 {
             eng.on_bar(&shared);
-            if eng.harmonic.state != initial { changed = true; break; }
+            if eng.harmonic.state != initial {
+                changed = true;
+                break;
+            }
         }
         assert!(changed, "harmonic state should change over bars");
     }

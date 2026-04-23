@@ -20,9 +20,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 #[derive(Debug, Clone)]
 pub enum MidiEvent {
-    NoteOn  { channel: u8, note: u8, velocity: u8 },
+    NoteOn { channel: u8, note: u8, velocity: u8 },
     NoteOff { channel: u8, note: u8 },
-    CC      { channel: u8, cc: u8, value: u8 },
+    CC { channel: u8, cc: u8, value: u8 },
     PitchBend { channel: u8, value: f32 }, // -1.0 … +1.0
 }
 
@@ -33,15 +33,15 @@ pub enum MidiEvent {
 /// Human-readable name for a CC number, for UI display.
 pub fn cc_name(cc: u8) -> &'static str {
     match cc {
-        1  => "Mod Wheel",
-        7  => "Volume",
+        1 => "Mod Wheel",
+        7 => "Volume",
         10 => "Pan",
         11 => "Expression",
         64 => "Sustain Pedal",
         71 => "Resonance",
         74 => "Cutoff",
         91 => "Reverb",
-        _  => "CC",
+        _ => "CC",
     }
 }
 
@@ -58,6 +58,12 @@ pub struct MidiEngine {
     pub port_names: Vec<String>,
     /// Index of the currently open port (None = disconnected).
     pub connected_port: Option<usize>,
+}
+
+impl Default for MidiEngine {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MidiEngine {
@@ -95,16 +101,24 @@ impl MidiEngine {
 
         let midi_in = MidiInput::new("the_synth_in")?;
         let ports = midi_in.ports();
-        let port = ports.get(index)
+        let port = ports
+            .get(index)
             .ok_or_else(|| anyhow::anyhow!("MIDI port index {index} out of range"))?;
 
         let tx = self.tx.clone();
 
-        let conn = midi_in.connect(port, "the_synth_conn", move |_stamp, msg, _| {
-            if let Some(ev) = parse_midi(msg) {
-                let _ = tx.send(ev);
-            }
-        }, ()).map_err(|e| anyhow::anyhow!("MIDI connect failed: {}", e.kind()))?;
+        let conn = midi_in
+            .connect(
+                port,
+                "the_synth_conn",
+                move |_stamp, msg, _| {
+                    if let Some(ev) = parse_midi(msg) {
+                        let _ = tx.send(ev);
+                    }
+                },
+                (),
+            )
+            .map_err(|e| anyhow::anyhow!("MIDI connect failed: {}", e.kind()))?;
 
         self._connection = Some(conn);
         self.connected_port = Some(index);
@@ -129,29 +143,42 @@ impl MidiEngine {
 // ---------------------------------------------------------------------------
 
 fn parse_midi(msg: &[u8]) -> Option<MidiEvent> {
-    if msg.is_empty() { return None; }
-    let status  = msg[0];
+    if msg.is_empty() {
+        return None;
+    }
+    let status = msg[0];
     let channel = status & 0x0F;
-    let kind    = status >> 4;
+    let kind = status >> 4;
 
     match kind {
         0x9 if msg.len() >= 3 => {
-            let note     = msg[1];
+            let note = msg[1];
             let velocity = msg[2];
             if velocity == 0 {
                 // Note On with velocity 0 is a Note Off per MIDI spec.
                 Some(MidiEvent::NoteOff { channel, note })
             } else {
-                Some(MidiEvent::NoteOn { channel, note, velocity })
+                Some(MidiEvent::NoteOn {
+                    channel,
+                    note,
+                    velocity,
+                })
             }
         }
-        0x8 if msg.len() >= 3 => Some(MidiEvent::NoteOff { channel, note: msg[1] }),
-        0xB if msg.len() >= 3 => Some(MidiEvent::CC { channel, cc: msg[1], value: msg[2] }),
+        0x8 if msg.len() >= 3 => Some(MidiEvent::NoteOff {
+            channel,
+            note: msg[1],
+        }),
+        0xB if msg.len() >= 3 => Some(MidiEvent::CC {
+            channel,
+            cc: msg[1],
+            value: msg[2],
+        }),
         0xE if msg.len() >= 3 => {
             // Pitch bend: 14-bit value, centre = 0x2000
-            let lsb   = msg[1] as u16;
-            let msb   = msg[2] as u16;
-            let raw   = (msb << 7) | lsb;
+            let lsb = msg[1] as u16;
+            let msb = msg[2] as u16;
+            let raw = (msb << 7) | lsb;
             let value = (raw as f32 - 8192.0) / 8192.0;
             Some(MidiEvent::PitchBend { channel, value })
         }

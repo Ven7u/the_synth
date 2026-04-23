@@ -1,5 +1,5 @@
-use egui::{Frame, Margin, Rounding, Stroke};
 use super::theme::SynthTheme;
+use egui::{Frame, Margin, Rounding, Stroke};
 
 /// Typed `egui::Frame` factories that read directly from `SynthTheme` tokens.
 ///
@@ -63,7 +63,6 @@ impl SynthFrame {
     /// App background — transparent fill used on CentralPanel and side panels
     /// so that the app-level `bg_app` shows through without adding a border.
     pub fn app_bg(theme: &SynthTheme) -> Frame {
-        Frame::none()
-            .fill(theme.c(&theme.bg_app))
+        Frame::none().fill(theme.c(&theme.bg_app))
     }
 }
