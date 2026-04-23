@@ -243,7 +243,9 @@ mod tests {
     use super::*;
 
     fn make() -> (BeatClock, BeatClockShared) {
-        (BeatClock::default(), BeatClockShared::new(120.0))
+        let sh = BeatClockShared::new(120.0);
+        sh.set_playing(true);
+        (BeatClock::default(), sh)
     }
 
     /// At 120 BPM, 44100 Hz, 4/4, 4 subdivisions per beat:
