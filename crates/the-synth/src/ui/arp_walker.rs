@@ -43,7 +43,7 @@ impl SynthApp {
                 ui.label("BPM:");
                 let sync_active = self.arp_sync_active();
                 if sync_active {
-                    self.arp_bpm = self.seq_bpm as f32;
+                    self.arp_bpm = self.seq.bpm.load(Ordering::Relaxed) as f32;
                 }
                 ui.add_enabled_ui(!sync_active, |ui| {
                     if ui.add(egui::Slider::new(&mut self.arp_bpm, 20.0..=300.0)).changed() {
@@ -63,7 +63,7 @@ impl SynthApp {
                             self.apply_clock_sync();
                             self.schedule_or_restart_arp();
                         } else {
-                            self.arp_restart_pending = false;
+                            self.seq.arp_restart.store(false, Ordering::Relaxed);
                         }
                     }
                 });
@@ -127,7 +127,7 @@ impl SynthApp {
                 ui.label("BPM:");
                 let sync_active = self.walker_sync_active();
                 if sync_active {
-                    self.walker_bpm = self.seq_bpm as f32;
+                    self.walker_bpm = self.seq.bpm.load(Ordering::Relaxed) as f32;
                 }
                 ui.add_enabled_ui(!sync_active, |ui| {
                     if ui.add(egui::Slider::new(&mut self.walker_bpm, 20.0..=300.0)).changed() {
@@ -147,7 +147,7 @@ impl SynthApp {
                             self.apply_clock_sync();
                             self.schedule_or_restart_walker();
                         } else {
-                            self.walker_restart_pending = false;
+                            self.seq.walker_restart.store(false, Ordering::Relaxed);
                         }
                     }
                 });

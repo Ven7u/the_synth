@@ -49,11 +49,6 @@ impl SynthApp {
             egui::Key::G, egui::Key::H, egui::Key::J,
         ];
 
-        // Flush deferred NoteOns from last frame — the audio callback has had at least
-        // one buffer with gate=0 since the NoteOff, so the ADSR will see a real retrigger.
-        let deferred: Vec<u8> = self.pending_note_ons.drain(..).collect();
-        for n in deferred { self.push_note_on(n); }
-
         // Space bar toggles freeze (when no text widget has focus).
         let space_pressed = ctx.input(|inp| inp.key_pressed(egui::Key::Space));
         if space_pressed && !ctx.memory(|m| m.focused().is_some()) {
@@ -94,7 +89,7 @@ impl SynthApp {
                         let frozen: Vec<u8> = self.frozen_notes.drain().collect();
                         for n in frozen { self.push_note_off(n); }
                         for m in self.chord_kb.chord_notes_for(row, col) {
-                            self.pending_note_ons.push(m);
+                            self.push_note_on(m);
                         }
                     } else {
                         for m in self.chord_kb.chord_notes_for(row, col) { self.push_note_on(m); }
@@ -124,7 +119,8 @@ impl SynthApp {
                 }
             }
             // ChordSeq live transpose: any key press sets the root note
-            if self.seq_mode == SeqMode::ChordSeq && self.seq_playing {
+            if SeqMode::from_u8(self.seq.mode.load(std::sync::atomic::Ordering::Relaxed)) == SeqMode::ChordSeq
+                && self.seq.playing.load(std::sync::atomic::Ordering::Relaxed) {
                 let mut pressed_semitone: Option<u8> = None;
                 ctx.input(|inp| {
                     for &(key, semitone) in KEY_MAP {
@@ -134,7 +130,7 @@ impl SynthApp {
                     }
                 });
                 if let Some(semi) = pressed_semitone {
-                    self.chord_seq.root = semi;
+                    self.seq.chord_seq.lock().unwrap().root = semi;
                 }
                 let prev: Vec<u8> = self.piano_held_midi.drain().collect();
                 for m in prev { self.push_note_off(m); }
@@ -153,7 +149,7 @@ impl SynthApp {
                         if self.kb_freeze {
                             let frozen: Vec<u8> = self.frozen_notes.drain().collect();
                             for n in frozen { self.push_note_off(n); }
-                            self.pending_note_ons.push(midi);
+                            self.push_note_on(midi);
                         } else {
                             self.push_note_on(midi);
                         }
@@ -267,7 +263,8 @@ impl SynthApp {
                 if ui.button("+").on_hover_text("One octave up").clicked() && self.piano_octave < 7 {
                     self.piano_octave += 1;
                 }
-                let hint = if self.seq_mode == SeqMode::ChordSeq && self.seq_playing {
+                let hint = if SeqMode::from_u8(self.seq.mode.load(std::sync::atomic::Ordering::Relaxed)) == SeqMode::ChordSeq
+                    && self.seq.playing.load(std::sync::atomic::Ordering::Relaxed) {
                     "  any key = set root note (live transpose)"
                 } else {
                     "  a–l = white keys,  w e t y u = sharps"
@@ -381,7 +378,7 @@ impl SynthApp {
                                     }
                                 }
                                 for m in self.chord_kb.chord_notes_for(row, col) {
-                                    self.pending_note_ons.push(m);
+                                    self.push_note_on(m);
                                 }
                             } else {
                                 if let Some((pr, pc)) = self.chord_kb.held_pad {

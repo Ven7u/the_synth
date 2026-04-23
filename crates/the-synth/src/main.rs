@@ -15,9 +15,12 @@ use synth_control::{ControlEvent, ControlSender};
 use patch::{Patch, default_patches};
 use eframe::egui;
 use sequencer::{
-    ChordKbState, ChordSeqState, NoteSeqState, SeqMode,
+    ChordKbState, SequencerHandle, spawn_sequencer,
 };
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+use ui::layout::{AppMode, StudioTab};
+use ui::frame::SynthFrame;
 
 fn main() -> eframe::Result {
     let recorder_sink = Arc::new(Mutex::new(None));
@@ -107,6 +110,10 @@ pub(crate) struct SynthApp {
     pub(crate) reset_layout_pending: bool,
     pub(crate) dock_state: egui_dock::DockState<ui::dock::Tab>,
 
+    // Layout B state
+    pub(crate) app_mode: AppMode,
+    pub(crate) studio_tab: StudioTab,
+
     // OSC bank
     pub(crate) osc_wave: [usize; 3], // 0=sine 1=saw 2=square 3=triangle
     pub(crate) osc_octave: [i32; 3], // -2..+2
@@ -123,6 +130,7 @@ pub(crate) struct SynthApp {
     pub(crate) fm_depth: f32,                // FM depth (0 = off, ~1 = strong)
     pub(crate) ring_enabled: bool,           // ring modulation OSC 1 × OSC 2
     pub(crate) ring_depth: f32,              // ring mod depth
+    pub(crate) osc1_mod_view: bool,          // OSC 1 card flipped to MOD back face
 
     // Noise
     pub(crate) noise_vol: f32,
@@ -168,9 +176,6 @@ pub(crate) struct SynthApp {
     pub(crate) kb_freeze: bool,
     /// MIDI notes currently sustained by freeze (key lifted but NoteOff suppressed).
     pub(crate) frozen_notes: std::collections::HashSet<u8>,
-    /// NoteOns deferred by one frame so the audio callback sees at least one buffer
-    /// with gate=0 before the retrigger — prevents same-buffer NoteOff+NoteOn killing the attack.
-    pub(crate) pending_note_ons: Vec<u8>,
 
     // Peak meter
     pub(crate) peak_display: f32,
@@ -189,20 +194,10 @@ pub(crate) struct SynthApp {
     pub(crate) walker_sync: bool,   // per-component sync toggle for scale walker
     pub(crate) seq_sync: bool,      // per-component sync toggle for sequencer
 
-    // Sequencer — shared timing
-    pub(crate) seq_playing: bool,
-    pub(crate) seq_bpm: u32,        // sequencer's own BPM (follows global_bpm when seq_sync is active)
-    pub(crate) seq_bar_quantize_start: bool,
-    pub(crate) arp_restart_pending: bool,
-    pub(crate) walker_restart_pending: bool,
-    pub(crate) seq_current_step: usize,
-    pub(crate) seq_last_tick: std::time::Instant,
-    pub(crate) seq_prev_notes: Vec<u8>, // notes playing from last step (supports chords)
+    // Sequencer — handle shared with the dedicated sequencer thread
+    pub(crate) seq: Arc<SequencerHandle>,
 
-    // Sequencer — mode + per-mode state
-    pub(crate) seq_mode: SeqMode,
-    pub(crate) note_seq: NoteSeqState,
-    pub(crate) chord_seq: ChordSeqState,
+    // Sequencer — chord keyboard (live, not threaded)
     pub(crate) chord_kb: ChordKbState,
 
     // Arpeggiator UI state
@@ -297,6 +292,15 @@ impl SynthApp {
             .find(|t| t.name == saved.theme_name)
             .unwrap_or_else(ui::theme::midnight);
         let panels = PanelVisibility::from_state(&saved.panels);
+        let app_mode   = saved.app_mode;
+        let studio_tab = saved.studio_tab;
+
+        let seq = Arc::new(SequencerHandle::new());
+        spawn_sequencer(
+            Arc::clone(&seq),
+            control.clone(),
+            Arc::clone(&state.note_on_time),
+        );
 
         Self {
             _audio: audio,
@@ -307,6 +311,8 @@ impl SynthApp {
             panels,
             reset_layout_pending: true,
             dock_state: ui::dock::default_dock_state(),
+            app_mode,
+            studio_tab,
             osc_wave: [1, 0, 0], // OSC1=saw, OSC2=sine, OSC3=sine
             osc_octave: [0, 0, 0],
             osc_detune: [0.0, 0.0, 0.0],
@@ -322,6 +328,7 @@ impl SynthApp {
             fm_depth: 1.0,
             ring_enabled: false,
             ring_depth: 1.0,
+            osc1_mod_view: false,
             noise_vol: 0.0,
             lfo_enabled: false,
             lfo_rate: 2.0,
@@ -348,7 +355,6 @@ impl SynthApp {
             kb_chord_mode: false,
             kb_freeze: false,
             frozen_notes: std::collections::HashSet::new(),
-            pending_note_ons: Vec::new(),
             piano_held_midi: std::collections::HashSet::new(),
             piano_mouse_midi: None,
             peak_display: 0.0,
@@ -362,17 +368,7 @@ impl SynthApp {
             arp_sync: true,
             walker_sync: true,
             seq_sync: true,
-            seq_playing: false,
-            seq_bpm: 120,
-            seq_bar_quantize_start: false,
-            arp_restart_pending: false,
-            walker_restart_pending: false,
-            seq_current_step: 0,
-            seq_last_tick: std::time::Instant::now(),
-            seq_prev_notes: Vec::new(),
-            seq_mode: SeqMode::NoteSeq,
-            note_seq: NoteSeqState::new(),
-            chord_seq: ChordSeqState::new(),
+            seq,
             chord_kb: ChordKbState::new(),
             arp_bpm: 120.0,
             arp_mode: 0,
@@ -448,16 +444,9 @@ impl SynthApp {
 
 impl SynthApp {
     pub(crate) fn sync_transport_now(&mut self) {
-        self.seq_current_step = 0;
-        self.seq_last_tick = std::time::Instant::now();
-        self.arp_restart_pending = false;
-        self.walker_restart_pending = false;
-
-        let prev: Vec<u8> = self.seq_prev_notes.drain(..).collect();
-        for m in prev {
-            self.push_note_off(m);
-        }
-
+        self.seq.current_step.store(0, Ordering::Relaxed);
+        self.seq.arp_restart.store(false, Ordering::Relaxed);
+        self.seq.walker_restart.store(false, Ordering::Relaxed);
         let _ = self.control.try_send(ControlEvent::ArpRestart { track: 0 });
         let _ = self.control.try_send(ControlEvent::WalkerRestart { track: 0 });
     }
@@ -483,16 +472,20 @@ impl SynthApp {
     }
 
     pub(crate) fn schedule_or_restart_arp(&mut self) {
-        if self.arp_sync_active() && self.seq_bar_quantize_start && self.seq_playing {
-            self.arp_restart_pending = true;
+        let playing = self.seq.playing.load(Ordering::Relaxed);
+        let bar_quantize = self.seq.bar_quantize.load(Ordering::Relaxed);
+        if self.arp_sync_active() && bar_quantize && playing {
+            self.seq.arp_restart.store(true, Ordering::Relaxed);
         } else {
             let _ = self.control.try_send(ControlEvent::ArpRestart { track: 0 });
         }
     }
 
     pub(crate) fn schedule_or_restart_walker(&mut self) {
-        if self.walker_sync_active() && self.seq_bar_quantize_start && self.seq_playing {
-            self.walker_restart_pending = true;
+        let playing = self.seq.playing.load(Ordering::Relaxed);
+        let bar_quantize = self.seq.bar_quantize.load(Ordering::Relaxed);
+        if self.walker_sync_active() && bar_quantize && playing {
+            self.seq.walker_restart.store(true, Ordering::Relaxed);
         } else {
             let _ = self.control.try_send(ControlEvent::WalkerRestart { track: 0 });
         }
@@ -500,8 +493,8 @@ impl SynthApp {
 
     pub(crate) fn apply_clock_sync(&mut self) {
         let global = self.global_bpm as f32;
-        if self.seq_sync_active() && self.seq_bpm != self.global_bpm {
-            self.seq_bpm = self.global_bpm;
+        if self.seq_sync_active() {
+            self.seq.bpm.store(self.global_bpm, Ordering::Relaxed);
         }
         if self.arp_sync_active() && (self.arp_bpm - global).abs() > f32::EPSILON {
             self.arp_bpm = global;
@@ -540,11 +533,10 @@ impl SynthApp {
         // Send NoteOff for every MIDI note that might be held
         let held: Vec<u8> = self.piano_held_midi.drain().collect();
         for n in held { self.push_note_off(n); }
-        let prev: Vec<u8> = self.seq_prev_notes.drain(..).collect();
-        for n in prev { self.push_note_off(n); }
+        // Signal sequencer thread to stop; it will NoteOff its prev_notes itself.
+        self.seq.playing.store(false, Ordering::Relaxed);
         let frozen: Vec<u8> = self.frozen_notes.drain().collect();
         for n in frozen { self.push_note_off(n); }
-        self.pending_note_ons.clear();
         self.chord_kb.held_pad = None;
         self.chord_kb.kb_held.clear();
     }
@@ -610,65 +602,6 @@ impl SynthApp {
 }
 
 // ---------------------------------------------------------------------------
-// Sequencer tick
-// ---------------------------------------------------------------------------
-
-impl SynthApp {
-    fn tick_sequencer(&mut self, ctx: &egui::Context) {
-        if !self.seq_playing {
-            return;
-        }
-        let step_dur = std::time::Duration::from_millis(60_000 / self.seq_bpm as u64 / 2);
-        if self.seq_last_tick.elapsed() < step_dur {
-            return;
-        }
-        self.seq_last_tick = std::time::Instant::now();
-
-        let prev: Vec<u8> = self.seq_prev_notes.drain(..).collect();
-        for m in prev { self.push_note_off(m); }
-
-        let seq_length = match self.seq_mode {
-            SeqMode::NoteSeq  => self.note_seq.length,
-            SeqMode::ChordSeq => self.chord_seq.length,
-            SeqMode::ChordKb  => return,
-        };
-        self.seq_current_step = (self.seq_current_step + 1) % seq_length;
-        let bar_boundary = self.seq_current_step == 0;
-
-        if self.arp_restart_pending && bar_boundary {
-            let _ = self.control.try_send(ControlEvent::ArpRestart { track: 0 });
-            self.arp_restart_pending = false;
-        }
-        if self.walker_restart_pending && bar_boundary {
-            let _ = self.control.try_send(ControlEvent::WalkerRestart { track: 0 });
-            self.walker_restart_pending = false;
-        }
-
-        let notes_to_play: Vec<u8> = match self.seq_mode {
-            SeqMode::NoteSeq => {
-                let i = self.seq_current_step;
-                if self.note_seq.steps[i] { vec![self.note_seq.notes[i]] } else { vec![] }
-            }
-            SeqMode::ChordSeq => {
-                let i = self.seq_current_step;
-                if self.chord_seq.steps[i] {
-                    self.chord_seq.step_notes(i).to_vec()
-                } else {
-                    vec![]
-                }
-            }
-            SeqMode::ChordKb => vec![],
-        };
-
-        for m in notes_to_play {
-            self.push_note_on(m);
-            self.seq_prev_notes.push(m);
-        }
-        ctx.request_repaint_after(step_dur);
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Main update
 // ---------------------------------------------------------------------------
 
@@ -676,12 +609,17 @@ impl eframe::App for SynthApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         let state = ui::layout::LayoutState {
             theme_name: self.theme.name.clone(),
-            panels: self.panels.to_state(),
+            panels:     self.panels.to_state(),
+            app_mode:   self.app_mode,
+            studio_tab: self.studio_tab,
         };
         ui::layout::save_layout(&state);
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Apply theme to egui Visuals + Style every frame — cheap struct copies.
+        self.theme.apply_to_egui(ctx);
+
         // Release all notes when the window loses focus so keys/MIDI can't get stuck.
         if ctx.input(|i| i.focused) != self.window_focused {
             self.window_focused = ctx.input(|i| i.focused);
@@ -692,240 +630,99 @@ impl eframe::App for SynthApp {
 
         self.tick_midi();
         self.apply_clock_sync();
-        self.tick_sequencer(ctx);
         self.tick_keyboard_input(ctx);
 
+        // Patch browser is a floating window — must be shown before panels.
         self.ui_patch_browser(ctx);
 
-        // --- Menu bar ---
-        egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
-                // File menu
-                ui.menu_button("File", |ui| {
-                    if ui.button("New Patch").clicked() {
-                        self.patch_name = "Init".into();
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    if ui.button("Save Patch...").clicked() {
-                        let p = self.capture_patch();
-                        if let Some(path) = rfd::FileDialog::new()
-                            .set_file_name(&format!("{}.json", p.name))
-                            .add_filter("Patch", &["json"])
-                            .save_file()
-                        {
-                            if let Ok(json) = serde_json::to_string_pretty(&p) {
-                                let _ = std::fs::write(path, json);
-                            }
+        // ── Zone 1: global bar (top, always visible) ──────────────────────────
+        egui::TopBottomPanel::top("global_bar")
+            .frame(SynthFrame::bar(&self.theme))
+            .show(ctx, |ui| { self.ui_global_bar(ui); });
+
+        // ── Zone 5b: keyboard strip (bottom-most) ─────────────────────────────
+        egui::TopBottomPanel::bottom("keyboard_strip")
+            .frame(SynthFrame::transport(&self.theme))
+            .show(ctx, |ui| { self.ui_keyboard_panel(ui); });
+
+        // ── Zone 5a: FX mini strip (above keyboard, always visible) ───────────
+        egui::TopBottomPanel::bottom("fx_mini_strip")
+            .frame(SynthFrame::transport(&self.theme))
+            .show(ctx, |ui| { self.ui_fx_mini_strip(ui); });
+
+        // ── Zones 2 + 3: central editing area (dock in Studio, placeholder in Live) ──
+        egui::CentralPanel::default()
+            .frame(SynthFrame::app_bg(&self.theme))
+            .show(ctx, |ui| {
+                match self.app_mode {
+                    AppMode::Studio => {
+                        if self.reset_layout_pending {
+                            self.dock_state = ui::dock::default_dock_state();
+                            self.reset_layout_pending = false;
                         }
-                        ui.close_menu();
+                        let mut dock_state = std::mem::replace(
+                            &mut self.dock_state,
+                            egui_dock::DockState::new(vec![]),
+                        );
+                        let mut dock_style = egui_dock::Style::from_egui(ui.style());
+                        dock_style.separator.width = 6.0;
+                        dock_style.separator.color_idle    = egui::Color32::TRANSPARENT;
+                        dock_style.separator.color_hovered = egui::Color32::from_black_alpha(60);
+                        dock_style.separator.color_dragged = egui::Color32::from_black_alpha(100);
+                        dock_style.dock_area_padding = Some(egui::Margin::same(6.0));
+                        let rm = self.theme.rounding_md;
+                        let r_top = egui::Rounding { nw: rm, ne: rm, sw: 0.0, se: 0.0 };
+                        let r_body = egui::Rounding { nw: 0.0, ne: rm, sw: rm, se: rm };
+                        let bg_app     = self.theme.c(&self.theme.bg_app);
+                        let bg_surface = self.theme.c(&self.theme.bg_surface);
+                        let border     = self.theme.c(&self.theme.border);
+                        let text_pri   = self.theme.c(&self.theme.text_primary);
+                        let text_sec   = self.theme.c(&self.theme.text_secondary);
+                        let accent     = self.theme.c(&self.theme.accent);
+                        // Tab body: rounded corners + subtle border
+                        dock_style.tab.tab_body.rounding = r_body;
+                        dock_style.tab.tab_body.stroke   = egui::Stroke::new(self.theme.stroke_ui, border);
+                        // Tab bar: transparent so the panel background shows through
+                        dock_style.tab_bar.bg_fill     = egui::Color32::TRANSPARENT;
+                        dock_style.tab_bar.hline_color = egui::Color32::TRANSPARENT;
+                        dock_style.tab_bar.rounding    = r_body;
+                        dock_style.tab_bar.height      = 28.0;
+                        // Active tab: raised (bg_surface), top-only rounding, accent outline
+                        dock_style.tab.active.rounding      = r_top;
+                        dock_style.tab.active.bg_fill       = bg_surface;
+                        dock_style.tab.active.text_color    = text_pri;
+                        dock_style.tab.active.outline_color = accent;
+                        // Focused: same as active with accent text
+                        dock_style.tab.focused.rounding      = r_top;
+                        dock_style.tab.focused.bg_fill       = bg_surface;
+                        dock_style.tab.focused.text_color    = accent;
+                        dock_style.tab.focused.outline_color = accent;
+                        // Inactive: transparent, dimmed text
+                        dock_style.tab.inactive.rounding      = r_top;
+                        dock_style.tab.inactive.bg_fill       = egui::Color32::TRANSPARENT;
+                        dock_style.tab.inactive.text_color    = text_sec;
+                        dock_style.tab.inactive.outline_color = egui::Color32::TRANSPARENT;
+                        // Hovered: slightly raised
+                        dock_style.tab.hovered.rounding      = r_top;
+                        dock_style.tab.hovered.bg_fill       = bg_surface;
+                        dock_style.tab.hovered.text_color    = text_pri;
+                        dock_style.tab.hovered.outline_color = border;
+                        egui_dock::DockArea::new(&mut dock_state)
+                            .style(dock_style)
+                            .show_inside(ui, &mut ui::dock::SynthTabViewer { app: self });
+                        self.dock_state = dock_state;
                     }
-                    if ui.button("Load Patch...").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Patch", &["json"])
-                            .pick_file()
-                        {
-                            if let Ok(json) = std::fs::read_to_string(path) {
-                                if let Ok(p) = serde_json::from_str::<patch::Patch>(&json) {
-                                    self.apply_patch(p);
-                                }
-                            }
-                        }
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    if ui.button("Browse Library...").clicked() {
-                        self.patch_browser_open = !self.patch_browser_open;
-                        ui.close_menu();
-                    }
-                });
-
-                // View menu — open panels as dock tabs
-                ui.menu_button("View", |ui| {
-                    for &tab in ui::dock::Tab::ALL {
-                        let is_open = self.dock_state.find_tab(&tab).is_some();
-                        let label = if is_open {
-                            egui::RichText::new(tab.title())
-                        } else {
-                            egui::RichText::new(format!("+ {}", tab.title())).weak()
-                        };
-                        if ui.button(label).clicked() && !is_open {
-                            // Add the tab to the focused leaf (or first leaf if none focused).
-                            self.dock_state.push_to_focused_leaf(tab);
-                            ui.close_menu();
-                        }
-                    }
-                    ui.separator();
-                    if ui.button("Reset Layout").on_hover_text("Reset to default panel arrangement.").clicked() {
-                        self.reset_layout_pending = true;
-                        ui.close_menu();
-                    }
-                });
-
-                // Theme menu
-                ui.menu_button("Theme", |ui| {
-                    for t in ui::theme::builtin_themes() {
-                        if ui.selectable_label(self.theme.name == t.name, &t.name).clicked() {
-                            self.theme = t;
-                            ui.close_menu();
-                        }
-                    }
-                });
-
-                // MIDI in menu bar
-                ui.menu_button("MIDI", |ui| {
-                    self.ui_midi_panel(ui);
-                });
-
-                // Right-aligned patch name + latency
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui::scope::draw_latency_bar(ui, &self.state, self.amp_adsr[0], &self.theme);
-                    ui.separator();
-                    ui.add(egui::TextEdit::singleline(&mut self.patch_name).desired_width(100.0));
-                });
-            });
-        });
-
-        // --- Global transport bar ---
-        egui::TopBottomPanel::top("transport_bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("BPM:").strong())
-                    .on_hover_text("Master tempo — all synced components follow this.");
-                if ui.add(egui::Slider::new(&mut self.global_bpm, 40..=600).clamp_to_range(true))
-                    .on_hover_text("Global tempo (40–600 BPM).")
-                    .changed()
-                {
-                    self.apply_clock_sync();
-                }
-
-                ui.separator();
-
-                ui.label(egui::RichText::new("Vol:").strong())
-                    .on_hover_text("Global output volume — applied after all FX.");
-                if ui.add(
-                    egui::Slider::new(&mut self.global_vol, 0.0f32..=1.0)
-                        .clamp_to_range(true)
-                        .fixed_decimals(2)
-                ).changed() {
-                    self.state.global_vol.set(self.global_vol);
-                }
-
-                ui.separator();
-
-                let global_label = egui::RichText::new("Global Sync").strong()
-                    .color(if self.global_sync { self.theme.c(&self.theme.accent) } else { egui::Color32::GRAY });
-                if ui.button(global_label)
-                    .on_hover_text("Force all components (Seq, Arp, Walker, Delay) to follow the Global BPM.")
-                    .clicked()
-                {
-                    self.global_sync = !self.global_sync;
-                    if self.global_sync {
-                        self.apply_clock_sync();
-                        self.sync_transport_now();
-                    } else {
-                        self.arp_restart_pending = false;
-                        self.walker_restart_pending = false;
-                    }
-                }
-
-                let any_sync = self.global_sync || self.seq_sync || self.arp_sync || self.walker_sync;
-                ui.add_enabled_ui(any_sync, |ui| {
-                    let bq_label = egui::RichText::new("Bar Quantize")
-                        .color(if self.seq_bar_quantize_start { self.theme.c(&self.theme.accent_dim) } else { egui::Color32::GRAY });
-                    if ui.button(bq_label)
-                        .on_hover_text("Arp/Walker restart on the next bar boundary instead of immediately.")
-                        .clicked()
-                    {
-                        self.seq_bar_quantize_start = !self.seq_bar_quantize_start;
-                    }
-                });
-
-                if ui.button("SYNC NOW")
-                    .on_hover_text("Reset phases for sequencer, arpeggiator, and walker.")
-                    .clicked()
-                {
-                    self.apply_clock_sync();
-                    self.sync_transport_now();
-                }
-
-                ui.separator();
-
-                let is_recording = self.recorder_sink.lock().map(|g| g.is_some()).unwrap_or(false);
-                if is_recording {
-                    let stop_label = egui::RichText::new("■ STOP REC")
-                        .strong()
-                        .color(egui::Color32::from_rgb(220, 60, 60));
-                    if ui.button(stop_label)
-                        .on_hover_text("Stop recording and finalise the WAV file.")
-                        .clicked()
-                    {
-                        if let Ok(mut guard) = self.recorder_sink.lock() {
-                            if let Some(rec) = guard.take() {
-                                let path = rec.path.clone();
-                                match rec.stop() {
-                                    Ok(()) => eprintln!("Recording saved: {path}"),
-                                    Err(e) => eprintln!("Recording stop error: {e}"),
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    let rec_label = egui::RichText::new("⏺ REC").strong();
-                    if ui.button(rec_label)
-                        .on_hover_text("Start recording the stereo output to a WAV file.")
-                        .clicked()
-                    {
-                        let default_name = "recording";
-                        let default_path = format!("recordings/{default_name}.wav");
-                        let sr = self.state.sample_rate.load(std::sync::atomic::Ordering::Relaxed);
-                        if let Some(path) = rfd::FileDialog::new()
-                            .set_title("Save recording as")
-                            .set_file_name(std::path::Path::new(&default_path)
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("recording.wav"))
-                            .add_filter("WAV audio", &["wav"])
-                            .save_file()
-                        {
-                            let path_str = path.to_string_lossy().into_owned();
-                            match recorder::Recorder::start(path_str, sr) {
-                                Ok(rec) => {
-                                    if let Ok(mut guard) = self.recorder_sink.lock() {
-                                        *guard = Some(rec);
-                                    }
-                                }
-                                Err(e) => eprintln!("Failed to start recording: {e}"),
-                            }
-                        }
+                    AppMode::Live => {
+                        ui.centered_and_justified(|ui| {
+                            ui.label(
+                                egui::RichText::new("LIVE MODE — coming soon.")
+                                    .size(18.0)
+                                    .color(self.theme.c(&self.theme.text_secondary)),
+                            );
+                        });
                     }
                 }
             });
-        });
-
-        // --- Persistent keyboard strip ---
-        egui::TopBottomPanel::bottom("keyboard_strip").show(ctx, |ui| {
-            self.ui_keyboard_panel(ui);
-        });
-
-        // --- Docked panels ---
-        if self.reset_layout_pending {
-            self.dock_state = ui::dock::default_dock_state();
-            self.reset_layout_pending = false;
-        }
-
-        // Take dock_state out to avoid borrow conflict (DockArea needs &mut dock_state,
-        // TabViewer needs &mut self).
-        let mut dock = std::mem::replace(
-            &mut self.dock_state,
-            egui_dock::DockState::new(vec![]),
-        );
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let style = egui_dock::Style::from_egui(ui.style().as_ref());
-            egui_dock::DockArea::new(&mut dock)
-                .style(style)
-                .show_inside(ui, &mut ui::dock::SynthTabViewer { app: self });
-        });
-        self.dock_state = dock;
 
         ctx.request_repaint();
     }
@@ -1192,4 +989,337 @@ impl SynthApp {
             self.apply_clock_sync();
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Layout B — zone UI methods
+// ---------------------------------------------------------------------------
+
+impl SynthApp {
+    /// Zone 1: global bar — mode toggle, BPM, patch name, transport, settings.
+    fn ui_global_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            // ── Mode toggle ───────────────────────────────────────────────
+            let studio_active = self.app_mode == AppMode::Studio;
+            let live_active   = self.app_mode == AppMode::Live;
+
+            let studio_col = if studio_active { self.theme.c(&self.theme.accent) }
+                             else             { self.theme.c(&self.theme.text_secondary) };
+            let live_col   = if live_active   { self.theme.c(&self.theme.accent) }
+                             else             { self.theme.c(&self.theme.text_secondary) };
+
+            if ui.add(egui::SelectableLabel::new(
+                studio_active,
+                egui::RichText::new("STUDIO").size(11.0).color(studio_col),
+            )).clicked() {
+                self.app_mode = AppMode::Studio;
+            }
+            if ui.add(egui::SelectableLabel::new(
+                live_active,
+                egui::RichText::new("LIVE").size(11.0).color(live_col),
+            )).on_hover_text("Live performance view — coming soon.")
+              .clicked()
+            {
+                self.app_mode = AppMode::Live;
+            }
+
+            ui.separator();
+
+            // ── BPM ───────────────────────────────────────────────────────
+            ui.label(
+                egui::RichText::new("BPM")
+                    .size(11.0)
+                    .color(self.theme.c(&self.theme.text_secondary)),
+            );
+            if ui.add(
+                egui::DragValue::new(&mut self.global_bpm)
+                    .range(40..=600)
+                    .speed(0.5),
+            ).on_hover_text("Master tempo (40–600 BPM). Drag or scroll.")
+             .changed()
+            {
+                self.apply_clock_sync();
+            }
+
+            // ── Sync controls ─────────────────────────────────────────────
+            let sync_col = if self.global_sync { self.theme.c(&self.theme.accent) }
+                           else                { self.theme.c(&self.theme.text_disabled) };
+            if ui.add(egui::SelectableLabel::new(
+                self.global_sync,
+                egui::RichText::new("SYNC").size(11.0).color(sync_col),
+            )).on_hover_text("Force all components (Seq, Arp, Walker, Delay) to follow Global BPM.")
+              .clicked()
+            {
+                self.global_sync = !self.global_sync;
+                if self.global_sync {
+                    self.apply_clock_sync();
+                    self.sync_transport_now();
+                } else {
+                    self.seq.arp_restart.store(false, Ordering::Relaxed);
+                    self.seq.walker_restart.store(false, Ordering::Relaxed);
+                }
+            }
+
+            let any_sync = self.global_sync || self.seq_sync || self.arp_sync || self.walker_sync;
+            ui.add_enabled_ui(any_sync, |ui| {
+                let bq = self.seq.bar_quantize.load(Ordering::Relaxed);
+                let bq_col = if bq { self.theme.c(&self.theme.accent_dim) }
+                             else  { self.theme.c(&self.theme.text_disabled) };
+                if ui.add(egui::SelectableLabel::new(
+                    bq,
+                    egui::RichText::new("BAR").size(11.0).color(bq_col),
+                )).on_hover_text("Quantise Arp/Walker restart to next bar boundary.")
+                  .clicked()
+                {
+                    self.seq.bar_quantize.store(!bq, Ordering::Relaxed);
+                }
+            });
+
+            ui.separator();
+
+            // ── Right-aligned items ───────────────────────────────────────
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Settings menu (File + Theme)
+                ui.menu_button(egui::RichText::new("⚙").size(14.0), |ui| {
+                    ui.menu_button("File", |ui| {
+                        if ui.button("New Patch").clicked() {
+                            self.patch_name = "Init".into();
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Save Patch…").clicked() {
+                            let p = self.capture_patch();
+                            if let Some(path) = rfd::FileDialog::new()
+                                .set_file_name(&format!("{}.json", p.name))
+                                .add_filter("Patch", &["json"])
+                                .save_file()
+                            {
+                                if let Ok(json) = serde_json::to_string_pretty(&p) {
+                                    let _ = std::fs::write(path, json);
+                                }
+                            }
+                            ui.close_menu();
+                        }
+                        if ui.button("Load Patch…").clicked() {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter("Patch", &["json"])
+                                .pick_file()
+                            {
+                                if let Ok(json) = std::fs::read_to_string(path) {
+                                    if let Ok(p) = serde_json::from_str::<patch::Patch>(&json) {
+                                        self.apply_patch(p);
+                                    }
+                                }
+                            }
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Browse Library…").clicked() {
+                            self.patch_browser_open = !self.patch_browser_open;
+                            ui.close_menu();
+                        }
+                    });
+
+                    ui.menu_button("Theme", |ui| {
+                        for t in ui::theme::builtin_themes() {
+                            if ui.selectable_label(self.theme.name == t.name, &t.name).clicked() {
+                                self.theme = t;
+                                ui.close_menu();
+                            }
+                        }
+                    });
+
+                    ui.menu_button("View", |ui| {
+                        for &tab in ui::dock::Tab::ALL {
+                            let open = self.dock_state.find_tab(&tab).is_some();
+                            if ui.selectable_label(open, tab.title()).clicked() {
+                                if open {
+                                    self.dock_state.remove_tab(
+                                        self.dock_state.find_tab(&tab).unwrap(),
+                                    );
+                                } else {
+                                    self.dock_state.push_to_focused_leaf(tab);
+                                }
+                                ui.close_menu();
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("Reset Layout").clicked() {
+                            self.reset_layout_pending = true;
+                            ui.close_menu();
+                        }
+                    });
+
+                    ui.separator();
+                    if ui.button("Sync Now")
+                       .on_hover_text("Reset phases for sequencer, arpeggiator, and walker.")
+                       .clicked()
+                    {
+                        self.apply_clock_sync();
+                        self.sync_transport_now();
+                        ui.close_menu();
+                    }
+                });
+
+                ui.separator();
+
+                // Latency / CPU indicator
+                ui::scope::draw_latency_bar(ui, &self.state, self.amp_adsr[0], &self.theme);
+
+                ui.separator();
+
+                // Record button
+                let is_recording = self.recorder_sink.lock().map(|g| g.is_some()).unwrap_or(false);
+                if is_recording {
+                    let stop_label = egui::RichText::new("■ REC")
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(220, 60, 60));
+                    if ui.button(stop_label)
+                       .on_hover_text("Stop recording and save WAV file.")
+                       .clicked()
+                    {
+                        if let Ok(mut guard) = self.recorder_sink.lock() {
+                            if let Some(rec) = guard.take() {
+                                let path = rec.path.clone();
+                                match rec.stop() {
+                                    Ok(())  => eprintln!("Recording saved: {path}"),
+                                    Err(e)  => eprintln!("Recording stop error: {e}"),
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    let rec_label = egui::RichText::new("⏺").size(13.0)
+                        .color(self.theme.c(&self.theme.text_secondary));
+                    if ui.button(rec_label)
+                       .on_hover_text("Record stereo output to WAV.")
+                       .clicked()
+                    {
+                        let sr = self.state.sample_rate.load(std::sync::atomic::Ordering::Relaxed);
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_title("Save recording as")
+                            .set_file_name("recording.wav")
+                            .add_filter("WAV audio", &["wav"])
+                            .save_file()
+                        {
+                            let path_str = path.to_string_lossy().into_owned();
+                            match recorder::Recorder::start(path_str, sr) {
+                                Ok(rec) => {
+                                    if let Ok(mut guard) = self.recorder_sink.lock() {
+                                        *guard = Some(rec);
+                                    }
+                                }
+                                Err(e) => eprintln!("Failed to start recording: {e}"),
+                            }
+                        }
+                    }
+                }
+
+                ui.separator();
+
+                // Global volume
+                ui.label(
+                    egui::RichText::new("VOL")
+                        .size(10.0)
+                        .color(self.theme.c(&self.theme.text_disabled)),
+                );
+                if ui.add(
+                    egui::DragValue::new(&mut self.global_vol)
+                        .range(0.0_f32..=1.0)
+                        .speed(0.005)
+                        .fixed_decimals(2),
+                ).on_hover_text("Global output volume — applied after all FX.")
+                 .changed()
+                {
+                    self.state.global_vol.set(self.global_vol);
+                }
+
+                ui.separator();
+
+                // Patch name
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.patch_name)
+                        .desired_width(100.0)
+                        .font(egui::TextStyle::Monospace),
+                );
+                ui.label(
+                    egui::RichText::new("PATCH")
+                        .size(10.0)
+                        .color(self.theme.c(&self.theme.text_disabled)),
+                );
+            });
+        });
+    }
+
+    /// Zone 5a: FX mini strip — always-visible compact FX toggle row.
+    fn ui_fx_mini_strip(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("FX")
+                    .size(10.0)
+                    .color(self.theme.c(&self.theme.text_disabled)),
+            );
+            ui.separator();
+
+            macro_rules! fx_chip {
+                ($ui:expr, $label:expr, $on:expr, $color:expr, $toggle:expr) => {{
+                    let col = if $on {
+                        self.theme.c(&$color)
+                    } else {
+                        self.theme.c(&self.theme.text_disabled)
+                    };
+                    if $ui
+                        .add(egui::Button::new(egui::RichText::new($label).size(11.0).color(col)).frame($on))
+                        .clicked()
+                    {
+                        $toggle;
+                    }
+                }};
+            }
+
+            let on = self.fx_overdrive_on;
+            fx_chip!(ui, "OD", on, self.theme.fx_overdrive, {
+                self.fx_overdrive_on = !on;
+                self.state.fx_overdrive_mix.set_value(if !on { self.fx_overdrive_mix } else { 0.0 });
+            });
+
+            let on = self.fx_distortion_on;
+            fx_chip!(ui, "DIST", on, self.theme.fx_distortion, {
+                self.fx_distortion_on = !on;
+                self.state.fx_distortion_mix.set_value(if !on { self.fx_distortion_mix } else { 0.0 });
+            });
+
+            let on = self.fx_chorus_on;
+            fx_chip!(ui, "CHOR", on, self.theme.fx_chorus, {
+                self.fx_chorus_on = !on;
+                self.state.fx_chorus_mix.set_value(if !on { self.fx_chorus_mix } else { 0.0 });
+            });
+
+            let on = self.fx_delay_on;
+            fx_chip!(ui, "DLY", on, self.theme.fx_delay, {
+                self.fx_delay_on = !on;
+                self.state.fx_delay_mix.set_value(if !on { self.fx_delay_mix } else { 0.0 });
+            });
+
+            let on = self.fx_reverb_on;
+            fx_chip!(ui, "REV", on, self.theme.fx_reverb, {
+                self.fx_reverb_on = !on;
+                self.state.fx_reverb_mix.set_value(if !on { self.fx_reverb_mix } else { 0.0 });
+            });
+
+            let on = self.fx_shimmer_on;
+            fx_chip!(ui, "SHIM", on, self.theme.fx_shimmer, {
+                self.fx_shimmer_on = !on;
+                self.state.fx_shimmer.shimmer.set_value(if !on { self.fx_shimmer_amt } else { 0.0 });
+                self.state.fx_shimmer.mix.set_value(if !on { self.fx_shimmer_mix } else { 0.0 });
+            });
+
+            let on = self.fx_crystal_on;
+            fx_chip!(ui, "CRYST", on, self.theme.fx_crystallizer, {
+                self.fx_crystal_on = !on;
+                self.state.fx_crystal.mix.set_value(if !on { self.fx_crystal_mix } else { 0.0 });
+            });
+        });
+    }
+
 }

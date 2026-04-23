@@ -1,4 +1,5 @@
 pub mod theme;
+pub mod frame;
 pub mod layout;
 pub mod snap;
 pub mod widgets;

@@ -19,7 +19,7 @@ pub fn knob(
     theme: &SynthTheme,
     logarithmic: bool,
 ) -> Response {
-    let desired_size = Vec2::new(44.0, 56.0);
+    let desired_size = Vec2::new(44.0, 64.0);
     let (rect, mut response) = ui.allocate_exact_size(desired_size, Sense::click_and_drag());
 
     let knob_radius = 16.0;

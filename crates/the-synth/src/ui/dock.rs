@@ -7,6 +7,7 @@ use crate::SynthApp;
 pub enum Tab {
     Oscillators,
     Modulation,
+    Filter,
     Sequencer,
     ArpWalker,
     FxChain,
@@ -18,7 +19,8 @@ impl Tab {
     pub fn title(self) -> &'static str {
         match self {
             Tab::Oscillators => "Oscillators",
-            Tab::Modulation  => "Modulation & Filter",
+            Tab::Modulation  => "Modulation",
+            Tab::Filter      => "Filter & Envelopes",
             Tab::Sequencer   => "Sequencer",
             Tab::ArpWalker   => "Arp & Walker",
             Tab::FxChain     => "FX Chain",
@@ -30,6 +32,7 @@ impl Tab {
     pub const ALL: &[Tab] = &[
         Tab::Oscillators,
         Tab::Modulation,
+        Tab::Filter,
         Tab::Sequencer,
         Tab::ArpWalker,
         Tab::FxChain,
@@ -55,19 +58,19 @@ pub fn default_dock_state() -> DockState<Tab> {
     let mut state = DockState::new(vec![Tab::Oscillators]);
     let surface = state.main_surface_mut();
 
-    // 1. Split bottom from root: Sequencer — bottom 35%.
-    let [top, bottom] = surface.split_below(
-        NodeIndex::root(), 0.65,
-        vec![Tab::Sequencer],
+    // 1. Split bottom from root: Sequencer + ArpWalker tabbed — bottom 32%.
+    let [top, _bottom] = surface.split_below(
+        NodeIndex::root(), 0.68,
+        vec![Tab::Sequencer, Tab::ArpWalker],
     );
 
-    // 2. In top area, split right: Oscilloscope — right takes 42%.
-    let [top_left, top_right] = surface.split_right(top, 0.58, vec![Tab::Scope]);
+    // 2. In top area, split right: Oscilloscope — right takes 40%.
+    let [top_left, top_right] = surface.split_right(top, 0.60, vec![Tab::Scope]);
 
-    // 3. Split top-left vertically: Modulation + Arp (tabbed) below Oscillators.
+    // 3. Split top-left vertically: Modulation + Filter tabbed below Oscillators.
     let [_osc, _mod] = surface.split_below(
-        top_left, 0.50,
-        vec![Tab::Modulation, Tab::ArpWalker],
+        top_left, 0.55,
+        vec![Tab::Modulation, Tab::Filter],
     );
 
     // 4. Split top-right vertically: FX Chain below Oscilloscope.
@@ -99,12 +102,16 @@ impl<'a> TabViewer for SynthTabViewer<'a> {
                 });
             }
             Tab::Modulation => {
-                ui.columns(5, |cols| {
+                ui.columns(2, |cols| {
                     self.app.ui_lfo_panel(&mut cols[0]);
                     self.app.ui_lfo2_panel(&mut cols[1]);
-                    self.app.ui_filter_panel(&mut cols[2]);
-                    self.app.ui_adsr_panel(&mut cols[3], "Filter Env", &mut [0usize, 1, 2, 3], true);
-                    self.app.ui_adsr_panel(&mut cols[4], "Amp Env", &mut [0usize, 1, 2, 3], false);
+                });
+            }
+            Tab::Filter => {
+                ui.columns(3, |cols| {
+                    self.app.ui_filter_panel(&mut cols[0]);
+                    self.app.ui_adsr_panel(&mut cols[1], "Filter Env", &mut [0usize, 1, 2, 3], true);
+                    self.app.ui_adsr_panel(&mut cols[2], "Amp Env", &mut [0usize, 1, 2, 3], false);
                 });
             }
             Tab::Sequencer => {

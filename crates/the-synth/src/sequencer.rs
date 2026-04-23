@@ -37,6 +37,15 @@ pub fn scale_intervals(scale: ScaleType) -> [u8; 7] {
 /// Roman numeral label for a scale degree (0-indexed).
 pub const DEGREE_LABELS: [&str; 7] = ["I", "II", "III", "IV", "V", "VI", "VII"];
 
+impl SeqMode {
+    pub fn to_u8(self) -> u8 {
+        match self { Self::NoteSeq => 0, Self::ChordSeq => 1, Self::ChordKb => 2 }
+    }
+    pub fn from_u8(v: u8) -> Self {
+        match v { 1 => Self::ChordSeq, 2 => Self::ChordKb, _ => Self::NoteSeq }
+    }
+}
+
 /// Chord quality suffix for each degree in Major/Minor.
 pub fn chord_quality(scale: ScaleType, degree: usize) -> &'static str {
     match scale {
@@ -216,10 +225,13 @@ impl NoteSeqState {
     pub fn new() -> Self {
         let mut steps = [false; 24];
         let mut notes = [60u8; 24];
-        for (i, &v) in [true, false, true, false, true, true, false, true].iter().enumerate() {
-            steps[i] = v;
-        }
-        for (i, &v) in [60u8, 62, 64, 67, 69, 72, 67, 64].iter().enumerate() {
+        // Wish You Were Here – main arpeggio run (E3 G3 A3 G3 D4 C4 D4 E3)
+        use synth_control::midi_note;
+        for i in 0..8 { steps[i] = true; }
+        for (i, &v) in [
+            midi_note!(E, 3), midi_note!(G, 3), midi_note!(A, 3), midi_note!(G, 3),
+            midi_note!(D, 4), midi_note!(C, 4), midi_note!(D, 4), midi_note!(E, 3),
+        ].iter().enumerate() {
             notes[i] = v;
         }
         Self { steps, notes, length: 8, drag_accum: [0.0; 24] }
@@ -354,4 +366,174 @@ impl SeqMode {
             Self::ChordKb  => "Chord KB",
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Sequencer handle — shared state between the sequencer thread and the UI
+// ---------------------------------------------------------------------------
+
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
+
+pub struct SequencerHandle {
+    /// UI writes, thread reads: is the sequencer running?
+    pub playing:        Arc<AtomicBool>,
+    /// UI writes, thread reads: BPM (eigth-note grid).
+    pub bpm:            Arc<AtomicU32>,
+    /// UI writes, thread reads: SeqMode encoded as u8.
+    pub mode:           Arc<AtomicU8>,
+    /// UI writes, thread reads: align arp/walker restarts to bar boundaries.
+    pub bar_quantize:   Arc<AtomicBool>,
+    /// UI writes+reads, thread reads: note sequencer pattern.
+    pub note_seq:       Arc<Mutex<NoteSeqState>>,
+    /// UI writes+reads, thread reads: chord sequencer pattern.
+    pub chord_seq:      Arc<Mutex<ChordSeqState>>,
+    /// Thread writes, UI reads: current playhead step.
+    pub current_step:   Arc<AtomicUsize>,
+    /// UI sets true, thread swaps to false and fires ArpRestart at bar boundary.
+    pub arp_restart:    Arc<AtomicBool>,
+    /// UI sets true, thread swaps to false and fires WalkerRestart at bar boundary.
+    pub walker_restart: Arc<AtomicBool>,
+}
+
+impl SequencerHandle {
+    pub fn new() -> Self {
+        Self {
+            playing:        Arc::new(AtomicBool::new(false)),
+            bpm:            Arc::new(AtomicU32::new(120)),
+            mode:           Arc::new(AtomicU8::new(SeqMode::NoteSeq.to_u8())),
+            bar_quantize:   Arc::new(AtomicBool::new(false)),
+            note_seq:       Arc::new(Mutex::new(NoteSeqState::new())),
+            chord_seq:      Arc::new(Mutex::new(ChordSeqState::new())),
+            current_step:   Arc::new(AtomicUsize::new(0)),
+            arp_restart:    Arc::new(AtomicBool::new(false)),
+            walker_restart: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+/// Spawn the sequencer on a dedicated thread.
+///
+/// `control` — channel to send NoteOn/NoteOff/ArpRestart/WalkerRestart events.
+/// `note_on_time` — shared timestamp updated on every NoteOn (used by latency display).
+pub fn spawn_sequencer(
+    handle: Arc<SequencerHandle>,
+    control: synth_control::ControlSender,
+    note_on_time: Arc<Mutex<Option<std::time::Instant>>>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::Builder::new()
+        .name("sequencer".into())
+        .spawn(move || {
+            use std::time::{Duration, Instant};
+
+            let mut prev_notes: Vec<u8> = Vec::new();
+            let mut was_playing = false;
+            let mut first_tick = true;
+            let mut next_tick = Instant::now();
+
+            loop {
+                let playing = handle.playing.load(Ordering::Relaxed);
+
+                if !playing {
+                    if was_playing {
+                        for m in prev_notes.drain(..) {
+                            let _ = control.try_send(synth_control::ControlEvent::NoteOff {
+                                pitch: m, track: 0,
+                            });
+                        }
+                        was_playing = false;
+                        first_tick = true;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+
+                if !was_playing {
+                    // First tick fires after one step_dur, same as the old UI-frame logic.
+                    let bpm = handle.bpm.load(Ordering::Relaxed).max(1);
+                    let step_dur = Duration::from_millis(60_000 / bpm as u64 / 2);
+                    next_tick = Instant::now() + step_dur;
+                    was_playing = true;
+                }
+
+                // Self-correcting sleep until the next scheduled tick.
+                let now = Instant::now();
+                if next_tick > now {
+                    std::thread::sleep(next_tick - now);
+                }
+
+                // Re-check playing after sleep (user may have stopped).
+                if !handle.playing.load(Ordering::Relaxed) {
+                    continue;
+                }
+
+                let bpm = handle.bpm.load(Ordering::Relaxed).max(1);
+                let step_dur = Duration::from_millis(60_000 / bpm as u64 / 2);
+                next_tick += step_dur;
+
+                // NoteOff previous notes.
+                for m in prev_notes.drain(..) {
+                    let _ = control.try_send(synth_control::ControlEvent::NoteOff {
+                        pitch: m, track: 0,
+                    });
+                }
+
+                // Advance step. On the very first tick after Play we play the
+                // stored current_step as-is so step 0 isn't skipped; subsequent
+                // ticks advance by one.
+                let mode = SeqMode::from_u8(handle.mode.load(Ordering::Relaxed));
+                let seq_length = match mode {
+                    SeqMode::NoteSeq  => handle.note_seq.lock().map(|g| g.length).unwrap_or(8),
+                    SeqMode::ChordSeq => handle.chord_seq.lock().map(|g| g.length).unwrap_or(8),
+                    SeqMode::ChordKb  => continue,
+                };
+
+                let current = if first_tick {
+                    first_tick = false;
+                    handle.current_step.load(Ordering::Relaxed) % seq_length
+                } else {
+                    (handle.current_step.load(Ordering::Relaxed) + 1) % seq_length
+                };
+                handle.current_step.store(current, Ordering::Relaxed);
+                let bar_boundary = current == 0;
+
+                if bar_boundary {
+                    if handle.arp_restart.swap(false, Ordering::Relaxed) {
+                        let _ = control.try_send(synth_control::ControlEvent::ArpRestart { track: 0 });
+                    }
+                    if handle.walker_restart.swap(false, Ordering::Relaxed) {
+                        let _ = control.try_send(synth_control::ControlEvent::WalkerRestart { track: 0 });
+                    }
+                }
+
+                // Collect notes for this step.
+                let notes_to_play: Vec<u8> = match mode {
+                    SeqMode::NoteSeq => {
+                        handle.note_seq.lock().map(|ns| {
+                            if ns.steps[current] { vec![ns.notes[current]] } else { vec![] }
+                        }).unwrap_or_default()
+                    }
+                    SeqMode::ChordSeq => {
+                        handle.chord_seq.lock().map(|cs| {
+                            if cs.steps[current] { cs.step_notes(current).to_vec() } else { vec![] }
+                        }).unwrap_or_default()
+                    }
+                    SeqMode::ChordKb => vec![],
+                };
+
+                // Send NoteOns. The audio thread's trigger_note guarantees a
+                // clean attack even when NoteOff + NoteOn for the same pitch
+                // arrive in the same buffer, so no inter-event delay is needed.
+                for m in notes_to_play {
+                    if let Ok(mut t) = note_on_time.lock() {
+                        *t = Some(Instant::now());
+                    }
+                    let _ = control.try_send(synth_control::ControlEvent::NoteOn {
+                        pitch: m, velocity: 100, track: 0,
+                    });
+                    prev_notes.push(m);
+                }
+            }
+        })
+        .expect("failed to spawn sequencer thread")
 }
