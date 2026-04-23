@@ -41,12 +41,14 @@ impl SynthApp {
             ui.horizontal(|ui| {
                 ui.label("BPM:");
                 let sync_active = self.arp_sync_active();
+                // When synced, force engine bpm to the global value before we read it.
                 if sync_active {
-                    self.arp_bpm = self.seq.bpm.load(Ordering::Relaxed) as f32;
+                    self.engine.set_arp_bpm(self.seq.bpm.load(Ordering::Relaxed) as f32);
                 }
+                let mut bpm = self.engine.arp_bpm();
                 ui.add_enabled_ui(!sync_active, |ui| {
-                    if ui.add(egui::Slider::new(&mut self.arp_bpm, 20.0..=300.0)).changed() {
-                        self.engine.set_arp_bpm(self.arp_bpm);
+                    if ui.add(egui::Slider::new(&mut bpm, 20.0..=300.0)).changed() {
+                        self.engine.set_arp_bpm(bpm);
                     }
                 });
                 // Per-component sync toggle (disabled when global sync is on)
@@ -67,35 +69,36 @@ impl SynthApp {
                     }
                 });
             });
+            let current_div = self.engine.arp_division();
             ui.horizontal(|ui| {
                 ui.label("Div:");
                 for (i, &label) in ClockDiv::LABELS.iter().enumerate() {
-                    if ui.selectable_label(self.arp_division == i as u8, label).clicked() {
-                        self.arp_division = i as u8;
+                    if ui.selectable_label(current_div == i as u8, label).clicked() {
                         self.engine.set_arp_division(i as u8);
                     }
                 }
             });
+            let current_mode = self.engine.arp_mode();
             ui.horizontal(|ui| {
                 ui.label("Mode:");
                 for (i, &label) in ArpMode::LABELS.iter().enumerate() {
-                    if ui.selectable_label(self.arp_mode == i as u8, label).clicked() {
-                        self.arp_mode = i as u8;
+                    if ui.selectable_label(current_mode == i as u8, label).clicked() {
                         self.engine.set_arp_mode(i as u8);
                     }
                 }
             });
+            let current_oct = self.engine.arp_octave_range();
             ui.horizontal(|ui| {
                 ui.label("Oct:");
                 for oct in 1u8..=4 {
-                    if ui.selectable_label(self.arp_octave_range == oct, oct.to_string()).clicked() {
-                        self.arp_octave_range = oct;
+                    if ui.selectable_label(current_oct == oct, oct.to_string()).clicked() {
                         self.engine.set_arp_octave_range(oct);
                     }
                 }
                 ui.label("  Gate:");
-                if ui.add(egui::Slider::new(&mut self.arp_gate, 0.05..=1.0)).changed() {
-                    self.engine.set_arp_gate(self.arp_gate);
+                let mut gate = self.engine.arp_gate();
+                if ui.add(egui::Slider::new(&mut gate, 0.05..=1.0)).changed() {
+                    self.engine.set_arp_gate(gate);
                 }
             });
         });
@@ -126,11 +129,12 @@ impl SynthApp {
                 ui.label("BPM:");
                 let sync_active = self.walker_sync_active();
                 if sync_active {
-                    self.walker_bpm = self.seq.bpm.load(Ordering::Relaxed) as f32;
+                    self.engine.set_walker_bpm(self.seq.bpm.load(Ordering::Relaxed) as f32);
                 }
+                let mut bpm = self.engine.walker_bpm();
                 ui.add_enabled_ui(!sync_active, |ui| {
-                    if ui.add(egui::Slider::new(&mut self.walker_bpm, 20.0..=300.0)).changed() {
-                        self.engine.set_walker_bpm(self.walker_bpm);
+                    if ui.add(egui::Slider::new(&mut bpm, 20.0..=300.0)).changed() {
+                        self.engine.set_walker_bpm(bpm);
                     }
                 });
                 // Per-component sync toggle (disabled when global sync is on)
@@ -151,45 +155,47 @@ impl SynthApp {
                     }
                 });
             });
+            let current_div = self.engine.walker_division();
             ui.horizontal(|ui| {
                 ui.label("Div:");
                 for (i, &label) in ClockDiv::LABELS.iter().enumerate() {
-                    if ui.selectable_label(self.walker_division == i as u8, label).clicked() {
-                        self.walker_division = i as u8;
+                    if ui.selectable_label(current_div == i as u8, label).clicked() {
                         self.engine.set_walker_division(i as u8);
                     }
                 }
             });
+            let current_scale = self.engine.walker_scale();
             ui.horizontal(|ui| {
                 ui.label("Scale:");
                 for (i, &label) in Scale::LABELS.iter().enumerate() {
-                    if ui.selectable_label(self.walker_scale == i as u8, label).clicked() {
-                        self.walker_scale = i as u8;
+                    if ui.selectable_label(current_scale == i as u8, label).clicked() {
                         self.engine.set_walker_scale(i as u8);
                     }
                 }
             });
             ui.horizontal(|ui| {
                 ui.label("Root:");
+                let mut root = self.engine.walker_root();
                 let note_names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
-                let name = note_names[(self.walker_root % 12) as usize];
-                let octave = (self.walker_root as i32 / 12) - 1;
+                let name = note_names[(root % 12) as usize];
+                let octave = (root as i32 / 12) - 1;
                 ui.label(format!("{}{}", name, octave));
-                if ui.add(egui::Slider::new(&mut self.walker_root, 36u8..=84)).changed() {
-                    self.engine.set_walker_root(self.walker_root);
+                if ui.add(egui::Slider::new(&mut root, 36u8..=84)).changed() {
+                    self.engine.set_walker_root(root);
                 }
                 ui.label("  Oct:");
+                let current_oct = self.engine.walker_octave_range();
                 for oct in 1u8..=3 {
-                    if ui.selectable_label(self.walker_oct == oct, oct.to_string()).clicked() {
-                        self.walker_oct = oct;
+                    if ui.selectable_label(current_oct == oct, oct.to_string()).clicked() {
                         self.engine.set_walker_octave_range(oct);
                     }
                 }
             });
             ui.horizontal(|ui| {
                 ui.label("Gate:");
-                if ui.add(egui::Slider::new(&mut self.walker_gate, 0.05..=1.0)).changed() {
-                    self.engine.set_walker_gate(self.walker_gate);
+                let mut gate = self.engine.walker_gate();
+                if ui.add(egui::Slider::new(&mut gate, 0.05..=1.0)).changed() {
+                    self.engine.set_walker_gate(gate);
                 }
             });
         });

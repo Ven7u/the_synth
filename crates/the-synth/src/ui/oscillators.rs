@@ -436,17 +436,18 @@ impl SynthApp {
                             .size(10.0)
                             .color(self.theme.c(&self.theme.text_secondary)),
                     );
+                    let mut noise_vol = self.engine.noise_vol();
                     if ui
                         .add_sized(
                             [20.0, 90.0],
-                            egui::Slider::new(&mut self.noise_vol, 0.0..=1.0)
+                            egui::Slider::new(&mut noise_vol, 0.0..=1.0)
                                 .vertical()
                                 .fixed_decimals(2),
                         )
                         .on_hover_text("White noise volume")
                         .changed()
                     {
-                        self.engine.set_noise_vol(self.noise_vol);
+                        self.engine.set_noise_vol(noise_vol);
                     }
                 });
             });
@@ -456,17 +457,19 @@ impl SynthApp {
             ui.add_space(sp_xs);
 
             ui.horizontal(|ui| {
-                if super::widgets::knob(ui, &mut self.master_vol, 0.0..=1.0, "MAST", &self.theme, false)
+                let mut master = self.engine.master_volume();
+                if super::widgets::knob(ui, &mut master, 0.0..=1.0, "MAST", &self.theme, false)
                     .on_hover_text("Master output volume — applied after all FX")
                     .changed()
                 {
-                    self.engine.set_master_volume(self.master_vol);
+                    self.engine.set_master_volume(master);
                 }
-                if super::widgets::knob(ui, &mut self.glide_time, 0.0..=0.5, "GLIDE", &self.theme, false)
+                let mut glide = self.engine.glide_time();
+                if super::widgets::knob(ui, &mut glide, 0.0..=0.5, "GLIDE", &self.theme, false)
                     .on_hover_text("Pitch slide time between notes (seconds)")
                     .changed()
                 {
-                    self.engine.set_glide_time(self.glide_time);
+                    self.engine.set_glide_time(glide);
                 }
             });
 
@@ -494,9 +497,10 @@ impl SynthApp {
                     self.engine.set_limiter_enabled(self.limiter_enabled);
                 }
                 ui.add_enabled_ui(lim_on, |ui| {
+                    let mut thr = self.engine.limiter_threshold();
                     if ui
                         .add(
-                            egui::DragValue::new(&mut self.limiter_threshold)
+                            egui::DragValue::new(&mut thr)
                                 .range(0.5..=1.0)
                                 .speed(0.005)
                                 .fixed_decimals(2),
@@ -505,7 +509,7 @@ impl SynthApp {
                         .changed()
                         && lim_on
                     {
-                        self.engine.set_limiter_threshold(self.limiter_threshold);
+                        self.engine.set_limiter_threshold(thr);
                     }
                 });
             });

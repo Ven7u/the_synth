@@ -348,9 +348,10 @@ impl SynthApp {
                     {
                         self.engine.set_filter_resonance(self.filter_q);
                     }
+                    let mut env_amt = self.engine.filter_env_amount();
                     if super::widgets::knob(
                         ui,
-                        &mut self.filter_env_amount,
+                        &mut env_amt,
                         0.0..=1.0,
                         "ENV",
                         &self.theme,
@@ -359,7 +360,7 @@ impl SynthApp {
                     .on_hover_text("Filter envelope amount — how much the filter env sweeps the cutoff.")
                     .changed()
                     {
-                        self.engine.set_filter_env_amount(self.filter_env_amount);
+                        self.engine.set_filter_env_amount(env_amt);
                     }
                 });
 
@@ -483,10 +484,23 @@ impl SynthApp {
             );
             ui.add_space(sp_xs);
 
-            let adsr = if is_filter {
-                &mut self.fenv_adsr
+            // Snapshot current ADSR from the engine into a local buffer.
+            // Sliders mutate the local; on .changed() we write back the
+            // specific stage to the engine. No UI-side mirror.
+            let mut adsr: [f32; 4] = if is_filter {
+                [
+                    self.engine.fenv_attack(),
+                    self.engine.fenv_decay(),
+                    self.engine.fenv_sustain(),
+                    self.engine.fenv_release(),
+                ]
             } else {
-                &mut self.amp_adsr
+                [
+                    self.engine.amp_attack(),
+                    self.engine.amp_decay(),
+                    self.engine.amp_sustain(),
+                    self.engine.amp_release(),
+                ]
             };
             let labels = ["A", "D", "S", "R"];
             let tips = [
@@ -547,7 +561,7 @@ impl SynthApp {
             } else {
                 self.engine.amp_cursors()
             };
-            draw_adsr_visualizer(ui, adsr, &cursors, &self.theme);
+            draw_adsr_visualizer(ui, &adsr, &cursors, &self.theme);
         });
     }
 }

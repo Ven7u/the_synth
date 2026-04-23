@@ -130,8 +130,7 @@ pub(crate) struct SynthApp {
     pub(crate) ring_depth: f32,              // ring mod depth
     pub(crate) osc1_mod_view: bool,          // OSC 1 card flipped to MOD back face
 
-    // Noise
-    pub(crate) noise_vol: f32,
+    // Noise — volume lives in engine; no UI mirror.
 
     // LFO 1
     pub(crate) lfo_enabled: bool,
@@ -151,19 +150,12 @@ pub(crate) struct SynthApp {
 
     pub(crate) filter_enabled: bool,
 
-    // Filter
+    // Filter — cutoff/q are kept because the UI wants to remember their
+    // pre-bypass value when filter_enabled is toggled off.
     pub(crate) filter_cutoff: f32,
     pub(crate) filter_q: f32,
-    pub(crate) filter_env_amount: f32,
-    pub(crate) fenv_adsr: [f32; 4],
-
-    // Amp ADSR
-    pub(crate) amp_adsr: [f32; 4],
-
-    // Glide + master
-    pub(crate) glide_time: f32,
-    pub(crate) master_vol: f32,  // OSC mix level — pre-FX
-    pub(crate) global_vol: f32,  // Final output — post all FX
+    // filter_env_amount, fenv_adsr, amp_adsr, glide_time, master_vol, global_vol
+    // live in the engine; UI reads via handle getters.
 
     // Keyboard
     pub(crate) piano_octave: i32,
@@ -180,9 +172,8 @@ pub(crate) struct SynthApp {
     pub(crate) peak_hold: f32,
     pub(crate) peak_hold_timer: f32,
 
-    // Limiter
+    // Limiter — threshold lives in engine; only the UI toggle is mirrored.
     pub(crate) limiter_enabled: bool,
-    pub(crate) limiter_threshold: f32,
     pub(crate) window_focused: bool,
 
     // Global tempo / sync
@@ -198,20 +189,8 @@ pub(crate) struct SynthApp {
     // Sequencer — chord keyboard (live, not threaded)
     pub(crate) chord_kb: ChordKbState,
 
-    // Arpeggiator UI state
-    pub(crate) arp_bpm: f32,
-    pub(crate) arp_mode: u8,
-    pub(crate) arp_division: u8,
-    pub(crate) arp_octave_range: u8,
-    pub(crate) arp_gate: f32,
-
-    // Scale walker UI state
-    pub(crate) walker_scale: u8,
-    pub(crate) walker_root: u8,
-    pub(crate) walker_oct: u8,
-    pub(crate) walker_division: u8,
-    pub(crate) walker_gate: f32,
-    pub(crate) walker_bpm: f32,
+    // Arp + walker state lives in the engine (`handle.arp_*()`, `handle.walker_*()`).
+    // No UI mirror needed.
 
     // Oscilloscope
     pub(crate) scope_height: f32,
@@ -327,7 +306,6 @@ impl SynthApp {
             ring_enabled: false,
             ring_depth: 1.0,
             osc1_mod_view: false,
-            noise_vol: 0.0,
             lfo_enabled: false,
             lfo_rate: 2.0,
             lfo_depth: 0.0,
@@ -343,12 +321,6 @@ impl SynthApp {
             filter_enabled: true,
             filter_cutoff: 3000.0,
             filter_q: 0.3,
-            filter_env_amount: 0.3,
-            fenv_adsr: [0.01, 0.3, 0.0, 0.2],
-            amp_adsr: [0.01, 0.15, 0.7, 0.4],
-            glide_time: 0.0,
-            master_vol: 0.8,
-            global_vol: 0.8,
             piano_octave: 4,
             kb_chord_mode: false,
             kb_freeze: false,
@@ -359,7 +331,6 @@ impl SynthApp {
             peak_hold: 0.0,
             peak_hold_timer: 0.0,
             limiter_enabled: true,
-            limiter_threshold: 0.95,
             window_focused: true,
             global_bpm: 120,
             global_sync: false,
@@ -368,17 +339,6 @@ impl SynthApp {
             seq_sync: true,
             seq,
             chord_kb: ChordKbState::new(),
-            arp_bpm: 120.0,
-            arp_mode: 0,
-            arp_division: 1, // 1/8 default
-            arp_octave_range: 1,
-            arp_gate: 0.7,
-            walker_scale: 0,
-            walker_root: 60,
-            walker_oct: 2,
-            walker_division: 1,
-            walker_gate: 0.6,
-            walker_bpm: 120.0,
             scope_height: 140.0,
             scope_x_scale: 1.0,
             scope_y_scale: 2.5,
@@ -494,12 +454,10 @@ impl SynthApp {
         if self.seq_sync_active() {
             self.seq.bpm.store(self.global_bpm, Ordering::Relaxed);
         }
-        if self.arp_sync_active() && (self.arp_bpm - global).abs() > f32::EPSILON {
-            self.arp_bpm = global;
+        if self.arp_sync_active() && (self.engine.arp_bpm() - global).abs() > f32::EPSILON {
             self.engine.set_arp_bpm(global);
         }
-        if self.walker_sync_active() && (self.walker_bpm - global).abs() > f32::EPSILON {
-            self.walker_bpm = global;
+        if self.walker_sync_active() && (self.engine.walker_bpm() - global).abs() > f32::EPSILON {
             self.engine.set_walker_bpm(global);
         }
         if self.lfo_sync_active() {
@@ -562,7 +520,6 @@ impl SynthApp {
                             self.engine.set_lfo_depth(v);
                         }
                         7  => { // Volume → master vol
-                            self.master_vol = v;
                             self.engine.set_master_volume(v);
                         }
                         71 => { // Resonance
@@ -730,100 +687,107 @@ impl eframe::App for SynthApp {
 
 impl SynthApp {
     pub(crate) fn capture_patch(&self) -> Patch {
-        Patch {
-            name: self.patch_name.clone(),
-            category: "User".into(),
-            osc_wave:           self.osc_wave,
-            osc_octave:         self.osc_octave,
-            osc_detune:         self.osc_detune,
-            osc_vol:            self.osc_vol,
-            osc_enabled:        self.osc_enabled,
-            osc_pulse_width:    self.osc_pulse_width,
-            osc_pw_enabled:     self.osc_pw_enabled,
-            osc_unison_enabled: self.osc_unison_enabled,
-            osc_unison_count:   self.osc_unison_count,
-            osc_unison_spread:  self.osc_unison_spread,
-            hard_sync:          self.hard_sync,
-            fm_enabled:         self.fm_enabled,
-            fm_depth:           self.fm_depth,
-            ring_enabled:       self.ring_enabled,
-            ring_depth:         self.ring_depth,
-            noise_vol:          self.noise_vol,
-            lfo_enabled:        self.lfo_enabled,
-            lfo_rate:           self.lfo_rate,
-            lfo_depth:          self.lfo_depth,
-            lfo_shape:          self.lfo_shape,
-            lfo_dest:           self.lfo_dest,
-            lfo_sync:           self.lfo_sync,
-            lfo_division:       self.lfo_division,
-            lfo2_enabled:       self.lfo2_enabled,
-            lfo2_rate:          self.lfo2_rate,
-            lfo2_depth:         self.lfo2_depth,
-            lfo2_shape:         self.lfo2_shape,
-            lfo2_dest:          self.lfo2_dest,
-            filter_enabled:     self.filter_enabled,
-            filter_cutoff:      self.filter_cutoff,
-            filter_q:           self.filter_q,
-            filter_env_amount:  self.filter_env_amount,
-            fenv_adsr:          self.fenv_adsr,
-            amp_adsr:           self.amp_adsr,
-            glide_time:         self.glide_time,
-            master_vol:         self.master_vol,
-            global_vol:         self.global_vol,
-            limiter_enabled:    self.limiter_enabled,
-            limiter_threshold:  self.limiter_threshold,
-            synth_model:        String::new(),
-            fx_overdrive_on:    self.fx_overdrive_on,
-            fx_overdrive_drive: self.fx_overdrive_drive,
-            fx_overdrive_mix:   self.fx_overdrive_mix,
-            fx_overdrive_tone:  self.fx_overdrive_tone,
-            fx_overdrive_asym:  self.fx_overdrive_asym,
-            fx_distortion_on:   self.fx_distortion_on,
-            fx_distortion_drive: self.fx_distortion_drive,
-            fx_distortion_mix:  self.fx_distortion_mix,
-            fx_distortion_tone: self.fx_distortion_tone,
-            fx_distortion_pre:  self.fx_distortion_pre,
-            fx_chorus_on:       self.fx_chorus_on,
-            fx_chorus_rate:     self.fx_chorus_rate,
-            fx_chorus_depth:    self.fx_chorus_depth,
-            fx_chorus_mix:      self.fx_chorus_mix,
-            fx_delay_on:        self.fx_delay_on,
-            fx_delay_time:      self.fx_delay_time,
-            fx_delay_feedback:  self.fx_delay_feedback,
-            fx_delay_mix:       self.fx_delay_mix,
-            fx_delay_sync:      self.fx_delay_sync,
-            fx_delay_division:  self.fx_delay_division,
-            fx_reverb_on:       self.fx_reverb_on,
-            fx_reverb_size:     self.fx_reverb_size,
-            fx_reverb_damp:     self.fx_reverb_damp,
-            fx_reverb_mix:      self.fx_reverb_mix,
-            fx_reverb_predelay: self.fx_reverb_predelay,
-            fx_reverb_type:     self.fx_reverb_type,
-            stereo_spread: self.stereo_spread,
-            stereo_width:  self.stereo_width,
-            fx_shimmer_on:      self.fx_shimmer_on,
-            fx_shimmer_size:    self.fx_shimmer_size,
-            fx_shimmer_damp:    self.fx_shimmer_damp,
-            fx_shimmer_mix:     self.fx_shimmer_mix,
-            fx_shimmer_amt:     self.fx_shimmer_amt,
-            fx_shimmer_width:   self.fx_shimmer_width,
-            fx_shimmer_spread:  self.fx_shimmer_spread,
-            fx_shimmer_pitch:   self.fx_shimmer_pitch,
-            fx_crystal_on:      self.fx_crystal_on,
-            fx_crystal_mix:     self.fx_crystal_mix,
-            fx_crystal_grain_ms:self.fx_crystal_grain_ms,
-            fx_crystal_scatter: self.fx_crystal_scatter,
-            fx_crystal_feedback:self.fx_crystal_feedback,
-            fx_crystal_delay_ms:self.fx_crystal_delay_ms,
-            fx_crystal_pitch:   self.fx_crystal_pitch,
-        }
+        // Start with a snapshot of engine state, then overlay the UI-owned
+        // fields that either live only on the UI mirror (enable flags,
+        // "remembered" pre-bypass slider positions, derived decompositions
+        // of engine params) or whose UI truth outranks engine truth.
+        let mut p = self.engine.snapshot_patch();
+        p.name     = self.patch_name.clone();
+        p.category = "User".into();
+
+        // Oscillator bank: UI owns the (osc_vol, *_enabled, osc_pw_enabled,
+        // unison_*, osc_octave, osc_detune) decomposition.
+        p.osc_wave           = self.osc_wave;
+        p.osc_octave         = self.osc_octave;
+        p.osc_detune         = self.osc_detune;
+        p.osc_vol            = self.osc_vol;
+        p.osc_enabled        = self.osc_enabled;
+        p.osc_pulse_width    = self.osc_pulse_width;
+        p.osc_pw_enabled     = self.osc_pw_enabled;
+        p.osc_unison_enabled = self.osc_unison_enabled;
+        p.osc_unison_count   = self.osc_unison_count;
+        p.osc_unison_spread  = self.osc_unison_spread;
+        p.hard_sync          = self.hard_sync;
+
+        // Global/bypass-paired fields.
+        p.fm_enabled         = self.fm_enabled;
+        p.fm_depth           = self.fm_depth;
+        p.ring_enabled       = self.ring_enabled;
+        p.ring_depth         = self.ring_depth;
+        p.lfo_enabled        = self.lfo_enabled;
+        p.lfo_rate           = self.lfo_rate;
+        p.lfo_depth          = self.lfo_depth;
+        p.lfo_shape          = self.lfo_shape;
+        p.lfo_dest           = self.lfo_dest;
+        p.lfo_sync           = self.lfo_sync;
+        p.lfo_division       = self.lfo_division;
+        p.lfo2_enabled       = self.lfo2_enabled;
+        p.lfo2_rate          = self.lfo2_rate;
+        p.lfo2_depth         = self.lfo2_depth;
+        p.lfo2_shape         = self.lfo2_shape;
+        p.lfo2_dest          = self.lfo2_dest;
+        p.filter_enabled     = self.filter_enabled;
+        p.filter_cutoff      = self.filter_cutoff;
+        p.filter_q           = self.filter_q;
+        p.limiter_enabled    = self.limiter_enabled;
+
+        // FX chain (mirror still lives on SynthApp; future batches may move
+        // these into pure engine-read territory).
+        p.fx_overdrive_on    = self.fx_overdrive_on;
+        p.fx_overdrive_drive = self.fx_overdrive_drive;
+        p.fx_overdrive_mix   = self.fx_overdrive_mix;
+        p.fx_overdrive_tone  = self.fx_overdrive_tone;
+        p.fx_overdrive_asym  = self.fx_overdrive_asym;
+        p.fx_distortion_on    = self.fx_distortion_on;
+        p.fx_distortion_drive = self.fx_distortion_drive;
+        p.fx_distortion_mix   = self.fx_distortion_mix;
+        p.fx_distortion_tone  = self.fx_distortion_tone;
+        p.fx_distortion_pre   = self.fx_distortion_pre;
+        p.fx_chorus_on    = self.fx_chorus_on;
+        p.fx_chorus_rate  = self.fx_chorus_rate;
+        p.fx_chorus_depth = self.fx_chorus_depth;
+        p.fx_chorus_mix   = self.fx_chorus_mix;
+        p.fx_delay_on       = self.fx_delay_on;
+        p.fx_delay_time     = self.fx_delay_time;
+        p.fx_delay_feedback = self.fx_delay_feedback;
+        p.fx_delay_mix      = self.fx_delay_mix;
+        p.fx_delay_sync     = self.fx_delay_sync;
+        p.fx_delay_division = self.fx_delay_division;
+        p.fx_reverb_on       = self.fx_reverb_on;
+        p.fx_reverb_size     = self.fx_reverb_size;
+        p.fx_reverb_damp     = self.fx_reverb_damp;
+        p.fx_reverb_mix      = self.fx_reverb_mix;
+        p.fx_reverb_predelay = self.fx_reverb_predelay;
+        p.fx_reverb_type     = self.fx_reverb_type;
+        p.stereo_spread = self.stereo_spread;
+        p.stereo_width  = self.stereo_width;
+        p.fx_shimmer_on     = self.fx_shimmer_on;
+        p.fx_shimmer_size   = self.fx_shimmer_size;
+        p.fx_shimmer_damp   = self.fx_shimmer_damp;
+        p.fx_shimmer_mix    = self.fx_shimmer_mix;
+        p.fx_shimmer_amt    = self.fx_shimmer_amt;
+        p.fx_shimmer_width  = self.fx_shimmer_width;
+        p.fx_shimmer_spread = self.fx_shimmer_spread;
+        p.fx_shimmer_pitch  = self.fx_shimmer_pitch;
+        p.fx_crystal_on        = self.fx_crystal_on;
+        p.fx_crystal_mix       = self.fx_crystal_mix;
+        p.fx_crystal_grain_ms  = self.fx_crystal_grain_ms;
+        p.fx_crystal_scatter   = self.fx_crystal_scatter;
+        p.fx_crystal_feedback  = self.fx_crystal_feedback;
+        p.fx_crystal_delay_ms  = self.fx_crystal_delay_ms;
+        p.fx_crystal_pitch     = self.fx_crystal_pitch;
+        p
     }
 
     pub(crate) fn apply_patch(&mut self, p: Patch) {
         // Silence all voices before changing parameters to prevent Moog filter blowup.
         self.all_notes_off();
 
-        // -- Sync UI mirror fields from the patch (Stage 6 deletes the mirror).
+        // -- Sync UI mirror fields from the patch. Only the fields still
+        // living on the UI mirror get copied. Fields that the engine
+        // authoritatively owns (ADSRs, glide, master, global, noise,
+        // limiter threshold, filter env amount, arp/walker state) are
+        // restored by `engine.apply_patch` below.
         self.patch_name         = p.name.clone();
         self.osc_wave           = p.osc_wave;
         self.osc_octave         = p.osc_octave;
@@ -840,7 +804,6 @@ impl SynthApp {
         self.fm_depth           = p.fm_depth;
         self.ring_enabled       = p.ring_enabled;
         self.ring_depth         = p.ring_depth;
-        self.noise_vol          = p.noise_vol;
         self.lfo_enabled        = p.lfo_enabled;
         self.lfo_rate           = p.lfo_rate;
         self.lfo_depth          = p.lfo_depth;
@@ -856,14 +819,7 @@ impl SynthApp {
         self.filter_enabled     = p.filter_enabled;
         self.filter_cutoff      = p.filter_cutoff;
         self.filter_q           = p.filter_q;
-        self.filter_env_amount  = p.filter_env_amount;
-        self.fenv_adsr          = p.fenv_adsr;
-        self.amp_adsr           = p.amp_adsr;
-        self.glide_time         = p.glide_time;
-        self.master_vol         = p.master_vol;
-        self.global_vol         = p.global_vol;
         self.limiter_enabled    = p.limiter_enabled;
-        self.limiter_threshold  = p.limiter_threshold;
 
         if self.patch_load_fx {
             // Sync the FX mirror fields too.
@@ -1150,7 +1106,7 @@ impl SynthApp {
                 ui.separator();
 
                 // Latency / CPU indicator
-                ui::scope::draw_latency_bar(ui, &self.engine, self.amp_adsr[0], &self.theme);
+                ui::scope::draw_latency_bar(ui, &self.engine, self.engine.amp_attack(), &self.theme);
 
                 ui.separator();
 
@@ -1209,15 +1165,16 @@ impl SynthApp {
                         .size(10.0)
                         .color(self.theme.c(&self.theme.text_disabled)),
                 );
+                let mut global_vol = self.engine.global_volume();
                 if ui.add(
-                    egui::DragValue::new(&mut self.global_vol)
+                    egui::DragValue::new(&mut global_vol)
                         .range(0.0_f32..=1.0)
                         .speed(0.005)
                         .fixed_decimals(2),
                 ).on_hover_text("Global output volume — applied after all FX.")
                  .changed()
                 {
-                    self.engine.set_global_volume(self.global_vol);
+                    self.engine.set_global_volume(global_vol);
                 }
 
                 ui.separator();
