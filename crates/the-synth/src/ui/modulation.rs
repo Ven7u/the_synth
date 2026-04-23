@@ -70,7 +70,7 @@ impl SynthApp {
                         .on_hover_text("LFO speed in Hz. 0.1 = very slow, 5 = fast vibrato, 20 = audio range.")
                         .changed()
                         {
-                            self.state.lfo_rate.set(self.lfo_rate);
+                            self.engine.set_lfo_rate(self.lfo_rate);
                         }
                     }
                     if super::widgets::knob(
@@ -84,7 +84,7 @@ impl SynthApp {
                     .on_hover_text("Modulation depth. 0 = off, 1 = full.")
                     .changed()
                     {
-                        self.state.lfo_depth.set(self.lfo_depth);
+                        self.engine.set_lfo_depth(self.lfo_depth);
                     }
 
                     // Sync toggle
@@ -108,7 +108,7 @@ impl SynthApp {
                                 let rate =
                                     lfo_synced_rate(self.global_bpm as f32, self.lfo_division);
                                 self.lfo_rate = rate;
-                                self.state.lfo_rate.set(rate);
+                                self.engine.set_lfo_rate(rate);
                             }
                         }
                     });
@@ -138,7 +138,7 @@ impl SynthApp {
                             {
                                 self.lfo_division = i;
                                 self.lfo_rate = rate;
-                                self.state.lfo_rate.set(rate);
+                                self.engine.set_lfo_rate(rate);
                             }
                         }
                     });
@@ -165,7 +165,7 @@ impl SynthApp {
                             .clicked()
                         {
                             self.lfo_shape = s;
-                            self.state.lfo_shape.store(s as u8, Ordering::Relaxed);
+                            self.engine.set_lfo_shape(s as u8);
                         }
                     }
                 });
@@ -189,7 +189,7 @@ impl SynthApp {
                             .clicked()
                         {
                             self.lfo_dest = d;
-                            self.state.lfo_dest.store(d as u8, Ordering::Relaxed);
+                            self.engine.set_lfo_dest(d as u8);
                         }
                     }
                 });
@@ -240,7 +240,7 @@ impl SynthApp {
                     .on_hover_text("LFO 2 rate in Hz — as slow as 0.01 Hz for breathing swells")
                     .changed()
                     {
-                        self.state.lfo2_rate.set(self.lfo2_rate);
+                        self.engine.set_lfo2_rate(self.lfo2_rate);
                     }
                     if super::widgets::knob(
                         ui,
@@ -253,7 +253,7 @@ impl SynthApp {
                     .on_hover_text("LFO 2 modulation depth")
                     .changed()
                     {
-                        self.state.lfo2_depth.set(self.lfo2_depth);
+                        self.engine.set_lfo2_depth(self.lfo2_depth);
                     }
                 });
 
@@ -268,7 +268,7 @@ impl SynthApp {
                     for (s, label) in [(0usize, "Sin"), (1, "Tri"), (2, "Saw")] {
                         if ui.selectable_label(self.lfo2_shape == s, label).clicked() {
                             self.lfo2_shape = s;
-                            self.state.lfo2_shape.store(s as u8, Ordering::Relaxed);
+                            self.engine.set_lfo2_shape(s as u8);
                         }
                     }
                 });
@@ -282,7 +282,7 @@ impl SynthApp {
                     for (d, label) in [(0usize, "Pitch"), (1, "Filter"), (2, "Amp")] {
                         if ui.selectable_label(self.lfo2_dest == d, label).clicked() {
                             self.lfo2_dest = d;
-                            self.state.lfo2_dest.store(d as u8, Ordering::Relaxed);
+                            self.engine.set_lfo2_dest(d as u8);
                         }
                     }
                 });
@@ -313,11 +313,11 @@ impl SynthApp {
                 {
                     self.filter_enabled = !on;
                     if self.filter_enabled {
-                        self.state.cutoff.set(self.filter_cutoff);
-                        self.state.resonance.set(self.filter_q);
+                        self.engine.set_filter_cutoff(self.filter_cutoff);
+                        self.engine.set_filter_resonance(self.filter_q);
                     } else {
-                        self.state.cutoff.set(18000.0);
-                        self.state.resonance.set(0.0);
+                        self.engine.set_filter_cutoff(18000.0);
+                        self.engine.set_filter_resonance(0.0);
                     }
                 }
             });
@@ -338,7 +338,7 @@ impl SynthApp {
                     .on_hover_text("Cutoff frequency. 80 Hz = dark, 18 kHz = fully open.")
                     .changed()
                     {
-                        self.state.cutoff.set(self.filter_cutoff);
+                        self.engine.set_filter_cutoff(self.filter_cutoff);
                     }
                     if super::widgets::knob(
                         ui,
@@ -351,7 +351,7 @@ impl SynthApp {
                     .on_hover_text("Resonance — 0 = flat, 0.9+ = self-oscillation.")
                     .changed()
                     {
-                        self.state.resonance.set(self.filter_q);
+                        self.engine.set_filter_resonance(self.filter_q);
                     }
                     if super::widgets::knob(
                         ui,
@@ -364,7 +364,7 @@ impl SynthApp {
                     .on_hover_text("Filter envelope amount — how much the filter env sweeps the cutoff.")
                     .changed()
                     {
-                        self.state.filter_env_amount.set(self.filter_env_amount);
+                        self.engine.set_filter_env_amount(self.filter_env_amount);
                     }
                 });
 
@@ -387,14 +387,14 @@ impl SynthApp {
                             .clamp(log_min, log_max))
                         .exp();
                     self.filter_q = (self.filter_q + dy * 0.95).clamp(0.0, 0.95);
-                    self.state.cutoff.set(self.filter_cutoff);
-                    self.state.resonance.set(self.filter_q);
+                    self.engine.set_filter_cutoff(self.filter_cutoff);
+                    self.engine.set_filter_resonance(self.filter_q);
                 }
                 if response.double_clicked() {
                     self.filter_cutoff = 18000.0;
                     self.filter_q = 0.0;
-                    self.state.cutoff.set(self.filter_cutoff);
-                    self.state.resonance.set(self.filter_q);
+                    self.engine.set_filter_cutoff(self.filter_cutoff);
+                    self.engine.set_filter_resonance(self.filter_q);
                 }
 
                 if ui.is_rect_visible(rect) {
@@ -527,17 +527,17 @@ impl SynthApp {
                             let v = adsr[i];
                             if is_filter {
                                 match i {
-                                    0 => self.state.fenv_attack.set(v),
-                                    1 => self.state.fenv_decay.set(v),
-                                    2 => self.state.fenv_sustain.set(v),
-                                    _ => self.state.fenv_release.set(v),
+                                    0 => self.engine.set_fenv_attack(v),
+                                    1 => self.engine.set_fenv_decay(v),
+                                    2 => self.engine.set_fenv_sustain(v),
+                                    _ => self.engine.set_fenv_release(v),
                                 }
                             } else {
                                 match i {
-                                    0 => self.state.adsr_attack.set(v),
-                                    1 => self.state.adsr_decay.set(v),
-                                    2 => self.state.adsr_sustain.set(v),
-                                    _ => self.state.adsr_release.set(v),
+                                    0 => self.engine.set_amp_attack(v),
+                                    1 => self.engine.set_amp_decay(v),
+                                    2 => self.engine.set_amp_sustain(v),
+                                    _ => self.engine.set_amp_release(v),
                                 }
                             }
                         }

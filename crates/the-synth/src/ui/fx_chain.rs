@@ -32,7 +32,7 @@ impl SynthApp {
                         .color(if *on { col_od } else { Color32::GRAY });
                     if ui.button(label).on_hover_text("Toggle overdrive (soft-clip / tanh saturation).").clicked() {
                         *on = !*on;
-                        self.state.fx_overdrive_mix.set_value(if *on { self.fx_overdrive_mix } else { 0.0 });
+                        self.engine.set_fx_overdrive_mix(if *on { self.fx_overdrive_mix } else { 0.0 });
                     }
                     ui.add(egui::Slider::new(&mut self.fx_overdrive_drive, 1.0_f32..=10.0)
                         .text("Drive").clamp_to_range(true))
@@ -46,11 +46,11 @@ impl SynthApp {
                     ui.add(egui::Slider::new(&mut self.fx_overdrive_mix, 0.0_f32..=1.0)
                         .text("Mix").clamp_to_range(true))
                         .on_hover_text("Wet/dry mix: 0 = dry, 1 = fully overdriven.");
-                    self.state.fx_overdrive_drive.set_value(self.fx_overdrive_drive);
-                    self.state.fx_overdrive_tone.set_value(self.fx_overdrive_tone);
-                    self.state.fx_overdrive_asym.set_value(self.fx_overdrive_asym);
+                    self.engine.set_fx_overdrive_drive(self.fx_overdrive_drive);
+                    self.engine.set_fx_overdrive_tone(self.fx_overdrive_tone);
+                    self.engine.set_fx_overdrive_asym(self.fx_overdrive_asym);
                     if self.fx_overdrive_on {
-                        self.state.fx_overdrive_mix.set_value(self.fx_overdrive_mix);
+                        self.engine.set_fx_overdrive_mix(self.fx_overdrive_mix);
                     }
                 });
             });
@@ -64,7 +64,7 @@ impl SynthApp {
                         .color(if *on { col_dist } else { Color32::GRAY });
                     if ui.button(label).on_hover_text("Toggle distortion (hard clipping).").clicked() {
                         *on = !*on;
-                        self.state.fx_distortion_mix.set_value(if *on { self.fx_distortion_mix } else { 0.0 });
+                        self.engine.set_fx_distortion_mix(if *on { self.fx_distortion_mix } else { 0.0 });
                     }
                     ui.add(egui::Slider::new(&mut self.fx_distortion_drive, 1.0_f32..=20.0)
                         .text("Drive").clamp_to_range(true))
@@ -78,11 +78,11 @@ impl SynthApp {
                     ui.add(egui::Slider::new(&mut self.fx_distortion_mix, 0.0_f32..=1.0)
                         .text("Mix").clamp_to_range(true))
                         .on_hover_text("Wet/dry mix: 0 = dry, 1 = fully distorted.");
-                    self.state.fx_distortion_drive.set_value(self.fx_distortion_drive);
-                    self.state.fx_distortion_pre.set_value(self.fx_distortion_pre);
-                    self.state.fx_distortion_tone.set_value(self.fx_distortion_tone);
+                    self.engine.set_fx_distortion_drive(self.fx_distortion_drive);
+                    self.engine.set_fx_distortion_pre(self.fx_distortion_pre);
+                    self.engine.set_fx_distortion_tone(self.fx_distortion_tone);
                     if self.fx_distortion_on {
-                        self.state.fx_distortion_mix.set_value(self.fx_distortion_mix);
+                        self.engine.set_fx_distortion_mix(self.fx_distortion_mix);
                     }
                 });
             });
@@ -96,7 +96,7 @@ impl SynthApp {
                         .color(if *on { col_cho } else { Color32::GRAY });
                     if ui.button(label).on_hover_text("Toggle chorus (LFO-modulated delay for width/shimmer).").clicked() {
                         *on = !*on;
-                        self.state.fx_chorus_mix.set_value(if *on { self.fx_chorus_mix } else { 0.0 });
+                        self.engine.set_fx_chorus_mix(if *on { self.fx_chorus_mix } else { 0.0 });
                     }
                     ui.add(egui::Slider::new(&mut self.fx_chorus_rate, 0.1_f32..=5.0)
                         .text("Rate").suffix(" Hz").clamp_to_range(true))
@@ -107,10 +107,10 @@ impl SynthApp {
                     ui.add(egui::Slider::new(&mut self.fx_chorus_mix, 0.0_f32..=1.0)
                         .text("Mix").clamp_to_range(true))
                         .on_hover_text("Wet/dry mix.");
-                    self.state.fx_chorus_rate.set_value(self.fx_chorus_rate);
-                    self.state.fx_chorus_depth.set_value(self.fx_chorus_depth);
+                    self.engine.set_fx_chorus_rate(self.fx_chorus_rate);
+                    self.engine.set_fx_chorus_depth(self.fx_chorus_depth);
                     if self.fx_chorus_on {
-                        self.state.fx_chorus_mix.set_value(self.fx_chorus_mix);
+                        self.engine.set_fx_chorus_mix(self.fx_chorus_mix);
                     }
                 });
             });
@@ -124,7 +124,7 @@ impl SynthApp {
                         .color(if *on { col_dly } else { Color32::GRAY });
                     if ui.button(label).on_hover_text("Toggle delay (echo effect with feedback).").clicked() {
                         *on = !*on;
-                        self.state.fx_delay_mix.set_value(if *on { self.fx_delay_mix } else { 0.0 });
+                        self.engine.set_fx_delay_mix(if *on { self.fx_delay_mix } else { 0.0 });
                     }
 
                     ui.add_enabled_ui(!self.global_sync, |ui| {
@@ -165,10 +165,10 @@ impl SynthApp {
                     ui.add(egui::Slider::new(&mut self.fx_delay_mix, 0.0_f32..=1.0)
                         .text("Mix").clamp_to_range(true))
                         .on_hover_text("Wet/dry mix.");
-                    self.state.fx_delay_time.set_value(self.fx_delay_time);
-                    self.state.fx_delay_feedback.set_value(self.fx_delay_feedback);
+                    self.engine.set_fx_delay_time(self.fx_delay_time);
+                    self.engine.set_fx_delay_feedback(self.fx_delay_feedback);
                     if self.fx_delay_on {
-                        self.state.fx_delay_mix.set_value(self.fx_delay_mix);
+                        self.engine.set_fx_delay_mix(self.fx_delay_mix);
                     }
                 });
             });
@@ -182,7 +182,7 @@ impl SynthApp {
                         .color(if *on { col_rev } else { Color32::GRAY });
                     if ui.button(label).on_hover_text("Toggle reverb.").clicked() {
                         *on = !*on;
-                        self.state.fx_reverb_mix.set_value(if *on { self.fx_reverb_mix } else { 0.0 });
+                        self.engine.set_fx_reverb_mix(if *on { self.fx_reverb_mix } else { 0.0 });
                     }
                     ui.horizontal(|ui| {
                         for (i, name) in ["Free", "Plate", "Hall"].iter().enumerate() {
@@ -191,7 +191,7 @@ impl SynthApp {
                                 .color(if selected { col_rev } else { Color32::GRAY });
                             if ui.selectable_label(selected, label).clicked() {
                                 self.fx_reverb_type = i as u8;
-                                self.state.fx_reverb_type.store(i as u8, std::sync::atomic::Ordering::Relaxed);
+                                self.engine.set_fx_reverb_type(i as u8);
                             }
                         }
                     });
@@ -208,11 +208,11 @@ impl SynthApp {
                     ui.add(egui::Slider::new(&mut self.fx_reverb_mix, 0.0_f32..=1.0)
                         .text("Mix").clamp_to_range(true))
                         .on_hover_text("Wet/dry mix.");
-                    self.state.fx_reverb_predelay.set_value(self.fx_reverb_predelay);
-                    self.state.fx_reverb_size.set_value(self.fx_reverb_size);
-                    self.state.fx_reverb_damp.set_value(self.fx_reverb_damp);
+                    self.engine.set_fx_reverb_predelay(self.fx_reverb_predelay);
+                    self.engine.set_fx_reverb_size(self.fx_reverb_size);
+                    self.engine.set_fx_reverb_damp(self.fx_reverb_damp);
                     if self.fx_reverb_on {
-                        self.state.fx_reverb_mix.set_value(self.fx_reverb_mix);
+                        self.engine.set_fx_reverb_mix(self.fx_reverb_mix);
                     }
                 });
             });
@@ -227,7 +227,7 @@ impl SynthApp {
                         .color(if *on { col_shim } else { Color32::GRAY });
                     if ui.button(label).on_hover_text("Shimmer reverb — pitch-shifted feedback loop creates a rising harmonic halo.").clicked() {
                         *on = !*on;
-                        self.state.fx_shimmer.mix.set_value(if *on { self.fx_shimmer_mix } else { 0.0 });
+                        self.engine.set_shimmer_mix(if *on { self.fx_shimmer_mix } else { 0.0 });
                     }
                     ui.add(egui::Slider::new(&mut self.fx_shimmer_size, 0.0_f32..=1.0)
                         .text("Size").clamp_to_range(true))
@@ -252,17 +252,17 @@ impl SynthApp {
                         for (i, lbl) in ["0", "+12", "+24"].iter().enumerate() {
                             if ui.selectable_label(self.fx_shimmer_pitch == i as u8, *lbl).clicked() {
                                 self.fx_shimmer_pitch = i as u8;
-                                self.state.fx_shimmer.pitch.store(i as u8, std::sync::atomic::Ordering::Relaxed);
+                                self.engine.set_shimmer_pitch(i as u8);
                             }
                         }
                     });
-                    self.state.fx_shimmer.size.set_value(self.fx_shimmer_size);
-                    self.state.fx_shimmer.damp.set_value(self.fx_shimmer_damp);
-                    self.state.fx_shimmer.shimmer.set_value(
+                    self.engine.set_shimmer_size(self.fx_shimmer_size);
+                    self.engine.set_shimmer_damp(self.fx_shimmer_damp);
+                    self.engine.set_shimmer_amount(
                         if self.fx_shimmer_on { self.fx_shimmer_amt } else { 0.0 });
-                    self.state.fx_shimmer.width.set_value(self.fx_shimmer_width);
-                    self.state.fx_shimmer.spread.set_value(self.fx_shimmer_spread);
-                    self.state.fx_shimmer.mix.set_value(
+                    self.engine.set_shimmer_width(self.fx_shimmer_width);
+                    self.engine.set_shimmer_spread(self.fx_shimmer_spread);
+                    self.engine.set_shimmer_mix(
                         if self.fx_shimmer_on { self.fx_shimmer_mix } else { 0.0 });
                 });
             });
@@ -276,7 +276,7 @@ impl SynthApp {
                         .color(if *on { col_crys } else { Color32::GRAY });
                     if ui.button(label).on_hover_text("Crystallizer — granular pitch-shift delay with feedback.").clicked() {
                         *on = !*on;
-                        self.state.fx_crystal.mix.set_value(if *on { self.fx_crystal_mix } else { 0.0 });
+                        self.engine.set_crystal_mix(if *on { self.fx_crystal_mix } else { 0.0 });
                     }
                     ui.add(egui::Slider::new(&mut self.fx_crystal_grain_ms, 10.0_f32..=400.0)
                         .text("Grain").suffix(" ms").clamp_to_range(true))
@@ -298,15 +298,15 @@ impl SynthApp {
                         for (i, lbl) in ["0.5x", "1x", "2x", "4x"].iter().enumerate() {
                             if ui.selectable_label(self.fx_crystal_pitch == i as u8, *lbl).clicked() {
                                 self.fx_crystal_pitch = i as u8;
-                                self.state.fx_crystal.pitch.store(i as u8, std::sync::atomic::Ordering::Relaxed);
+                                self.engine.set_crystal_pitch(i as u8);
                             }
                         }
                     });
-                    self.state.fx_crystal.grain_ms.set_value(self.fx_crystal_grain_ms);
-                    self.state.fx_crystal.scatter.set_value(self.fx_crystal_scatter);
-                    self.state.fx_crystal.delay_ms.set_value(self.fx_crystal_delay_ms);
-                    self.state.fx_crystal.feedback.set_value(self.fx_crystal_feedback);
-                    self.state.fx_crystal.mix.set_value(
+                    self.engine.set_crystal_grain(self.fx_crystal_grain_ms);
+                    self.engine.set_crystal_scatter(self.fx_crystal_scatter);
+                    self.engine.set_crystal_delay(self.fx_crystal_delay_ms);
+                    self.engine.set_crystal_feedback(self.fx_crystal_feedback);
+                    self.engine.set_crystal_mix(
                         if self.fx_crystal_on { self.fx_crystal_mix } else { 0.0 });
                 });
             });
@@ -325,8 +325,8 @@ impl SynthApp {
                         .text("Width")
                         .clamp_to_range(true))
                         .on_hover_text("M/S width on the final output. 0 = mono, 1 = unchanged, 2 = maximum stereo expansion.");
-                    self.state.stereo_spread.set_value(self.stereo_spread);
-                    self.state.stereo_width.set_value(self.stereo_width);
+                    self.engine.set_stereo_spread(self.stereo_spread);
+                    self.engine.set_stereo_width(self.stereo_width);
                 });
             });
         });

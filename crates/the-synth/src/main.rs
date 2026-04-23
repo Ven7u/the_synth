@@ -508,17 +508,17 @@ impl SynthApp {
         }
         if self.arp_sync_active() && (self.arp_bpm - global).abs() > f32::EPSILON {
             self.arp_bpm = global;
-            self.state.arp.bpm.set(global);
+            self.engine.set_arp_bpm(global);
         }
         if self.walker_sync_active() && (self.walker_bpm - global).abs() > f32::EPSILON {
             self.walker_bpm = global;
-            self.state.walker.bpm.set(global);
+            self.engine.set_walker_bpm(global);
         }
         if self.lfo_sync_active() {
             let rate = ui::modulation::lfo_synced_rate(global, self.lfo_division);
             if (self.lfo_rate - rate).abs() > f32::EPSILON {
                 self.lfo_rate = rate;
-                self.state.lfo_rate.set(rate);
+                self.engine.set_lfo_rate(rate);
             }
         }
     }
@@ -573,21 +573,21 @@ impl SynthApp {
                     match cc {
                         1  => { // Mod wheel → LFO depth
                             self.lfo_depth = v;
-                            self.state.lfo_depth.set(v);
+                            self.engine.set_lfo_depth(v);
                         }
                         7  => { // Volume → master vol
                             self.master_vol = v;
-                            self.state.master_vol.set(v);
+                            self.engine.set_master_volume(v);
                         }
                         71 => { // Resonance
                             let q = v * 0.95;
                             self.filter_q = q;
-                            self.state.resonance.set(q);
+                            self.engine.set_filter_resonance(q);
                         }
                         74 => { // Cutoff (brightness)
                             let hz = 80.0 * (18000.0_f32 / 80.0).powf(v);
                             self.filter_cutoff = hz;
-                            self.state.cutoff.set(hz);
+                            self.engine.set_filter_cutoff(hz);
                         }
                         64 => { // Sustain pedal → freeze
                             let pedal_down = value >= 64;
@@ -604,7 +604,7 @@ impl SynthApp {
                 }
                 MidiEvent::PitchBend { value, .. } => {
                     let semitones = value * 2.0;
-                    self.state.lfo_pitch_mult.set(2_f32.powf(semitones / 12.0));
+                    self.engine.set_lfo_pitch_mult(2_f32.powf(semitones / 12.0));
                 }
             }
         }
@@ -1241,7 +1241,7 @@ impl SynthApp {
                 ).on_hover_text("Global output volume — applied after all FX.")
                  .changed()
                 {
-                    self.state.global_vol.set(self.global_vol);
+                    self.engine.set_global_volume(self.global_vol);
                 }
 
                 ui.separator();
@@ -1290,44 +1290,44 @@ impl SynthApp {
             let on = self.fx_overdrive_on;
             fx_chip!(ui, "OD", on, self.theme.fx_overdrive, {
                 self.fx_overdrive_on = !on;
-                self.state.fx_overdrive_mix.set_value(if !on { self.fx_overdrive_mix } else { 0.0 });
+                self.engine.set_fx_overdrive_mix(if !on { self.fx_overdrive_mix } else { 0.0 });
             });
 
             let on = self.fx_distortion_on;
             fx_chip!(ui, "DIST", on, self.theme.fx_distortion, {
                 self.fx_distortion_on = !on;
-                self.state.fx_distortion_mix.set_value(if !on { self.fx_distortion_mix } else { 0.0 });
+                self.engine.set_fx_distortion_mix(if !on { self.fx_distortion_mix } else { 0.0 });
             });
 
             let on = self.fx_chorus_on;
             fx_chip!(ui, "CHOR", on, self.theme.fx_chorus, {
                 self.fx_chorus_on = !on;
-                self.state.fx_chorus_mix.set_value(if !on { self.fx_chorus_mix } else { 0.0 });
+                self.engine.set_fx_chorus_mix(if !on { self.fx_chorus_mix } else { 0.0 });
             });
 
             let on = self.fx_delay_on;
             fx_chip!(ui, "DLY", on, self.theme.fx_delay, {
                 self.fx_delay_on = !on;
-                self.state.fx_delay_mix.set_value(if !on { self.fx_delay_mix } else { 0.0 });
+                self.engine.set_fx_delay_mix(if !on { self.fx_delay_mix } else { 0.0 });
             });
 
             let on = self.fx_reverb_on;
             fx_chip!(ui, "REV", on, self.theme.fx_reverb, {
                 self.fx_reverb_on = !on;
-                self.state.fx_reverb_mix.set_value(if !on { self.fx_reverb_mix } else { 0.0 });
+                self.engine.set_fx_reverb_mix(if !on { self.fx_reverb_mix } else { 0.0 });
             });
 
             let on = self.fx_shimmer_on;
             fx_chip!(ui, "SHIM", on, self.theme.fx_shimmer, {
                 self.fx_shimmer_on = !on;
-                self.state.fx_shimmer.shimmer.set_value(if !on { self.fx_shimmer_amt } else { 0.0 });
-                self.state.fx_shimmer.mix.set_value(if !on { self.fx_shimmer_mix } else { 0.0 });
+                self.engine.set_shimmer_amount(if !on { self.fx_shimmer_amt } else { 0.0 });
+                self.engine.set_shimmer_mix(if !on { self.fx_shimmer_mix } else { 0.0 });
             });
 
             let on = self.fx_crystal_on;
             fx_chip!(ui, "CRYST", on, self.theme.fx_crystallizer, {
                 self.fx_crystal_on = !on;
-                self.state.fx_crystal.mix.set_value(if !on { self.fx_crystal_mix } else { 0.0 });
+                self.engine.set_crystal_mix(if !on { self.fx_crystal_mix } else { 0.0 });
             });
         });
     }
