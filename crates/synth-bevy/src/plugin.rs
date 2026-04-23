@@ -372,7 +372,7 @@ fn setup_synth_runtime(world: &mut World) {
     };
 
     tempo.bpm = cfg.initial_bpm.max(1.0);
-    drop(tempo);
+    let _ = tempo;
     world.insert_resource(synth_param);
     world.insert_resource(SynthBevyRuntime {
         backend,

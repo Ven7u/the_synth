@@ -167,13 +167,13 @@ impl PlateState {
         // 4-stage input diffusion: Schroeder allpass (fixed — not in feedback loop)
         let g = [0.75f32, 0.75, 0.625, 0.625];
         let mut diff = self.bw_z;
-        for i in 0..4 {
+        for (i, &gi) in g.iter().enumerate() {
             let len = self.id_buf[i].len();
             let pos = self.id_pos[i];
             let buf = self.id_buf[i][pos];
-            self.id_buf[i][pos] = diff + buf * g[i];
+            self.id_buf[i][pos] = diff + buf * gi;
             self.id_pos[i] = (pos + 1) % len;
-            diff = buf - diff * g[i];
+            diff = buf - diff * gi;
         }
 
         let tank_in = diff + self.feedback * decay;
@@ -283,10 +283,10 @@ impl FdnState {
 
         // Read all delay lines with LFO-modulated fractional offsets
         let mut x = [0.0f32; 8];
-        for i in 0..8 {
+        for (i, xi) in x.iter_mut().enumerate() {
             self.lfo[i] = (self.lfo[i] + self.lfo_inc[i]).rem_euclid(tau);
             let d = self.delay[i] + self.lfo[i].sin() * self.mod_depth;
-            x[i] = frac_read(&self.buf[i], self.pos[i], d);
+            *xi = frac_read(&self.buf[i], self.pos[i], d);
         }
 
         let out = x.iter().sum::<f32>() * 0.125;
@@ -294,8 +294,8 @@ impl FdnState {
         hadamard8(&mut x);
 
         let d = damp * 0.85;
-        for i in 0..8 {
-            self.lp[i] = x[i] * (1.0 - d) + self.lp[i] * d;
+        for (i, &xi) in x.iter().enumerate() {
+            self.lp[i] = xi * (1.0 - d) + self.lp[i] * d;
             self.buf[i][self.pos[i]] = self.lp[i] * decay + input * 0.125;
             self.pos[i] = (self.pos[i] + 1) % self.buf[i].len();
         }
@@ -375,7 +375,7 @@ pub struct ShimmerReverb {
 impl ShimmerReverb {
     pub fn new(sr: f32) -> Self {
         let scale = sr / 44100.0;
-        let pre_delay_samples = ((0.050 * sr) as usize).min(PRE_BUF - 1).max(1);
+        let pre_delay_samples = ((0.050 * sr) as usize).clamp(1, PRE_BUF - 1);
 
         let comb_mod_depth = MOD_DEPTH_SEC * sr;
         let pad = (comb_mod_depth.ceil() as usize) + 4;

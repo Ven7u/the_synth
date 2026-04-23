@@ -17,7 +17,7 @@ fn main() {
     let run_suite = |name: &str, body: &mut dyn FnMut(), passed: &mut usize, failed: &mut usize| {
         if filter.as_deref().map(|f| name.contains(f)).unwrap_or(true) {
             print!("  {:<40} ", name);
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body())) {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
                 Ok(()) => {
                     println!("PASS");
                     *passed += 1;
@@ -156,6 +156,7 @@ fn check_limiter_silence() {
 
 struct Metrics {
     peak: f32,
+    #[allow(dead_code)]
     rms: f32,
     dc: f32,
     all_finite: bool,

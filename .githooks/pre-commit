@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -e
+
+echo "→ cargo fmt --check"
+cargo fmt --check
+
+echo "→ cargo clippy"
+cargo clippy -- -D clippy::correctness -D clippy::suspicious
+
+echo "→ cargo test"
+cargo test

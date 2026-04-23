@@ -312,7 +312,7 @@ impl ArpState {
         }
         self.held_count -= 1;
         if self.held_count > 0 {
-            self.step_idx = self.step_idx % self.held_count;
+            self.step_idx %= self.held_count;
         }
         self.rebuild_sorted();
     }
@@ -419,7 +419,7 @@ impl ArpState {
 
             if self.held_count > 0 {
                 let mode = ArpMode::from_u8(cfg.mode.load(Ordering::Relaxed));
-                let octave_range = cfg.octave_range.load(Ordering::Relaxed).max(1).min(4) as usize;
+                let octave_range = cfg.octave_range.load(Ordering::Relaxed).clamp(1, 4) as usize;
                 let note = if self.restart_pending {
                     self.restart_pending = false;
                     self.note_at_index(mode, octave_range)
@@ -441,7 +441,7 @@ impl ArpState {
 
     fn note_at_index(&mut self, mode: ArpMode, octave_range: usize) -> u8 {
         let total = (self.held_count * octave_range).max(1);
-        self.step_idx = self.step_idx % total;
+        self.step_idx %= total;
         let octave = self.step_idx / self.held_count;
         let note_idx = self.step_idx % self.held_count;
         let base = match mode {
@@ -573,7 +573,7 @@ impl ScaleWalker {
         // Rebuild scale notes if config changed
         let scale = cfg.scale.load(Ordering::Relaxed);
         let root = cfg.root.load(Ordering::Relaxed);
-        let oct = cfg.octave_range.load(Ordering::Relaxed).max(1).min(3);
+        let oct = cfg.octave_range.load(Ordering::Relaxed).clamp(1, 3);
         if scale != self.prev_scale || root != self.prev_root || oct != self.prev_oct {
             self.rebuild(scale, root, oct);
             self.prev_scale = scale;
@@ -672,7 +672,7 @@ impl ScaleWalker {
         }
         // Reset index so we don't start out-of-bounds
         if self.scale_count > 0 {
-            self.current_idx = self.current_idx % self.scale_count;
+            self.current_idx %= self.scale_count;
         }
     }
 

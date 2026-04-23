@@ -634,7 +634,7 @@ struct SmoothedParam {
 
 impl SmoothedParam {
     fn new(shared: Shared, tau_s: f32, sr: f32) -> Self {
-        let current = shared.value() as f32;
+        let current = shared.value();
         let coeff = (-1.0_f32 / (tau_s * sr)).exp();
         Self {
             shared,
@@ -649,12 +649,12 @@ impl SmoothedParam {
     }
 
     fn reset(&mut self) {
-        self.current = self.shared.value() as f32;
+        self.current = self.shared.value();
     }
 
     #[inline]
     fn next(&mut self) -> f32 {
-        let target = self.shared.value() as f32;
+        let target = self.shared.value();
         self.current = target + self.coeff * (self.current - target);
         self.current
     }
@@ -879,8 +879,8 @@ impl AudioNode for FxChain {
         // ── Overdrive (tanh soft clip) ──────────────────────────────────────
         let od_drive = self.od_drive.next().max(1.0);
         let od_mix = self.od_mix.next();
-        let od_tone = self.od_tone.value() as f32;
-        let od_asym = self.od_asym.value() as f32;
+        let od_tone = self.od_tone.value();
+        let od_asym = self.od_asym.value();
         let od_wet = if od_mix > 0.0001 {
             // Asymmetric bias: scaled to match the driven signal level so it
             // actually shifts the clipping point. bias up to ±2.0 in tanh space.
@@ -903,8 +903,8 @@ impl AudioNode for FxChain {
         // ── Distortion (hard clip) ──────────────────────────────────────────
         let dist_drive = self.dist_drive.next().max(1.0);
         let dist_mix = self.dist_mix.next();
-        let dist_tone = self.dist_tone.value() as f32;
-        let dist_pre = self.dist_pre.value() as f32;
+        let dist_tone = self.dist_tone.value();
+        let dist_pre = self.dist_pre.value();
         let dist_wet = if dist_mix > 0.0001 {
             // Pre-clipper HP: removes bass before clipping to avoid mud.
             // Maps 0→1 to 20 Hz → 800 Hz. HP = input - LP(input).
@@ -931,8 +931,8 @@ impl AudioNode for FxChain {
         self.del_buf[self.del_pos] = s2;
 
         let cho_wet = if cho_mix > 0.0001 {
-            let rate = self.cho_rate.value() as f32;
-            let depth = self.cho_depth.value() as f32;
+            let rate = self.cho_rate.value();
+            let depth = self.cho_depth.value();
             self.cho_phase = (self.cho_phase + rate / self.sr).fract();
             let lfo = (self.cho_phase * std::f32::consts::TAU).sin();
             let delay_smp = ((0.01 + depth * lfo) * self.sr).max(0.0);
@@ -956,7 +956,7 @@ impl AudioNode for FxChain {
         } else {
             del_time_free
         };
-        let del_feedback = self.del_feedback.value() as f32;
+        let del_feedback = self.del_feedback.value();
         let del_feedback = del_feedback.clamp(0.0, 0.95);
         let del_wet = if del_mix > 0.0001 {
             let delay_smp = (del_time * self.sr).clamp(1.0, (buf_len - 2) as f32);

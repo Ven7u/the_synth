@@ -60,6 +60,12 @@ pub struct MidiEngine {
     pub connected_port: Option<usize>,
 }
 
+impl Default for MidiEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MidiEngine {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel();
