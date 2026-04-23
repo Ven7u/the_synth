@@ -8,6 +8,7 @@ synth-dsp     = { path = "../synth-dsp" }
 synth-common  = { path = "../synth-common" }
 synth-control = { path = "../synth-control" }
 fundsp        = { version = "0.23", features = ["files", "fft"] }
+serde         = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 synth-control = { path = "../synth-control", features = ["serde"] }

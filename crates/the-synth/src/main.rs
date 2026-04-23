@@ -837,7 +837,8 @@ impl SynthApp {
         // Silence all voices before changing parameters to prevent Moog filter blowup.
         self.all_notes_off();
 
-        self.patch_name         = p.name;
+        // -- Sync UI mirror fields from the patch (Stage 6 deletes the mirror).
+        self.patch_name         = p.name.clone();
         self.osc_wave           = p.osc_wave;
         self.osc_octave         = p.osc_octave;
         self.osc_detune         = p.osc_detune;
@@ -878,124 +879,113 @@ impl SynthApp {
         self.limiter_enabled    = p.limiter_enabled;
         self.limiter_threshold  = p.limiter_threshold;
 
-        // Push everything to AudioState Shareds
-        let s = &self.state;
-        for i in 0..3 {
-            s.osc_wave[i].store(self.osc_wave[i] as u8, std::sync::atomic::Ordering::Relaxed);
-            s.osc_vol[i].set(if self.osc_enabled[i] { self.osc_vol[i] } else { 0.0 });
-            s.osc_pulse_width[i].set(self.osc_pulse_width[i]);
-            self.update_freq_mult(i);
-            self.update_unison(i);
-        }
-        s.hard_sync_enabled.store(self.hard_sync, std::sync::atomic::Ordering::Relaxed);
-        s.fm_depth.set(if self.fm_enabled { self.fm_depth } else { 0.0 });
-        s.ring_depth.set(if self.ring_enabled { self.ring_depth } else { 0.0 });
-        s.noise_vol.set(self.noise_vol);
-        s.lfo_rate.set(self.lfo_rate);
-        s.lfo_depth.set(if self.lfo_enabled { self.lfo_depth } else { 0.0 });
-        s.lfo_shape.store(self.lfo_shape as u8, std::sync::atomic::Ordering::Relaxed);
-        s.lfo_dest.store(self.lfo_dest as u8, std::sync::atomic::Ordering::Relaxed);
-        s.lfo2_rate.set(self.lfo2_rate);
-        s.lfo2_depth.set(if self.lfo2_enabled { self.lfo2_depth } else { 0.0 });
-        s.lfo2_shape.store(self.lfo2_shape as u8, std::sync::atomic::Ordering::Relaxed);
-        s.lfo2_dest.store(self.lfo2_dest as u8, std::sync::atomic::Ordering::Relaxed);
-        s.cutoff.set(if self.filter_enabled { self.filter_cutoff } else { 18000.0 });
-        s.resonance.set(if self.filter_enabled { self.filter_q } else { 0.0 });
-        s.filter_env_amount.set(self.filter_env_amount);
-        s.fenv_attack.set(self.fenv_adsr[0]);
-        s.fenv_decay.set(self.fenv_adsr[1]);
-        s.fenv_sustain.set(self.fenv_adsr[2]);
-        s.fenv_release.set(self.fenv_adsr[3]);
-        s.adsr_attack.set(self.amp_adsr[0]);
-        s.adsr_decay.set(self.amp_adsr[1]);
-        s.adsr_sustain.set(self.amp_adsr[2]);
-        s.adsr_release.set(self.amp_adsr[3]);
-        s.glide_time.set(self.glide_time);
-        s.master_vol.set(self.master_vol);
-        s.global_vol.set(self.global_vol);
-        s.limiter_enabled.store(self.limiter_enabled, std::sync::atomic::Ordering::Relaxed);
-        s.limiter_threshold.set(self.limiter_threshold);
-
-        // FX chain — only applied when "Load FX" is enabled in the patch browser
         if self.patch_load_fx {
-            self.fx_overdrive_on    = p.fx_overdrive_on;
-            self.fx_overdrive_drive = p.fx_overdrive_drive;
-            self.fx_overdrive_mix   = p.fx_overdrive_mix;
-            self.fx_overdrive_tone  = p.fx_overdrive_tone;
-            self.fx_overdrive_asym  = p.fx_overdrive_asym;
-            self.fx_distortion_on   = p.fx_distortion_on;
+            // Sync the FX mirror fields too.
+            self.fx_overdrive_on     = p.fx_overdrive_on;
+            self.fx_overdrive_drive  = p.fx_overdrive_drive;
+            self.fx_overdrive_mix    = p.fx_overdrive_mix;
+            self.fx_overdrive_tone   = p.fx_overdrive_tone;
+            self.fx_overdrive_asym   = p.fx_overdrive_asym;
+            self.fx_distortion_on    = p.fx_distortion_on;
             self.fx_distortion_drive = p.fx_distortion_drive;
-            self.fx_distortion_mix  = p.fx_distortion_mix;
-            self.fx_distortion_tone = p.fx_distortion_tone;
-            self.fx_distortion_pre  = p.fx_distortion_pre;
-            self.fx_chorus_on       = p.fx_chorus_on;
-            self.fx_chorus_rate     = p.fx_chorus_rate;
-            self.fx_chorus_depth    = p.fx_chorus_depth;
-            self.fx_chorus_mix      = p.fx_chorus_mix;
-            self.fx_delay_on        = p.fx_delay_on;
-            self.fx_delay_time      = p.fx_delay_time;
-            self.fx_delay_feedback  = p.fx_delay_feedback;
-            self.fx_delay_mix       = p.fx_delay_mix;
-            self.fx_delay_sync      = p.fx_delay_sync;
-            self.fx_delay_division  = p.fx_delay_division;
-            self.fx_reverb_on       = p.fx_reverb_on;
-            self.fx_reverb_size     = p.fx_reverb_size;
-            self.fx_reverb_damp     = p.fx_reverb_damp;
-            self.fx_reverb_mix      = p.fx_reverb_mix;
-            self.fx_reverb_predelay = p.fx_reverb_predelay;
-            self.fx_reverb_type     = p.fx_reverb_type;
-            self.stereo_spread = p.stereo_spread;
-            self.stereo_width  = p.stereo_width;
-            self.fx_shimmer_on      = p.fx_shimmer_on;
-            self.fx_shimmer_size    = p.fx_shimmer_size;
-            self.fx_shimmer_damp    = p.fx_shimmer_damp;
-            self.fx_shimmer_mix     = p.fx_shimmer_mix;
-            self.fx_shimmer_amt     = p.fx_shimmer_amt;
-            self.fx_shimmer_width   = p.fx_shimmer_width;
-            self.fx_shimmer_spread  = p.fx_shimmer_spread;
-            self.fx_shimmer_pitch   = p.fx_shimmer_pitch;
-            self.fx_crystal_on      = p.fx_crystal_on;
-            self.fx_crystal_mix     = p.fx_crystal_mix;
+            self.fx_distortion_mix   = p.fx_distortion_mix;
+            self.fx_distortion_tone  = p.fx_distortion_tone;
+            self.fx_distortion_pre   = p.fx_distortion_pre;
+            self.fx_chorus_on        = p.fx_chorus_on;
+            self.fx_chorus_rate      = p.fx_chorus_rate;
+            self.fx_chorus_depth     = p.fx_chorus_depth;
+            self.fx_chorus_mix       = p.fx_chorus_mix;
+            self.fx_delay_on         = p.fx_delay_on;
+            self.fx_delay_time       = p.fx_delay_time;
+            self.fx_delay_feedback   = p.fx_delay_feedback;
+            self.fx_delay_mix        = p.fx_delay_mix;
+            self.fx_delay_sync       = p.fx_delay_sync;
+            self.fx_delay_division   = p.fx_delay_division;
+            self.fx_reverb_on        = p.fx_reverb_on;
+            self.fx_reverb_size      = p.fx_reverb_size;
+            self.fx_reverb_damp      = p.fx_reverb_damp;
+            self.fx_reverb_mix       = p.fx_reverb_mix;
+            self.fx_reverb_predelay  = p.fx_reverb_predelay;
+            self.fx_reverb_type      = p.fx_reverb_type;
+            self.stereo_spread       = p.stereo_spread;
+            self.stereo_width        = p.stereo_width;
+            self.fx_shimmer_on       = p.fx_shimmer_on;
+            self.fx_shimmer_size     = p.fx_shimmer_size;
+            self.fx_shimmer_damp     = p.fx_shimmer_damp;
+            self.fx_shimmer_mix      = p.fx_shimmer_mix;
+            self.fx_shimmer_amt      = p.fx_shimmer_amt;
+            self.fx_shimmer_width    = p.fx_shimmer_width;
+            self.fx_shimmer_spread   = p.fx_shimmer_spread;
+            self.fx_shimmer_pitch    = p.fx_shimmer_pitch;
+            self.fx_crystal_on       = p.fx_crystal_on;
+            self.fx_crystal_mix      = p.fx_crystal_mix;
             self.fx_crystal_grain_ms = p.fx_crystal_grain_ms;
-            self.fx_crystal_scatter = p.fx_crystal_scatter;
+            self.fx_crystal_scatter  = p.fx_crystal_scatter;
             self.fx_crystal_feedback = p.fx_crystal_feedback;
             self.fx_crystal_delay_ms = p.fx_crystal_delay_ms;
-            self.fx_crystal_pitch   = p.fx_crystal_pitch;
-            s.fx_overdrive_drive.set_value(self.fx_overdrive_drive);
-            s.fx_overdrive_mix.set_value(if self.fx_overdrive_on { self.fx_overdrive_mix } else { 0.0 });
-            s.fx_overdrive_tone.set_value(self.fx_overdrive_tone);
-            s.fx_overdrive_asym.set_value(self.fx_overdrive_asym);
-            s.fx_distortion_drive.set_value(self.fx_distortion_drive);
-            s.fx_distortion_mix.set_value(if self.fx_distortion_on { self.fx_distortion_mix } else { 0.0 });
-            s.fx_distortion_tone.set_value(self.fx_distortion_tone);
-            s.fx_distortion_pre.set_value(self.fx_distortion_pre);
-            s.fx_chorus_rate.set_value(self.fx_chorus_rate);
-            s.fx_chorus_depth.set_value(self.fx_chorus_depth);
-            s.fx_chorus_mix.set_value(if self.fx_chorus_on { self.fx_chorus_mix } else { 0.0 });
-            s.fx_delay_time.set_value(self.fx_delay_time);
-            s.fx_delay_feedback.set_value(self.fx_delay_feedback);
-            s.fx_delay_mix.set_value(if self.fx_delay_on { self.fx_delay_mix } else { 0.0 });
-            s.fx_reverb_size.set_value(self.fx_reverb_size);
-            s.fx_reverb_damp.set_value(self.fx_reverb_damp);
-            s.fx_reverb_mix.set_value(if self.fx_reverb_on { self.fx_reverb_mix } else { 0.0 });
-            s.fx_reverb_predelay.set_value(self.fx_reverb_predelay);
-            s.fx_reverb_type.store(self.fx_reverb_type, std::sync::atomic::Ordering::Relaxed);
-            s.stereo_spread.set_value(self.stereo_spread);
-            s.stereo_width.set_value(self.stereo_width);
-            s.fx_shimmer.size.set_value(self.fx_shimmer_size);
-            s.fx_shimmer.damp.set_value(self.fx_shimmer_damp);
-            s.fx_shimmer.shimmer.set_value(if self.fx_shimmer_on { self.fx_shimmer_amt } else { 0.0 });
-            s.fx_shimmer.width.set_value(self.fx_shimmer_width);
-            s.fx_shimmer.spread.set_value(self.fx_shimmer_spread);
-            s.fx_shimmer.pitch.store(self.fx_shimmer_pitch, std::sync::atomic::Ordering::Relaxed);
-            s.fx_shimmer.mix.set_value(if self.fx_shimmer_on { self.fx_shimmer_mix } else { 0.0 });
-            s.fx_crystal.grain_ms.set_value(self.fx_crystal_grain_ms);
-            s.fx_crystal.scatter.set_value(self.fx_crystal_scatter);
-            s.fx_crystal.feedback.set_value(self.fx_crystal_feedback);
-            s.fx_crystal.delay_ms.set_value(self.fx_crystal_delay_ms);
-            s.fx_crystal.pitch.store(self.fx_crystal_pitch, std::sync::atomic::Ordering::Relaxed);
-            s.fx_crystal.mix.set_value(if self.fx_crystal_on { self.fx_crystal_mix } else { 0.0 });
-            // Propagate delay sync state (reads fx_delay_sync / fx_delay_division)
+            self.fx_crystal_pitch    = p.fx_crystal_pitch;
+        }
+
+        // -- Push engine state through the typed handle.
+        //
+        // `apply_patch` always writes the sound-generating half of the patch
+        // (oscillators, filter, LFOs, envelopes, master, limiter). The FX
+        // chain is only written if the user has "Load FX" enabled — to keep
+        // it off, patch over just the FX fields with a zero-mix view.
+        if self.patch_load_fx {
+            self.engine.apply_patch(&p);
+        } else {
+            let mut core = p.clone();
+            // Wipe FX and stereo so apply_patch doesn't clobber the user's
+            // current FX settings. Use the live handle values.
+            core.fx_overdrive_on     = self.fx_overdrive_on;
+            core.fx_overdrive_drive  = self.fx_overdrive_drive;
+            core.fx_overdrive_mix    = self.fx_overdrive_mix;
+            core.fx_overdrive_tone   = self.fx_overdrive_tone;
+            core.fx_overdrive_asym   = self.fx_overdrive_asym;
+            core.fx_distortion_on    = self.fx_distortion_on;
+            core.fx_distortion_drive = self.fx_distortion_drive;
+            core.fx_distortion_mix   = self.fx_distortion_mix;
+            core.fx_distortion_tone  = self.fx_distortion_tone;
+            core.fx_distortion_pre   = self.fx_distortion_pre;
+            core.fx_chorus_on        = self.fx_chorus_on;
+            core.fx_chorus_rate      = self.fx_chorus_rate;
+            core.fx_chorus_depth     = self.fx_chorus_depth;
+            core.fx_chorus_mix       = self.fx_chorus_mix;
+            core.fx_delay_on         = self.fx_delay_on;
+            core.fx_delay_time       = self.fx_delay_time;
+            core.fx_delay_feedback   = self.fx_delay_feedback;
+            core.fx_delay_mix        = self.fx_delay_mix;
+            core.fx_delay_sync       = self.fx_delay_sync;
+            core.fx_delay_division   = self.fx_delay_division;
+            core.fx_reverb_on        = self.fx_reverb_on;
+            core.fx_reverb_size      = self.fx_reverb_size;
+            core.fx_reverb_damp      = self.fx_reverb_damp;
+            core.fx_reverb_mix       = self.fx_reverb_mix;
+            core.fx_reverb_predelay  = self.fx_reverb_predelay;
+            core.fx_reverb_type      = self.fx_reverb_type;
+            core.stereo_spread       = self.stereo_spread;
+            core.stereo_width        = self.stereo_width;
+            core.fx_shimmer_on       = self.fx_shimmer_on;
+            core.fx_shimmer_size     = self.fx_shimmer_size;
+            core.fx_shimmer_damp     = self.fx_shimmer_damp;
+            core.fx_shimmer_mix      = self.fx_shimmer_mix;
+            core.fx_shimmer_amt      = self.fx_shimmer_amt;
+            core.fx_shimmer_width    = self.fx_shimmer_width;
+            core.fx_shimmer_spread   = self.fx_shimmer_spread;
+            core.fx_shimmer_pitch    = self.fx_shimmer_pitch;
+            core.fx_crystal_on       = self.fx_crystal_on;
+            core.fx_crystal_mix      = self.fx_crystal_mix;
+            core.fx_crystal_grain_ms = self.fx_crystal_grain_ms;
+            core.fx_crystal_scatter  = self.fx_crystal_scatter;
+            core.fx_crystal_feedback = self.fx_crystal_feedback;
+            core.fx_crystal_delay_ms = self.fx_crystal_delay_ms;
+            core.fx_crystal_pitch    = self.fx_crystal_pitch;
+            self.engine.apply_patch(&core);
+        }
+
+        // Propagate delay-sync state.
+        if self.patch_load_fx {
             self.apply_clock_sync();
         }
     }

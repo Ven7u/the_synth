@@ -11,6 +11,9 @@ pub use audio::{AudioState, VOICE_COUNT, build_synth_graph};
 pub mod handle;
 pub use handle::SynthEngineHandle;
 
+pub mod patch;
+pub use patch::Patch;
+
 pub mod multi;
 pub use multi::{TrackState, MultiTrackEngine, TRACK_COUNT};
 pub use synth_dsp::shimmer::{ShimmerShared, ShimmerReverb};

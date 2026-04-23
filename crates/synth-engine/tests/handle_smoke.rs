@@ -10,7 +10,7 @@ use std::sync::Arc;
 use synth_control::{
     all_params, make_control_channel, Command, ControlEvent, ParamId, ParamKind,
 };
-use synth_engine::{AudioState, SynthEngineHandle};
+use synth_engine::{AudioState, Patch, SynthEngineHandle};
 
 fn make_handle() -> (SynthEngineHandle, synth_control::ControlReceiver) {
     let state = Arc::new(AudioState::new());
@@ -217,4 +217,122 @@ fn command_serde_roundtrip() {
         let back: Command = serde_json::from_str(&json).expect("deserialise");
         assert_eq!(cmd, back, "serde roundtrip mismatch for {:?}", cmd);
     }
+}
+
+#[test]
+fn apply_patch_writes_engine_state() {
+    // Apply a custom patch through the handle and verify the live values land.
+    let (h, _rx) = make_handle();
+    let mut p = h.snapshot_patch(); // start from current defaults
+
+    p.name                = "Test".into();
+    p.category            = "Unit".into();
+    p.osc_wave            = [2, 3, 0];
+    p.osc_octave          = [1, -1, 0];
+    p.osc_detune          = [0.0, 0.0, 0.0];
+    p.osc_vol             = [0.55, 0.25, 0.1];
+    p.osc_enabled         = [true, true, false]; // osc 3 muted → vol 0
+    p.filter_enabled      = true;
+    p.filter_cutoff       = 1234.0;
+    p.filter_q            = 0.65;
+    p.filter_env_amount   = 0.5;
+    p.fenv_adsr           = [0.01, 0.2, 0.4, 0.3];
+    p.amp_adsr            = [0.05, 0.25, 0.7, 0.4];
+    p.lfo_enabled         = true;
+    p.lfo_rate            = 3.0;
+    p.lfo_depth           = 0.5;
+    p.lfo_shape           = 1;
+    p.lfo_dest            = 2;
+    p.glide_time          = 0.12;
+    p.master_vol          = 0.7;
+    p.global_vol          = 0.85;
+    p.limiter_enabled     = false;
+    p.limiter_threshold   = 0.6;
+    p.fx_delay_on         = true;
+    p.fx_delay_time       = 0.28;
+    p.fx_delay_feedback   = 0.55;
+    p.fx_delay_mix        = 0.35;
+    p.fx_reverb_on        = true;
+    p.fx_reverb_mix       = 0.4;
+    p.fx_shimmer_on       = true;
+    p.fx_shimmer_mix      = 0.3;
+    p.fx_shimmer_amt      = 0.6;
+
+    h.apply_patch(&p);
+
+    // Oscillator bank — osc 3 was disabled, engine vol should be 0.
+    assert_eq!(h.osc_wave(0), 2);
+    assert_eq!(h.osc_wave(1), 3);
+    assert_eq!(h.osc_wave(2), 0);
+    assert!((h.osc_vol(0) - 0.55).abs() < 1e-4);
+    assert!((h.osc_vol(1) - 0.25).abs() < 1e-4);
+    assert_eq!(h.osc_vol(2), 0.0, "disabled osc should have engine vol 0");
+
+    // Filter + env
+    assert!((h.filter_cutoff() - 1234.0).abs() < 1e-3);
+    assert!((h.filter_resonance() - 0.65).abs() < 1e-4);
+    assert!((h.filter_env_amount() - 0.5).abs() < 1e-4);
+    assert!((h.fenv_attack()  - 0.01).abs() < 1e-5);
+    assert!((h.amp_sustain()  - 0.7).abs()  < 1e-4);
+
+    // LFO
+    assert!((h.lfo_rate()  - 3.0).abs() < 1e-4);
+    assert!((h.lfo_depth() - 0.5).abs() < 1e-4);
+    assert_eq!(h.lfo_shape(), 1);
+    assert_eq!(h.lfo_dest(),  2);
+
+    // Master / limiter
+    assert!((h.master_volume() - 0.7).abs() < 1e-4);
+    assert!((h.global_volume() - 0.85).abs() < 1e-4);
+    assert!(!h.limiter_enabled());
+    assert!((h.limiter_threshold() - 0.6).abs() < 1e-4);
+
+    // FX — shimmer has an on flag; disabled should mute both amt and mix.
+    assert!((h.fx_delay_time() - 0.28).abs() < 1e-4);
+    assert!((h.fx_delay_mix()  - 0.35).abs() < 1e-4);
+    assert!((h.fx_reverb_mix() - 0.4).abs()  < 1e-4);
+    assert!((h.shimmer_mix()   - 0.3).abs()  < 1e-4);
+    assert!((h.shimmer_amount()- 0.6).abs()  < 1e-4);
+}
+
+#[test]
+fn snapshot_then_apply_is_a_fixed_point() {
+    // snapshot(engine) → apply(engine) should leave engine state unchanged.
+    let (h, _rx) = make_handle();
+
+    // Nudge a few engine params so we're not round-tripping defaults.
+    h.set_filter_cutoff(2200.0);
+    h.set_master_volume(0.55);
+    h.set_fx_delay_mix(0.3);
+    h.set_fx_delay_time(0.4);
+    h.set_shimmer_mix(0.25);
+
+    let snap = h.snapshot_patch();
+    h.apply_patch(&snap);
+
+    assert!((h.filter_cutoff() - 2200.0).abs() < 1e-3);
+    assert!((h.master_volume() - 0.55).abs()  < 1e-4);
+    assert!((h.fx_delay_mix()  - 0.3).abs()   < 1e-4);
+    assert!((h.fx_delay_time() - 0.4).abs()   < 1e-4);
+    assert!((h.shimmer_mix()   - 0.25).abs()  < 1e-4);
+}
+
+#[test]
+fn patch_serde_roundtrip() {
+    // Patch must survive JSON serialisation so existing assets/patches/*.json
+    // keep loading after the crate move.
+    let (h, _rx) = make_handle();
+    let mut p = h.snapshot_patch();
+    p.name = "Round".into();
+    p.category = "Trip".into();
+
+    let json = serde_json::to_string(&p).expect("serialise");
+    let back: Patch = serde_json::from_str(&json).expect("deserialise");
+
+    assert_eq!(back.name, "Round");
+    assert_eq!(back.category, "Trip");
+    assert_eq!(back.osc_wave, p.osc_wave);
+    assert!((back.filter_cutoff - p.filter_cutoff).abs() < 1e-5);
+    assert_eq!(back.lfo_shape, p.lfo_shape);
+    assert!((back.master_vol - p.master_vol).abs() < 1e-5);
 }

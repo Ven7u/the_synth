@@ -30,6 +30,7 @@ use std::sync::atomic::Ordering;
 use synth_control::{Command, ControlEvent, ControlSender, ParamId};
 
 use crate::audio::AudioState;
+use crate::patch::Patch;
 
 /// Clonable, `Send + Sync` facade over the audio engine. Hand one of these
 /// to the UI, the MIDI thread, the sequencer — each thread `.clone()`s its
@@ -654,6 +655,314 @@ impl SynthEngineHandle {
         };
         Some(v)
     }
+
+    // =======================================================================
+    // Patch I/O
+    // =======================================================================
+
+    /// Write every engine-relevant field from `p` into the live engine
+    /// state. Respects the UI-side bypass flags (`osc_enabled`, `fm_enabled`,
+    /// `filter_enabled`, `lfo_enabled`, `fx_*_on`, …) by zeroing the
+    /// corresponding engine parameter instead of exposing a separate enable
+    /// bit — the engine has no such bit.
+    ///
+    /// Does NOT silence voices. Callers should invoke `all_notes_off` first
+    /// if they want to avoid filter blow-up on sudden parameter jumps.
+    pub fn apply_patch(&self, p: &Patch) {
+        // -- Oscillator bank --
+        for i in 0..3 {
+            self.set_osc_wave(i as u8, p.osc_wave[i] as u8);
+            self.set_osc_vol(i as u8, if p.osc_enabled[i] { p.osc_vol[i] } else { 0.0 });
+            self.set_osc_pulse_width(i as u8, p.osc_pulse_width[i]);
+            // Freq mult combines octave + detune.
+            let mult = 2_f32.powf(p.osc_octave[i] as f32 + p.osc_detune[i] / 1200.0);
+            self.set_osc_freq_mult(i as u8, mult);
+            apply_unison_from_patch(self, i, p);
+        }
+        self.set_hard_sync_enabled(p.hard_sync);
+        self.set_fm_depth(if p.fm_enabled { p.fm_depth } else { 0.0 });
+        self.set_ring_depth(if p.ring_enabled { p.ring_depth } else { 0.0 });
+        self.set_noise_vol(p.noise_vol);
+
+        // -- Filter --
+        self.set_filter_cutoff(if p.filter_enabled { p.filter_cutoff } else { 18_000.0 });
+        self.set_filter_resonance(if p.filter_enabled { p.filter_q } else { 0.0 });
+        self.set_filter_env_amount(p.filter_env_amount);
+        self.set_fenv_attack(p.fenv_adsr[0]);
+        self.set_fenv_decay(p.fenv_adsr[1]);
+        self.set_fenv_sustain(p.fenv_adsr[2]);
+        self.set_fenv_release(p.fenv_adsr[3]);
+
+        // -- LFO 1 --
+        self.set_lfo_rate(p.lfo_rate);
+        self.set_lfo_depth(if p.lfo_enabled { p.lfo_depth } else { 0.0 });
+        self.set_lfo_shape(p.lfo_shape as u8);
+        self.set_lfo_dest(p.lfo_dest as u8);
+        self.set_lfo_sync(if p.lfo_sync { 1 } else { 0 });
+        self.set_lfo_division(p.lfo_division as u8);
+
+        // -- LFO 2 --
+        self.set_lfo2_rate(p.lfo2_rate);
+        self.set_lfo2_depth(if p.lfo2_enabled { p.lfo2_depth } else { 0.0 });
+        self.set_lfo2_shape(p.lfo2_shape as u8);
+        self.set_lfo2_dest(p.lfo2_dest as u8);
+
+        // -- Amp envelope + glide + master --
+        self.set_amp_attack(p.amp_adsr[0]);
+        self.set_amp_decay(p.amp_adsr[1]);
+        self.set_amp_sustain(p.amp_adsr[2]);
+        self.set_amp_release(p.amp_adsr[3]);
+        self.set_glide_time(p.glide_time);
+        self.set_master_volume(p.master_vol);
+        self.set_global_volume(p.global_vol);
+        self.set_limiter_enabled(p.limiter_enabled);
+        self.set_limiter_threshold(p.limiter_threshold);
+
+        // -- FX: Overdrive / Distortion / Chorus / Delay / Reverb / Stereo --
+        self.set_fx_overdrive_drive(p.fx_overdrive_drive);
+        self.set_fx_overdrive_mix(if p.fx_overdrive_on { p.fx_overdrive_mix } else { 0.0 });
+        self.set_fx_overdrive_tone(p.fx_overdrive_tone);
+        self.set_fx_overdrive_asym(p.fx_overdrive_asym);
+
+        self.set_fx_distortion_drive(p.fx_distortion_drive);
+        self.set_fx_distortion_mix(if p.fx_distortion_on { p.fx_distortion_mix } else { 0.0 });
+        self.set_fx_distortion_tone(p.fx_distortion_tone);
+        self.set_fx_distortion_pre(p.fx_distortion_pre);
+
+        self.set_fx_chorus_rate(p.fx_chorus_rate);
+        self.set_fx_chorus_depth(p.fx_chorus_depth);
+        self.set_fx_chorus_mix(if p.fx_chorus_on { p.fx_chorus_mix } else { 0.0 });
+
+        self.set_fx_delay_time(p.fx_delay_time);
+        self.set_fx_delay_feedback(p.fx_delay_feedback);
+        self.set_fx_delay_mix(if p.fx_delay_on { p.fx_delay_mix } else { 0.0 });
+        self.set_fx_delay_sync(if p.fx_delay_sync { 1 } else { 0 });
+        self.set_fx_delay_division(p.fx_delay_division as u8);
+
+        self.set_fx_reverb_size(p.fx_reverb_size);
+        self.set_fx_reverb_damp(p.fx_reverb_damp);
+        self.set_fx_reverb_mix(if p.fx_reverb_on { p.fx_reverb_mix } else { 0.0 });
+        self.set_fx_reverb_predelay(p.fx_reverb_predelay);
+        self.set_fx_reverb_type(p.fx_reverb_type);
+
+        self.set_stereo_spread(p.stereo_spread);
+        self.set_stereo_width(p.stereo_width);
+
+        // -- Shimmer --
+        self.set_shimmer_size(p.fx_shimmer_size);
+        self.set_shimmer_damp(p.fx_shimmer_damp);
+        self.set_shimmer_amount(if p.fx_shimmer_on { p.fx_shimmer_amt } else { 0.0 });
+        self.set_shimmer_width(p.fx_shimmer_width);
+        self.set_shimmer_spread(p.fx_shimmer_spread);
+        self.set_shimmer_mix(if p.fx_shimmer_on { p.fx_shimmer_mix } else { 0.0 });
+        self.set_shimmer_pitch(p.fx_shimmer_pitch);
+
+        // -- Crystallizer --
+        self.set_crystal_grain(p.fx_crystal_grain_ms);
+        self.set_crystal_scatter(p.fx_crystal_scatter);
+        self.set_crystal_feedback(p.fx_crystal_feedback);
+        self.set_crystal_delay(p.fx_crystal_delay_ms);
+        self.set_crystal_mix(if p.fx_crystal_on { p.fx_crystal_mix } else { 0.0 });
+        self.set_crystal_pitch(p.fx_crystal_pitch);
+    }
+
+    /// Read engine state into a fresh `Patch`. Metadata fields (`name`,
+    /// `category`, `synth_model`) are left empty — callers supply them.
+    ///
+    /// UI-side bypass flags (`osc_enabled`, `fm_enabled`, …) are inferred
+    /// from the engine: a non-zero mix / depth / volume is "on". This is
+    /// lossy for the corner case "slider at 0 but enabled", but round-trips
+    /// correctly for every practical scenario.
+    pub fn snapshot_patch(&self) -> Patch {
+        let osc_wave = [
+            self.osc_wave(0) as usize,
+            self.osc_wave(1) as usize,
+            self.osc_wave(2) as usize,
+        ];
+        let (osc_octave, osc_detune) = {
+            let mut oct  = [0i32; 3];
+            let mut det  = [0f32; 3];
+            for i in 0..3 {
+                let (o, d) = freq_mult_to_oct_detune(self.osc_freq_mult(i as u8));
+                oct[i] = o;
+                det[i] = d;
+            }
+            (oct, det)
+        };
+        let osc_vol = [self.osc_vol(0), self.osc_vol(1), self.osc_vol(2)];
+        let osc_pulse_width = [self.osc_pulse_width(0), self.osc_pulse_width(1), self.osc_pulse_width(2)];
+        let osc_enabled = [osc_vol[0] > 0.0, osc_vol[1] > 0.0, osc_vol[2] > 0.0];
+        let osc_pw_enabled = [true, true, true];
+        let (osc_unison_enabled, osc_unison_count, osc_unison_spread) = snapshot_unison(self);
+
+        Patch {
+            name: String::new(),
+            category: String::new(),
+            synth_model: String::new(),
+
+            osc_wave,
+            osc_octave,
+            osc_detune,
+            osc_vol,
+            osc_enabled,
+            osc_pulse_width,
+            osc_pw_enabled,
+            osc_unison_enabled,
+            osc_unison_count,
+            osc_unison_spread,
+            hard_sync: self.hard_sync_enabled(),
+            fm_enabled: self.fm_depth() > 0.0,
+            fm_depth: self.fm_depth(),
+            ring_enabled: self.ring_depth() > 0.0,
+            ring_depth: self.ring_depth(),
+            noise_vol: self.noise_vol(),
+
+            lfo_enabled: self.lfo_depth() > 0.0,
+            lfo_rate: self.lfo_rate(),
+            lfo_depth: self.lfo_depth(),
+            lfo_shape: self.lfo_shape() as usize,
+            lfo_dest: self.lfo_dest() as usize,
+            lfo_sync: self.lfo_sync() != 0,
+            lfo_division: self.lfo_division() as usize,
+
+            lfo2_enabled: self.lfo2_depth() > 0.0,
+            lfo2_rate: self.lfo2_rate(),
+            lfo2_depth: self.lfo2_depth(),
+            lfo2_shape: self.lfo2_shape() as usize,
+            lfo2_dest: self.lfo2_dest() as usize,
+
+            filter_enabled: self.filter_cutoff() < 17_999.0 || self.filter_resonance() > 0.0,
+            filter_cutoff: self.filter_cutoff(),
+            filter_q: self.filter_resonance(),
+            filter_env_amount: self.filter_env_amount(),
+            fenv_adsr: [self.fenv_attack(), self.fenv_decay(), self.fenv_sustain(), self.fenv_release()],
+
+            amp_adsr: [self.amp_attack(), self.amp_decay(), self.amp_sustain(), self.amp_release()],
+
+            glide_time: self.glide_time(),
+            master_vol: self.master_volume(),
+            global_vol: self.global_volume(),
+            limiter_enabled: self.limiter_enabled(),
+            limiter_threshold: self.limiter_threshold(),
+
+            fx_overdrive_on: self.fx_overdrive_mix() > 0.0,
+            fx_overdrive_drive: self.fx_overdrive_drive(),
+            fx_overdrive_mix: self.fx_overdrive_mix(),
+            fx_overdrive_tone: self.fx_overdrive_tone(),
+            fx_overdrive_asym: self.fx_overdrive_asym(),
+            fx_distortion_on: self.fx_distortion_mix() > 0.0,
+            fx_distortion_drive: self.fx_distortion_drive(),
+            fx_distortion_mix: self.fx_distortion_mix(),
+            fx_distortion_tone: self.fx_distortion_tone(),
+            fx_distortion_pre: self.fx_distortion_pre(),
+            fx_chorus_on: self.fx_chorus_mix() > 0.0,
+            fx_chorus_rate: self.fx_chorus_rate(),
+            fx_chorus_depth: self.fx_chorus_depth(),
+            fx_chorus_mix: self.fx_chorus_mix(),
+            fx_delay_on: self.fx_delay_mix() > 0.0,
+            fx_delay_time: self.fx_delay_time(),
+            fx_delay_feedback: self.fx_delay_feedback(),
+            fx_delay_mix: self.fx_delay_mix(),
+            fx_delay_sync: self.fx_delay_sync() != 0,
+            fx_delay_division: self.fx_delay_division() as usize,
+            fx_reverb_on: self.fx_reverb_mix() > 0.0,
+            fx_reverb_size: self.fx_reverb_size(),
+            fx_reverb_damp: self.fx_reverb_damp(),
+            fx_reverb_mix: self.fx_reverb_mix(),
+            fx_reverb_predelay: self.fx_reverb_predelay(),
+            fx_reverb_type: self.fx_reverb_type(),
+            stereo_spread: self.stereo_spread(),
+            stereo_width: self.stereo_width(),
+
+            fx_shimmer_on: self.shimmer_mix() > 0.0,
+            fx_shimmer_size: self.shimmer_size(),
+            fx_shimmer_damp: self.shimmer_damp(),
+            fx_shimmer_mix: self.shimmer_mix(),
+            fx_shimmer_amt: self.shimmer_amount(),
+            fx_shimmer_width: self.shimmer_width(),
+            fx_shimmer_spread: self.shimmer_spread(),
+            fx_shimmer_pitch: self.shimmer_pitch(),
+            fx_crystal_on: self.crystal_mix() > 0.0,
+            fx_crystal_mix: self.crystal_mix(),
+            fx_crystal_grain_ms: self.crystal_grain(),
+            fx_crystal_scatter: self.crystal_scatter(),
+            fx_crystal_feedback: self.crystal_feedback(),
+            fx_crystal_delay_ms: self.crystal_delay(),
+            fx_crystal_pitch: self.crystal_pitch(),
+        }
+    }
 }
 
 #[inline] fn bf(b: bool) -> f32 { if b { 1.0 } else { 0.0 } }
+
+/// Apply per-oscillator unison detune + volume from a patch, mirroring the
+/// UI's `update_unison` logic so that patches behave identically whether
+/// they came in through the UI or through `apply_patch`.
+fn apply_unison_from_patch(h: &SynthEngineHandle, i: usize, p: &Patch) {
+    let osc = i as u8;
+    let count = p.osc_unison_count[i];
+    let spread = p.osc_unison_spread[i];
+
+    if !p.osc_unison_enabled[i] || count <= 1 {
+        for c in 0..5 {
+            h.set_osc_unison_detune(osc, c as u8, 1.0);
+            h.set_osc_unison_vol(osc, c as u8, if c == 0 { 1.0 } else { 0.0 });
+        }
+        return;
+    }
+
+    let vol = 1.0 / count as f32;
+    for c in 0..5 {
+        if c < count {
+            let t = if count > 1 { c as f32 / (count - 1) as f32 } else { 0.5 };
+            let cents = -spread * 0.5 + t * spread;
+            let detune = 2_f32.powf(cents / 1200.0);
+            h.set_osc_unison_detune(osc, c as u8, detune);
+            h.set_osc_unison_vol(osc, c as u8, vol);
+        } else {
+            h.set_osc_unison_detune(osc, c as u8, 1.0);
+            h.set_osc_unison_vol(osc, c as u8, 0.0);
+        }
+    }
+}
+
+/// Inverse of the UI's freq-mult computation: `mult = 2^(oct + cents/1200)`.
+/// Returns `(octave, detune_cents)`. Snap cents near zero so clean octaves
+/// round-trip without spurious detune drift.
+fn freq_mult_to_oct_detune(mult: f32) -> (i32, f32) {
+    if mult <= 0.0 { return (0, 0.0); }
+    let log2 = mult.log2();
+    let oct = log2.round() as i32;
+    let residual = log2 - oct as f32;
+    let cents = residual * 1200.0;
+    let cents = if cents.abs() < 0.01 { 0.0 } else { cents };
+    (oct, cents)
+}
+
+/// Infer per-oscillator unison config from the live detune / volume tables.
+/// Heuristic: count the number of audible copies (vol > 0), and derive spread
+/// from the cents delta of the outermost pair.
+fn snapshot_unison(h: &SynthEngineHandle) -> ([bool; 3], [usize; 3], [f32; 3]) {
+    let mut enabled = [false; 3];
+    let mut count   = [1usize; 3];
+    let mut spread  = [0f32; 3];
+    for osc in 0..3u8 {
+        let vols: [f32; 5] = [
+            h.osc_unison_vol(osc, 0),
+            h.osc_unison_vol(osc, 1),
+            h.osc_unison_vol(osc, 2),
+            h.osc_unison_vol(osc, 3),
+            h.osc_unison_vol(osc, 4),
+        ];
+        let active = vols.iter().filter(|v| **v > 0.0).count();
+        count[osc as usize] = active.max(1);
+        enabled[osc as usize] = active > 1;
+        if active > 1 {
+            let first = h.osc_unison_detune(osc, 0);
+            let last  = h.osc_unison_detune(osc, (active - 1) as u8);
+            let cents = (last / first).log2() * 1200.0;
+            spread[osc as usize] = cents.abs();
+        }
+    }
+    (enabled, count, spread)
+}
