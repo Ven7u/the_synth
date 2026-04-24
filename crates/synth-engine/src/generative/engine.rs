@@ -1,7 +1,7 @@
-//! ambient-engine — multi-track engine plus macro/scene layer.
+//! `AmbientEngine` — multi-track engine plus macro/scene layer.
 //!
-//! `synth_engine::MultiTrackEngine` remains the DSP core.
-//! This crate adds orchestration features used by ambient hosts:
+//! The `MultiTrackEngine` from the parent `synth-engine` crate remains the
+//! DSP core. This module adds orchestration features used by ambient hosts:
 //! - Macro runtime (many params moved by few controls)
 //! - Scene capture/load (JSON-serializable)
 
@@ -11,11 +11,11 @@ use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
 
-use crate::generators::{EuclideanShared, GenerativeMode, ProbTableShared};
-use crate::markov::MarkovEngineShared;
-use crate::patch::AmbientPatch;
+use super::generators::{EuclideanShared, GenerativeMode, ProbTableShared};
+use super::markov::MarkovEngineShared;
+use super::patch::AmbientPatch;
 
-pub use synth_engine::{MultiTrackEngine, TrackState, TRACK_COUNT, VOICE_COUNT};
+pub use crate::{MultiTrackEngine, TrackState, TRACK_COUNT, VOICE_COUNT};
 
 pub const MACRO_COUNT: usize = 8;
 pub const ACTIVE_MACRO_KNOBS: usize = 6;
@@ -125,7 +125,7 @@ pub struct MarkovScene {
     /// Timeline: ordered sections that modulate mood, density, tonality, etc. over time.
     /// When present, replaces `harmonic_seq` for temporal modulation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeline: Option<Vec<crate::markov::TimelineSection>>,
+    pub timeline: Option<Vec<super::markov::TimelineSection>>,
 
     /// Whether the timeline loops back to section 0 after the last section.
     #[serde(default)]
@@ -659,7 +659,7 @@ impl AmbientEngine {
             scale: ms.scale.load(Ordering::Relaxed),
             density: ms.density.value(),
             bars_per_phrase: ms.bars_per_phrase.load(Ordering::Relaxed),
-            mood: (0..crate::markov::N_MOODS)
+            mood: (0..super::markov::N_MOODS)
                 .map(|i| ms.mood.weight(i))
                 .collect(),
             voice_roles: (0..TRACK_COUNT)
@@ -828,8 +828,8 @@ impl AmbientEngine {
             ms.density.set(ms_data.density);
             ms.bars_per_phrase
                 .store(ms_data.bars_per_phrase, Ordering::Relaxed);
-            if ms_data.mood.len() == crate::markov::N_MOODS {
-                let arr: [f32; crate::markov::N_MOODS] = std::array::from_fn(|i| ms_data.mood[i]);
+            if ms_data.mood.len() == super::markov::N_MOODS {
+                let arr: [f32; super::markov::N_MOODS] = std::array::from_fn(|i| ms_data.mood[i]);
                 ms.mood.set(&arr);
             }
             for i in 0..TRACK_COUNT {
@@ -856,7 +856,7 @@ impl AmbientEngine {
             let seq = &ms_data.harmonic_seq;
             let seq_len = seq
                 .len()
-                .clamp(1, crate::markov::MarkovEngineShared::SEQ_MAX);
+                .clamp(1, super::markov::MarkovEngineShared::SEQ_MAX);
             ms.seq_len.store(seq_len as u8, Ordering::Relaxed);
             for (i, slot) in seq.iter().take(seq_len).enumerate() {
                 ms.seq_roots[i].store(slot.root, Ordering::Relaxed);

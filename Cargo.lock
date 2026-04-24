@@ -297,7 +297,6 @@ dependencies = [
 name = "ambient-box"
 version = "0.1.0"
 dependencies = [
- "ambient-engine",
  "anyhow",
  "cpal",
  "eframe",
@@ -311,19 +310,6 @@ dependencies = [
  "synth-control",
  "synth-engine",
  "synth-ui",
-]
-
-[[package]]
-name = "ambient-engine"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "fundsp",
- "serde",
- "serde_json",
- "synth-common",
- "synth-control",
- "synth-engine",
 ]
 
 [[package]]
@@ -7182,7 +7168,6 @@ dependencies = [
 name = "synth-bevy"
 version = "0.1.0"
 dependencies = [
- "ambient-engine",
  "anyhow",
  "bevy",
  "bevy_egui",
@@ -7221,6 +7206,7 @@ dependencies = [
 name = "synth-engine"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "fundsp",
  "serde",
  "serde_json",

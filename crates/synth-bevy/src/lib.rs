@@ -1,4 +1,4 @@
-//! `synth-bevy` — Bevy integration shell for `ambient-engine`.
+//! `synth-bevy` — Bevy integration shell for `synth-engine::generative`.
 //!
 //! Enable the `bevy` feature to get the plugin implementation:
 //! `synth-bevy = { path = "../synth-bevy", features = ["bevy"] }`

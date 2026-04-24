@@ -9,7 +9,6 @@ bevy = ["dep:bevy"]
 inspector = ["bevy", "dep:bevy_egui"]
 
 [dependencies]
-ambient-engine = { path = "../ambient-engine" }
 synth-engine   = { path = "../synth-engine" }
 synth-control  = { path = "../synth-control" }
 fundsp = { version = "0.23", features = ["files", "fft"] }

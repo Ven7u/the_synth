@@ -1,4 +1,4 @@
-use ambient_engine::load_scene_json;
+use synth_engine::generative::load_scene_json;
 fn main() {
     let path = std::env::args().nth(1).unwrap_or_default();
     match load_scene_json(&path) {

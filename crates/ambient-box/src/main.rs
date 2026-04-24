@@ -1,6 +1,6 @@
 //! ambient-box — multi-track ambient/electronic music maker.
 //!
-//! Thin shell over `ambient-engine`. Opens a cpal stream and a minimal egui window.
+//! Thin shell over `synth-engine::generative`. Opens a cpal stream and a minimal egui window.
 //! Track selector routes keyboard/MIDI input to the active track.
 
 #![allow(clippy::precedence)]
@@ -14,7 +14,7 @@ use eframe::egui;
 use fundsp::prelude::midi_hz;
 use std::sync::Arc;
 
-use ambient_engine::{
+use synth_engine::generative::{
     load_scene_json, save_scene_json, AmbientEngine, AmbientPatch, BeatClock, BeatClockShared,
     EuclideanGen, GenerativeMode, HarmonicFunction, MacroSetKind, MarkovEngine, ProbTableGen,
     RhythmicState, Scale as MarkovScale, Scene, VoiceRole, ACTIVE_MACRO_KNOBS, HARMONIC_STATES,
@@ -643,7 +643,7 @@ struct AmbientBoxApp {
     // Matrix heatmap tab: 0=Harmonic, 1=Rhythmic, 2=Melodic
     markov_heatmap_tab: usize,
     // Cached clone of markov_shared for heatmap rendering (updated each frame when lock is held)
-    markov_shared_cache: Option<ambient_engine::MarkovEngineShared>,
+    markov_shared_cache: Option<synth_engine::generative::MarkovEngineShared>,
     // Harmonic sequence — up to SEQ_MAX slots
     markov_seq_len_ui: usize,
     markov_seq_roots_ui: [u8; 8],
@@ -651,11 +651,11 @@ struct AmbientBoxApp {
     markov_seq_phrases_ui: [u8; 8],
 
     // Timeline (Phase 8.7)
-    timeline: ambient_engine::Timeline,
+    timeline: synth_engine::generative::Timeline,
     /// Last observed phrase_epoch from the audio thread.
     timeline_last_epoch: usize,
     /// Cached timeline status for UI display (updated each frame).
-    timeline_status: Option<ambient_engine::TimelineStatus>,
+    timeline_status: Option<synth_engine::generative::TimelineStatus>,
 
     // Global shimmer UI state
     shimmer_on: bool,
@@ -895,7 +895,7 @@ impl AmbientBoxApp {
             markov_seq_roots_ui: [60u8; 8],
             markov_seq_scales_ui: [0u8; 8],
             markov_seq_phrases_ui: [4u8; 8],
-            timeline: ambient_engine::Timeline::inactive(),
+            timeline: synth_engine::generative::Timeline::inactive(),
             timeline_last_epoch: 0,
             timeline_status: None,
             shimmer_on: false,
@@ -2633,14 +2633,14 @@ impl eframe::App for AmbientBoxApp {
                         if let Some(ref sections) = ms.timeline {
                             if !sections.is_empty() {
                                 // Build base state from scene's markov config + scene globals for effects.
-                                let mut base = ambient_engine::ResolvedState::snapshot_from_shared(&eng.markov_shared);
+                                let mut base = synth_engine::generative::ResolvedState::snapshot_from_shared(&eng.markov_shared);
                                 base.shimmer_mix = scene.global.shimmer_mix;
                                 base.shimmer_amount = scene.global.shimmer_amount;
                                 base.shimmer_size = scene.global.shimmer_size;
                                 base.crystal_mix = scene.global.crystal_mix;
                                 base.crystal_feedback = scene.global.crystal_feedback;
                                 base.crystal_delay_ms = scene.global.crystal_delay_ms;
-                                self.timeline = ambient_engine::Timeline::new(
+                                self.timeline = synth_engine::generative::Timeline::new(
                                     sections.clone(),
                                     ms.timeline_loop,
                                     base,
@@ -2648,10 +2648,10 @@ impl eframe::App for AmbientBoxApp {
                                 // Reset epoch tracking so we don't process stale phrase events.
                                 self.timeline_last_epoch = eng.markov_shared.phrase_epoch.load(Ordering::Relaxed);
                             } else {
-                                self.timeline = ambient_engine::Timeline::inactive();
+                                self.timeline = synth_engine::generative::Timeline::inactive();
                             }
                         } else {
-                            self.timeline = ambient_engine::Timeline::inactive();
+                            self.timeline = synth_engine::generative::Timeline::inactive();
                         }
                     }
                     eng.apply_scene(&scene);

@@ -1,4 +1,4 @@
-use ambient_engine::{
+use synth_engine::generative::{
     load_scene_json, AmbientEngine, BeatClock, BeatClockShared, EuclideanGen, GenerativeMode,
     MarkovEngine, ProbTableGen, Scene, SceneGlobal, MACRO_COUNT, TRACK_COUNT,
 };
@@ -1461,7 +1461,8 @@ where
 
 #[cfg(feature = "inspector")]
 mod inspector {
-    use super::{SynthParam, SynthTempo, ACTIVE_MACRO_KNOBS, MACRO_COUNT, TRACK_COUNT};
+    use super::{SynthParam, SynthTempo, MACRO_COUNT, TRACK_COUNT};
+    use synth_engine::generative::ACTIVE_MACRO_KNOBS;
     use bevy::prelude::*;
     use bevy_egui::{egui, EguiContexts, EguiPlugin};
 
