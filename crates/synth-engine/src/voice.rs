@@ -99,6 +99,12 @@ impl VoiceAllocator {
         self.release_cleanup(state);
         self.drain_events(state, rx);
         self.tick_arp_walker(state, frames, sr);
+        // After all event processing for this buffer is final, publish the
+        // per-voice audibility flag for the DSP graph's `GatedVoice` wrappers
+        // to read. Voices whose flag is `false` will skip their entire
+        // sub-graph (oscillators + filter + envelopes) for every sample of
+        // this buffer — the main CPU win at idle.
+        self.update_audibility(state);
     }
 
     /// Call once per sample, inside the buffer loop, before running the DSP
@@ -195,6 +201,27 @@ impl VoiceAllocator {
             if let Some(pitch) = ev.note_on {
                 self.trigger_note(state, pitch);
             }
+        }
+    }
+
+    /// Recompute per-voice audibility and publish to `state.voice_audible`.
+    ///
+    /// A voice is audible (its DSP sub-graph must run) when any of:
+    /// * gate is currently held high (note still pressed), or
+    /// * amp envelope is not idle — cursor > 0.5 means the envelope is in
+    ///   attack/decay/sustain/release (any non-zero stage), or
+    /// * the per-slot retrigger countdown is still running (we deliberately
+    ///   forced gate=0 for a few samples; the voice *is* active).
+    ///
+    /// Voices that fail all three checks will have their sub-graph skipped
+    /// by `GatedVoice` for every sample of this buffer.
+    fn update_audibility(&self, state: &AudioState) {
+        use std::sync::atomic::Ordering;
+        for vi in 0..VOICE_COUNT {
+            let audible = state.voice_gates[vi].value() > 0.5
+                || state.amp_cursors[vi].value() > 0.5
+                || self.retrigger_countdown[vi] > 0;
+            state.voice_audible[vi].store(audible, Ordering::Relaxed);
         }
     }
 

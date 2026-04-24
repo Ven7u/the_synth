@@ -9,6 +9,9 @@ pub use audio::{build_synth_graph, AudioState, VOICE_COUNT};
 pub mod denormals;
 pub use denormals::enable_ftz_on_current_thread;
 
+pub mod gated_voice;
+pub use gated_voice::GatedVoice;
+
 pub mod handle;
 pub use handle::SynthEngineHandle;
 

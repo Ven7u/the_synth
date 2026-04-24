@@ -9,6 +9,7 @@ use fundsp::prelude32::*;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8};
 use std::sync::Arc;
 
+use crate::gated_voice::GatedVoice;
 use synth_common::ClockDivision;
 use synth_dsp::crystallizer::{Crystallizer, CrystallizerShared};
 use synth_dsp::envelope::LiveAdsr;
@@ -103,6 +104,12 @@ pub struct AudioState {
     // Polyphonic voice pool
     pub voice_freqs: Vec<Shared>,
     pub voice_gates: Vec<Shared>,
+    /// Per-voice audibility flag, written by `VoiceAllocator::begin_buffer`.
+    /// The DSP graph's `GatedVoice` wrapper skips the voice's sub-graph when
+    /// this is `false` — the main CPU win at idle and under light load.
+    /// Set to `true` whenever the voice's gate is held OR its amp envelope
+    /// is not yet idle OR a retrigger countdown is pending.
+    pub voice_audible: Vec<Arc<AtomicBool>>,
 
     // Internal: effective cutoff written by callback, read by graph
     pub effective_cutoff: Shared,
@@ -274,6 +281,7 @@ impl AudioState {
             ring_tap: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
             voice_freqs: (0..VOICE_COUNT).map(|_| shared(440.0)).collect(),
             voice_gates: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
+            voice_audible: (0..VOICE_COUNT).map(|_| Arc::new(AtomicBool::new(false))).collect(),
             effective_cutoff: shared(3000.0),
             osc_buffer: Arc::new(std::sync::Mutex::new(vec![0.0f32; 1024])),
             buffer_frames: Arc::new(AtomicU32::new(0)),
@@ -634,12 +642,18 @@ pub fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Sen
         filtered * env
     };
 
-    let v0 = make_voice(0);
-    let v1 = make_voice(1);
-    let v2 = make_voice(2);
-    let v3 = make_voice(3);
-    let v4 = make_voice(4);
-    let v5 = make_voice(5);
+    // Wrap each voice in a `GatedVoice` so silent voices short-circuit their
+    // sub-graph (3×5 oscillators + Moog filter + 2 ADSRs). The audibility
+    // flag is updated once per audio buffer by `VoiceAllocator`.
+    let gate = |vi: usize, voice| {
+        An(GatedVoice::new(voice, Arc::clone(&state.voice_audible[vi])))
+    };
+    let v0 = gate(0, make_voice(0).0);
+    let v1 = gate(1, make_voice(1).0);
+    let v2 = gate(2, make_voice(2).0);
+    let v3 = gate(3, make_voice(3).0);
+    let v4 = gate(4, make_voice(4).0);
+    let v5 = gate(5, make_voice(5).0);
 
     let voice_mix = v0 + v1 + v2 + v3 + v4 + v5;
 
