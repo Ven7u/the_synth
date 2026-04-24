@@ -1,4 +1,4 @@
-# `SynthEngineHandle` + Typed `Params` — Implementation Plan
+# `SynthEngineHandle` + Typed `Params` — Implementation Plan [DONE]
 
 > Status: design decisions locked (§5). Protocol layer folded in (§3, §11).
 > Ready to execute Stage 1 on request.

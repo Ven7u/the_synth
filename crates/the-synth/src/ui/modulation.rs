@@ -302,7 +302,8 @@ impl SynthApp {
 
         SynthFrame::section(&self.theme).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            // Header
+
+            // ── Header ───────────────────────────────────────────────────────
             ui.horizontal(|ui| {
                 let on = self.filter_enabled;
                 let col = if on {
@@ -327,18 +328,100 @@ impl SynthApp {
                         self.engine.set_filter_resonance(0.0);
                     }
                 }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        RichText::new("LP24")
+                            .size(10.0)
+                            .color(self.theme.c(&self.theme.text_secondary)),
+                    );
+                });
+            });
+
+            ui.add_space(sp_xs);
+
+            // ── Mode buttons ─────────────────────────────────────────────────
+            // Only LP is active; BP/HP/NOTCH are shown but disabled.
+            ui.horizontal(|ui| {
+                let accent = self.theme.c(&self.theme.accent);
+                let disabled = self.theme.c(&self.theme.text_disabled);
+                // LP — always selected
+                ui.add(egui::SelectableLabel::new(
+                    true,
+                    RichText::new("LP").size(10.0).strong().color(accent),
+                ));
+                for label in ["BP", "HP", "NOTCH"] {
+                    ui.add_enabled(
+                        false,
+                        egui::SelectableLabel::new(
+                            false,
+                            RichText::new(label).size(10.0).color(disabled),
+                        ),
+                    );
+                }
             });
 
             ui.add_space(sp_xs);
 
             ui.add_enabled_ui(self.filter_enabled, |ui| {
-                // Knobs: Cut · Res · Env
+                // ── Response curve ────────────────────────────────────────────
+                let curve_h = ui.available_width().min(100.0);
+                let curve_size = egui::Vec2::new(ui.available_width(), curve_h);
+                let (rect, response) =
+                    ui.allocate_exact_size(curve_size, egui::Sense::click_and_drag());
+
+                // Absolute-position interaction: clicking anywhere in the rect
+                // jumps the node there. Shift slows delta movement for fine tuning.
+                if response.dragged() {
+                    let fine = ui.input(|i| i.modifiers.shift);
+                    if fine {
+                        let delta = response.drag_delta();
+                        let log_min = 80.0_f32.ln();
+                        let log_max = 18000.0_f32.ln();
+                        self.filter_cutoff = ((self.filter_cutoff.ln()
+                            + delta.x / rect.width() * (log_max - log_min) * 0.15)
+                            .clamp(log_min, log_max))
+                        .exp();
+                        self.filter_q =
+                            (self.filter_q - delta.y / rect.height() * 0.95 * 0.15)
+                                .clamp(0.0, 0.95);
+                    } else if let Some(pos) = response.interact_pointer_pos() {
+                        let x = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+                        let y = ((pos.y - rect.top()) / rect.height()).clamp(0.0, 1.0);
+                        let log_min = 80.0_f32.ln();
+                        let log_max = 18000.0_f32.ln();
+                        self.filter_cutoff = (log_min + x * (log_max - log_min)).exp();
+                        self.filter_q = (1.0 - y) * 0.95;
+                    }
+                    self.engine.set_filter_cutoff(self.filter_cutoff);
+                    self.engine.set_filter_resonance(self.filter_q);
+                }
+                if response.double_clicked() {
+                    self.filter_cutoff = 3000.0;
+                    self.filter_q = 0.0;
+                    self.engine.set_filter_cutoff(self.filter_cutoff);
+                    self.engine.set_filter_resonance(self.filter_q);
+                }
+
+                if ui.is_rect_visible(rect) {
+                    draw_lp_response_curve(
+                        ui.painter(),
+                        rect,
+                        self.filter_cutoff,
+                        self.filter_q,
+                        response.hovered() || response.dragged(),
+                        &self.theme,
+                    );
+                }
+
+                ui.add_space(sp_xs);
+
+                // ── Knobs ─────────────────────────────────────────────────────
                 ui.horizontal(|ui| {
                     if super::widgets::knob(
                         ui,
                         &mut self.filter_cutoff,
                         80.0..=18000.0,
-                        "CUT",
+                        "CUTOFF",
                         &self.theme,
                         true,
                     )
@@ -347,6 +430,7 @@ impl SynthApp {
                     {
                         self.engine.set_filter_cutoff(self.filter_cutoff);
                     }
+
                     if super::widgets::knob(
                         ui,
                         &mut self.filter_q,
@@ -360,108 +444,37 @@ impl SynthApp {
                     {
                         self.engine.set_filter_resonance(self.filter_q);
                     }
-                    let mut env_amt = self.engine.filter_env_amount();
-                    if super::widgets::knob(ui, &mut env_amt, 0.0..=1.0, "ENV", &self.theme, false)
-                        .on_hover_text(
-                            "Filter envelope amount — how much the filter env sweeps the cutoff.",
+
+                    // DRIVE — greyed out until Phase 2
+                    let mut drive_placeholder = 0.0_f32;
+                    ui.add_enabled_ui(false, |ui| {
+                        super::widgets::knob(
+                            ui,
+                            &mut drive_placeholder,
+                            1.0..=10.0,
+                            "DRIVE",
+                            &self.theme,
+                            false,
                         )
-                        .changed()
-                    {
-                        self.engine.set_filter_env_amount(env_amt);
-                    }
+                        .on_hover_text("Input drive — saturates the filter (coming soon).");
+                    });
+
+                    // KEY — greyed out until Phase 3
+                    let mut key_placeholder = 0.0_f32;
+                    ui.add_enabled_ui(false, |ui| {
+                        super::widgets::knob(
+                            ui,
+                            &mut key_placeholder,
+                            0.0..=1.0,
+                            "KEY",
+                            &self.theme,
+                            false,
+                        )
+                        .on_hover_text(
+                            "Keyboard tracking — cutoff follows pitch (coming soon).",
+                        );
+                    });
                 });
-
-                ui.add_space(sp_xs);
-
-                // XY pad — constrained height, X: cutoff, Y: resonance
-                let pad_h = ui.available_width().min(110.0);
-                let pad_size = egui::Vec2::new(ui.available_width(), pad_h);
-                let (rect, response) =
-                    ui.allocate_exact_size(pad_size, egui::Sense::click_and_drag());
-
-                if response.dragged() {
-                    let delta = response.drag_delta();
-                    let dx = delta.x / rect.width();
-                    let dy = -delta.y / rect.height();
-                    let log_min = 80.0_f32.ln();
-                    let log_max = 18000.0_f32.ln();
-                    self.filter_cutoff = ((self.filter_cutoff.ln() + dx * (log_max - log_min))
-                        .clamp(log_min, log_max))
-                    .exp();
-                    self.filter_q = (self.filter_q + dy * 0.95).clamp(0.0, 0.95);
-                    self.engine.set_filter_cutoff(self.filter_cutoff);
-                    self.engine.set_filter_resonance(self.filter_q);
-                }
-                if response.double_clicked() {
-                    self.filter_cutoff = 18000.0;
-                    self.filter_q = 0.0;
-                    self.engine.set_filter_cutoff(self.filter_cutoff);
-                    self.engine.set_filter_resonance(self.filter_q);
-                }
-
-                if ui.is_rect_visible(rect) {
-                    let painter = ui.painter_at(rect);
-                    let accent = self.theme.c(&self.theme.accent);
-                    let bg = Color32::from_rgba_premultiplied(
-                        accent.r() / 5,
-                        accent.g() / 5,
-                        accent.b() / 5,
-                        120,
-                    );
-                    painter.rect_filled(rect, egui::Rounding::same(6.0), bg);
-                    painter.rect_stroke(
-                        rect,
-                        egui::Rounding::same(6.0),
-                        egui::Stroke::new(
-                            1.0,
-                            if response.hovered() || response.dragged() {
-                                accent
-                            } else {
-                                Color32::from_gray(60)
-                            },
-                        ),
-                    );
-
-                    let tx = (self.filter_cutoff.ln() - 80.0_f32.ln())
-                        / (18000.0_f32.ln() - 80.0_f32.ln());
-                    let ty = 1.0 - self.filter_q / 0.95;
-                    let px = rect.left() + tx * rect.width();
-                    let py = rect.top() + ty * rect.height();
-
-                    let line_col =
-                        Color32::from_rgba_premultiplied(accent.r(), accent.g(), accent.b(), 40);
-                    painter.line_segment(
-                        [egui::pos2(px, rect.top()), egui::pos2(px, rect.bottom())],
-                        egui::Stroke::new(1.0, line_col),
-                    );
-                    painter.line_segment(
-                        [egui::pos2(rect.left(), py), egui::pos2(rect.right(), py)],
-                        egui::Stroke::new(1.0, line_col),
-                    );
-                    painter.circle_filled(egui::pos2(px, py), 6.0, accent);
-                    painter.circle_stroke(
-                        egui::pos2(px, py),
-                        6.0,
-                        egui::Stroke::new(1.0, Color32::WHITE),
-                    );
-
-                    let font = egui::FontId::proportional(9.0);
-                    let label_col = Color32::from_gray(110);
-                    painter.text(
-                        egui::pos2(rect.left() + 4.0, rect.bottom() - 3.0),
-                        egui::Align2::LEFT_BOTTOM,
-                        "cut →",
-                        font.clone(),
-                        label_col,
-                    );
-                    painter.text(
-                        egui::pos2(rect.left() + 4.0, rect.top() + 3.0),
-                        egui::Align2::LEFT_TOP,
-                        "res ↑",
-                        font,
-                        label_col,
-                    );
-                }
             });
         });
     }
@@ -566,6 +579,162 @@ impl SynthApp {
             draw_adsr_visualizer(ui, &adsr, &cursors, &self.theme);
         });
     }
+}
+
+/// Draws the LP24 filter visualiser: grid, response curve (read-only), and a
+/// free-floating control node whose position encodes (cutoff, resonance).
+///
+/// The node lives in a 2D parameter space independent of the curve:
+///   X → log-mapped cutoff (80 Hz left … 18 kHz right)
+///   Y → linear resonance  (0.95 top … 0.0 bottom)
+/// The curve is a pure visual projection of those values using a biquad LP4
+/// transfer function; it is never the interaction surface.
+fn draw_lp_response_curve(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    cutoff: f32,
+    q_engine: f32, // 0.0 … 0.95 (engine range)
+    active: bool,
+    theme: &super::theme::SynthTheme,
+) {
+    const F_MIN: f32 = 80.0;
+    const F_MAX: f32 = 18_000.0;
+    // Range chosen so the full curve is always visible:
+    //  - at max Q (≈10), peak height is 20·log10(Q) ≈ 20 dB
+    //  - rolloff reaches −60 dB within the plotted frequency range
+    const DB_MIN: f32 = -60.0;
+    const DB_MAX: f32 = 36.0;
+
+    // Map engine resonance (0..0.95) to display Q (0.5..10) for the curve math.
+    let q_display = 0.5 + (q_engine / 0.95) * 9.5;
+
+    let accent = theme.c(&theme.accent);
+    let border_col = if active { accent } else { Color32::from_gray(55) };
+
+    // ── Coordinate helpers ────────────────────────────────────────────────
+    let log_range = (F_MAX / F_MIN).ln();
+    let freq_to_t = |f: f32| ((f / F_MIN).ln() / log_range).clamp(0.0, 1.0);
+    let sx = |t: f32| rect.left() + t * rect.width();
+    let sy = |db: f32| {
+        let t = ((db - DB_MIN) / (DB_MAX - DB_MIN)).clamp(0.0, 1.0);
+        rect.bottom() - t * rect.height()
+    };
+
+    // ── Background ────────────────────────────────────────────────────────
+    let bg = Color32::from_rgba_premultiplied(
+        accent.r() / 6,
+        accent.g() / 6,
+        accent.b() / 6,
+        140,
+    );
+    painter.rect_filled(rect, egui::Rounding::same(5.0), bg);
+
+    // ── Grid — log-spaced vertical frequency lines ────────────────────────
+    let grid_col = Color32::from_gray(42);
+    let label_col = Color32::from_gray(72);
+    let small = egui::FontId::proportional(8.0);
+    for (f, label) in [
+        (100.0_f32, "100"),
+        (200.0, "200"),
+        (500.0, "500"),
+        (1_000.0, "1k"),
+        (2_000.0, "2k"),
+        (5_000.0, "5k"),
+        (10_000.0, "10k"),
+    ] {
+        let x = sx(freq_to_t(f));
+        painter.line_segment(
+            [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+            egui::Stroke::new(1.0, grid_col),
+        );
+        painter.text(
+            egui::pos2(x, rect.bottom() - 2.0),
+            egui::Align2::CENTER_BOTTOM,
+            label,
+            small.clone(),
+            label_col,
+        );
+    }
+
+    // ── Grid — horizontal dB lines ────────────────────────────────────────
+    for db in [-48.0_f32, -24.0, -12.0, 0.0, 18.0] {
+        let y = sy(db);
+        let w = if db == 0.0 { 1.0 } else { 0.5 };
+        painter.line_segment(
+            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+            egui::Stroke::new(w, grid_col),
+        );
+    }
+
+    // ── Response curve — LP4 = two cascaded identical LP2 sections ────────
+    // |H_LP4(w)| = 1 / ((1 − w²)² + (w/Q)²)   where w = f / fc
+    const N: usize = 200;
+    let db_of = |f: f32| -> f32 {
+        let w = f / cutoff;
+        let denom = (1.0 - w * w).powi(2) + (w / q_display).powi(2);
+        (20.0 * (1.0 / denom).log10()).clamp(DB_MIN, DB_MAX)
+    };
+
+    let mut pts: Vec<egui::Pos2> = Vec::with_capacity(N + 1);
+    for i in 0..=N {
+        let t = i as f32 / N as f32;
+        let f = F_MIN * (F_MAX / F_MIN).powf(t);
+        pts.push(egui::pos2(sx(t), sy(db_of(f))));
+    }
+
+    // Filled area — one trapezoid per curve segment. Always convex, so
+    // egui's fan triangulation handles each strip correctly even when the
+    // overall curve shape (with resonance peak) is non-convex.
+    let fill_col = Color32::from_rgba_premultiplied(
+        accent.r() / 3,
+        accent.g() / 3,
+        accent.b() / 3,
+        110,
+    );
+    let baseline = rect.bottom();
+    for w in pts.windows(2) {
+        let quad = vec![
+            w[0],
+            w[1],
+            egui::pos2(w[1].x, baseline),
+            egui::pos2(w[0].x, baseline),
+        ];
+        painter.add(egui::Shape::convex_polygon(quad, fill_col, egui::Stroke::NONE));
+    }
+
+    // Curve line
+    let line_col = Color32::from_rgba_premultiplied(accent.r(), accent.g(), accent.b(), 210);
+    for w in pts.windows(2) {
+        painter.line_segment([w[0], w[1]], egui::Stroke::new(1.5, line_col));
+    }
+
+    // ── Control node — free in (cutoff × Q) space, not on the curve ───────
+    // X: log-mapped within F_MIN..F_MAX
+    // Y: linear in q_engine (0=bottom, 0.95=top)
+    let node_x = sx(freq_to_t(cutoff));
+    let node_y = rect.bottom() - (q_engine / 0.95) * rect.height();
+
+    // Subtle crosshair
+    let cross = Color32::from_rgba_premultiplied(accent.r(), accent.g(), accent.b(), 45);
+    painter.line_segment(
+        [egui::pos2(node_x, rect.top()), egui::pos2(node_x, rect.bottom())],
+        egui::Stroke::new(1.0, cross),
+    );
+    painter.line_segment(
+        [egui::pos2(rect.left(), node_y), egui::pos2(rect.right(), node_y)],
+        egui::Stroke::new(1.0, cross),
+    );
+
+    // Node dot
+    painter.circle_filled(egui::pos2(node_x, node_y), 5.0, accent);
+    painter.circle_stroke(
+        egui::pos2(node_x, node_y),
+        5.0,
+        egui::Stroke::new(1.5, Color32::WHITE),
+    );
+
+    // Border (drawn last so it's on top of the curve)
+    painter.rect_stroke(rect, egui::Rounding::same(5.0), egui::Stroke::new(1.0, border_col));
 }
 
 pub fn draw_adsr_visualizer(

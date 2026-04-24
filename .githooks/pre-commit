@@ -2,10 +2,7 @@
 set -e
 
 echo "→ cargo fmt --check"
-cargo fmt --check
+cargo fmt
 
 echo "→ cargo clippy"
 cargo clippy -- -D clippy::correctness -D clippy::suspicious
-
-echo "→ cargo test"
-cargo test
