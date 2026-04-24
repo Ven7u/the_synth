@@ -7,5 +7,12 @@ edition = "2021"
 name = "synth-bench"
 path = "src/main.rs"
 
+[[bin]]
+name = "synth-perf"
+path = "src/bin/synth-perf.rs"
+
 [dependencies]
-synth-dsp = { path = "../synth-dsp" }
+synth-dsp     = { path = "../synth-dsp" }
+synth-engine  = { path = "../synth-engine" }
+synth-control = { path = "../synth-control" }
+fundsp        = { version = "0.23", features = ["files", "fft"] }

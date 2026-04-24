@@ -139,6 +139,14 @@ where
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             let frames = data.len() / channels;
 
+            // First-callback setup: flush-to-zero / denormals-are-zero.
+            // Prevents reverb / crystallizer tails from triggering a 10–100×
+            // CPU cliff when values slip into subnormal range. Thread-local
+            // CPU state, safe to re-set each callback but only needs once.
+            if !buffer_size_captured {
+                synth_engine::enable_ftz_on_current_thread();
+            }
+
             // --- Per-buffer: release cleanup + event drain + arp/walker tick ---
             voices.begin_buffer(&state, &rx, frames, sr);
 

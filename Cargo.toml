@@ -6,3 +6,11 @@ members = [
 
 [profile.dev]
 opt-level = 2
+
+# Release profile tuned for DSP throughput.
+# `lto = "fat"` inlines across crate boundaries — critical because the synth
+# graph spans synth-dsp / synth-engine / fundsp. `codegen-units = 1` trades
+# compile time for the best code layout and inlining decisions.
+[profile.release]
+lto           = "fat"
+codegen-units = 1

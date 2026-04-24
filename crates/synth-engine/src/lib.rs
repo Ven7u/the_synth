@@ -6,6 +6,9 @@ pub use arp::{
 pub mod audio;
 pub use audio::{build_synth_graph, AudioState, VOICE_COUNT};
 
+pub mod denormals;
+pub use denormals::enable_ftz_on_current_thread;
+
 pub mod handle;
 pub use handle::SynthEngineHandle;
 
