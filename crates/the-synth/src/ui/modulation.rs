@@ -381,9 +381,8 @@ impl SynthApp {
                             + delta.x / rect.width() * (log_max - log_min) * 0.15)
                             .clamp(log_min, log_max))
                         .exp();
-                        self.filter_q =
-                            (self.filter_q - delta.y / rect.height() * 0.95 * 0.15)
-                                .clamp(0.0, 0.95);
+                        self.filter_q = (self.filter_q - delta.y / rect.height() * 0.95 * 0.15)
+                            .clamp(0.0, 0.95);
                     } else if let Some(pos) = response.interact_pointer_pos() {
                         let x = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
                         let y = ((pos.y - rect.top()) / rect.height()).clamp(0.0, 1.0);
@@ -470,9 +469,7 @@ impl SynthApp {
                             &self.theme,
                             false,
                         )
-                        .on_hover_text(
-                            "Keyboard tracking — cutoff follows pitch (coming soon).",
-                        );
+                        .on_hover_text("Keyboard tracking — cutoff follows pitch (coming soon).");
                     });
                 });
             });
@@ -609,7 +606,11 @@ fn draw_lp_response_curve(
     let q_display = 0.5 + (q_engine / 0.95) * 9.5;
 
     let accent = theme.c(&theme.accent);
-    let border_col = if active { accent } else { Color32::from_gray(55) };
+    let border_col = if active {
+        accent
+    } else {
+        Color32::from_gray(55)
+    };
 
     // ── Coordinate helpers ────────────────────────────────────────────────
     let log_range = (F_MAX / F_MIN).ln();
@@ -621,12 +622,7 @@ fn draw_lp_response_curve(
     };
 
     // ── Background ────────────────────────────────────────────────────────
-    let bg = Color32::from_rgba_premultiplied(
-        accent.r() / 6,
-        accent.g() / 6,
-        accent.b() / 6,
-        140,
-    );
+    let bg = Color32::from_rgba_premultiplied(accent.r() / 6, accent.g() / 6, accent.b() / 6, 140);
     painter.rect_filled(rect, egui::Rounding::same(5.0), bg);
 
     // ── Grid — log-spaced vertical frequency lines ────────────────────────
@@ -685,12 +681,8 @@ fn draw_lp_response_curve(
     // Filled area — one trapezoid per curve segment. Always convex, so
     // egui's fan triangulation handles each strip correctly even when the
     // overall curve shape (with resonance peak) is non-convex.
-    let fill_col = Color32::from_rgba_premultiplied(
-        accent.r() / 3,
-        accent.g() / 3,
-        accent.b() / 3,
-        110,
-    );
+    let fill_col =
+        Color32::from_rgba_premultiplied(accent.r() / 3, accent.g() / 3, accent.b() / 3, 110);
     let baseline = rect.bottom();
     for w in pts.windows(2) {
         let quad = vec![
@@ -699,7 +691,11 @@ fn draw_lp_response_curve(
             egui::pos2(w[1].x, baseline),
             egui::pos2(w[0].x, baseline),
         ];
-        painter.add(egui::Shape::convex_polygon(quad, fill_col, egui::Stroke::NONE));
+        painter.add(egui::Shape::convex_polygon(
+            quad,
+            fill_col,
+            egui::Stroke::NONE,
+        ));
     }
 
     // Curve line
@@ -717,11 +713,17 @@ fn draw_lp_response_curve(
     // Subtle crosshair
     let cross = Color32::from_rgba_premultiplied(accent.r(), accent.g(), accent.b(), 45);
     painter.line_segment(
-        [egui::pos2(node_x, rect.top()), egui::pos2(node_x, rect.bottom())],
+        [
+            egui::pos2(node_x, rect.top()),
+            egui::pos2(node_x, rect.bottom()),
+        ],
         egui::Stroke::new(1.0, cross),
     );
     painter.line_segment(
-        [egui::pos2(rect.left(), node_y), egui::pos2(rect.right(), node_y)],
+        [
+            egui::pos2(rect.left(), node_y),
+            egui::pos2(rect.right(), node_y),
+        ],
         egui::Stroke::new(1.0, cross),
     );
 
@@ -734,7 +736,11 @@ fn draw_lp_response_curve(
     );
 
     // Border (drawn last so it's on top of the curve)
-    painter.rect_stroke(rect, egui::Rounding::same(5.0), egui::Stroke::new(1.0, border_col));
+    painter.rect_stroke(
+        rect,
+        egui::Rounding::same(5.0),
+        egui::Stroke::new(1.0, border_col),
+    );
 }
 
 pub fn draw_adsr_visualizer(
