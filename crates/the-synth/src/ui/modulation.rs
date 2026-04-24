@@ -444,33 +444,39 @@ impl SynthApp {
                         self.engine.set_filter_resonance(self.filter_q);
                     }
 
-                    // DRIVE — greyed out until Phase 2
-                    let mut drive_placeholder = 0.0_f32;
-                    ui.add_enabled_ui(false, |ui| {
-                        super::widgets::knob(
-                            ui,
-                            &mut drive_placeholder,
-                            1.0..=10.0,
-                            "DRIVE",
-                            &self.theme,
-                            false,
-                        )
-                        .on_hover_text("Input drive — saturates the filter (coming soon).");
-                    });
+                    let mut drive = self.engine.filter_drive();
+                    if super::widgets::knob(
+                        ui,
+                        &mut drive,
+                        1.0..=10.0,
+                        "DRIVE",
+                        &self.theme,
+                        false,
+                    )
+                    .on_hover_text(
+                        "Input drive — saturates the signal before the filter. 1 = clean, 10 = heavy.",
+                    )
+                    .changed()
+                    {
+                        self.engine.set_filter_drive(drive);
+                    }
 
-                    // KEY — greyed out until Phase 3
-                    let mut key_placeholder = 0.0_f32;
-                    ui.add_enabled_ui(false, |ui| {
-                        super::widgets::knob(
-                            ui,
-                            &mut key_placeholder,
-                            0.0..=1.0,
-                            "KEY",
-                            &self.theme,
-                            false,
-                        )
-                        .on_hover_text("Keyboard tracking — cutoff follows pitch (coming soon).");
-                    });
+                    let mut key_track = self.engine.filter_key_track();
+                    if super::widgets::knob(
+                        ui,
+                        &mut key_track,
+                        0.0..=1.0,
+                        "KEY",
+                        &self.theme,
+                        false,
+                    )
+                    .on_hover_text(
+                        "Keyboard tracking — cutoff follows pitch. 0 = off, 1 = full (one octave up doubles the cutoff).",
+                    )
+                    .changed()
+                    {
+                        self.engine.set_filter_key_track(key_track);
+                    }
                 });
             });
         });

@@ -130,6 +130,10 @@ where
     // Voice allocation + event dispatch + arp/walker state. Audio-thread-owned.
     let mut voices = VoiceAllocator::new();
 
+    // Last frequency used for key tracking — persists across buffers so the
+    // filter doesn't snap back to C4 during note release or retrigger gaps.
+    let mut last_keyed_freq: f32 = 261.63;
+
     let stream = device.build_output_stream(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
@@ -174,6 +178,32 @@ where
             let lfo2_dest = state.lfo2_dest.load(std::sync::atomic::Ordering::Relaxed);
             let lfo2_dt = lfo2_rate / sr_f;
             let base_cutoff = state.cutoff.value().clamp(80.0, 18000.0);
+
+            // Key tracking: scale cutoff by the pitch of the highest sounding voice.
+            // Uses amp_cursors (non-zero from attack through release) so a fresh
+            // note's pitch is picked up even during the 4-sample retrigger gap.
+            // last_keyed_freq persists so release phase keeps the note's tracking.
+            let key_track = state.filter_key_track.value();
+            if key_track > 0.001 {
+                let mut top_freq: f32 = 0.0;
+                for vi in 0..VOICE_COUNT {
+                    if state.amp_cursors[vi].value() > 0.5 {
+                        let f = state.voice_freq_targets[vi].value();
+                        if f > top_freq {
+                            top_freq = f;
+                        }
+                    }
+                }
+                if top_freq > 0.0 {
+                    last_keyed_freq = top_freq;
+                }
+            }
+            let key_mult = if key_track > 0.001 {
+                (last_keyed_freq / 261.63_f32).powf(key_track)
+            } else {
+                1.0
+            };
+            let keyed_cutoff = base_cutoff * key_mult;
 
             // --- Glide: smooth voice_freq_targets → voice_freqs once per buffer ---
             let glide_time = state.glide_time.value();
@@ -262,7 +292,7 @@ where
                 state.lfo_pitch_mult.set(2_f32.powf(pitch_mod * 2.0 / 12.0));
                 state
                     .effective_cutoff
-                    .set((base_cutoff + filter_mod * base_cutoff * 0.5).clamp(80.0, 18000.0));
+                    .set((keyed_cutoff + filter_mod * keyed_cutoff * 0.5).clamp(80.0, 18000.0));
                 let lfo_amp = amp_mod;
 
                 // Drive the voice allocator's per-sample retrigger countdown.

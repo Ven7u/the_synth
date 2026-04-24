@@ -182,6 +182,20 @@ impl SynthEngineHandle {
         self.state.resonance.value()
     }
 
+    pub fn set_filter_drive(&self, v: f32) {
+        self.state.filter_drive.set(v.max(1.0));
+    }
+    pub fn filter_drive(&self) -> f32 {
+        self.state.filter_drive.value()
+    }
+
+    pub fn set_filter_key_track(&self, v: f32) {
+        self.state.filter_key_track.set(v.clamp(0.0, 1.0));
+    }
+    pub fn filter_key_track(&self) -> f32 {
+        self.state.filter_key_track.value()
+    }
+
     pub fn set_filter_env_amount(&self, v: f32) {
         self.state.filter_env_amount.set(v);
     }
@@ -1125,6 +1139,8 @@ impl SynthEngineHandle {
             18_000.0
         });
         self.set_filter_resonance(if p.filter_enabled { p.filter_q } else { 0.0 });
+        self.set_filter_drive(p.filter_drive);
+        self.set_filter_key_track(p.filter_key_track);
         self.set_filter_env_amount(p.filter_env_amount);
         self.set_fenv_attack(p.fenv_adsr[0]);
         self.set_fenv_decay(p.fenv_adsr[1]);
@@ -1296,6 +1312,8 @@ impl SynthEngineHandle {
             filter_enabled: self.filter_cutoff() < 17_999.0 || self.filter_resonance() > 0.0,
             filter_cutoff: self.filter_cutoff(),
             filter_q: self.filter_resonance(),
+            filter_drive: self.filter_drive(),
+            filter_key_track: self.filter_key_track(),
             filter_env_amount: self.filter_env_amount(),
             fenv_adsr: [
                 self.fenv_attack(),

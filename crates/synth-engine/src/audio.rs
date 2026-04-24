@@ -49,6 +49,8 @@ pub struct AudioState {
     // Filter
     pub cutoff: Shared,            // base cutoff Hz (80..18000)
     pub resonance: Shared,         // Q (0.5..20)
+    pub filter_drive: Shared,      // 1.0..10.0 — input saturation before moog
+    pub filter_key_track: Shared,  // 0.0..1.0 — cutoff follows voice pitch (0=off, 1=full)
     pub filter_env_amount: Shared, // 0.0..1.0
     // Filter ADSR
     pub fenv_attack: Shared,
@@ -233,6 +235,8 @@ impl AudioState {
             noise_vol: shared(0.0),
             cutoff: shared(3000.0),
             resonance: shared(0.3),
+            filter_drive: shared(1.0),
+            filter_key_track: shared(0.0),
             filter_env_amount: shared(0.3),
             fenv_attack: shared(0.01),
             fenv_decay: shared(0.3),
@@ -323,6 +327,32 @@ impl Default for AudioState {
 // ---------------------------------------------------------------------------
 // DSP graph builder
 // ---------------------------------------------------------------------------
+
+/// Asymmetric soft-clip node for warm filter drive.
+///
+/// Formula: `tanh(x * pregain + BIAS) - tanh(BIAS)`
+/// - `pregain = drive * 2.0` so saturation is clearly audible at moderate settings.
+/// - `BIAS` shifts the curve off-centre → even harmonics (2nd especially) → warmth.
+/// - Subtracting `tanh(BIAS)` re-centres output so DC doesn't build up in the filter.
+/// Output is bounded to roughly (−1, +1).
+#[derive(Clone)]
+struct DriveNode {
+    drive: Shared,
+}
+
+impl AudioNode for DriveNode {
+    const ID: u64 = 0x66696c74_72647276; // "filtrdvr"
+    type Inputs = U1;
+    type Outputs = U1;
+
+    #[inline]
+    fn tick(&mut self, input: &Frame<f32, U1>) -> Frame<f32, U1> {
+        const BIAS: f32 = 0.3;
+        let pregain = self.drive.value().max(1.0) * 2.0;
+        let out = (input[0] * pregain + BIAS).tanh() - BIAS.tanh();
+        Frame::from([out])
+    }
+}
 
 /// Build the unified 6-voice poly graph.
 /// Each voice: 3 OSCs + noise → lowpass(effective_cutoff) → amp ADSR
@@ -569,6 +599,11 @@ pub fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Sen
         let noise = noise() * var(&state.noise_vol);
         let osc = osc0 + osc1 + osc2 + ring + noise;
 
+        // Input saturation: soft-clip before the filter.
+        // drive=1 is transparent (tanh(x/1)*1 ≈ x for small x); higher values
+        // push the signal into the tanh knee for analog-style warmth.
+        let driven = osc >> An(DriveNode { drive: state.filter_drive.clone() });
+
         // Moog lowpass filter with per-voice filter ADSR (fully live-parametric).
         let fenv = var(vg)
             >> An(LiveAdsr::new(
@@ -584,7 +619,7 @@ pub fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Sen
         // env_amount=1.0 adds up to 12 kHz above base (≈2–3 octaves); at 0.3 it adds ~3.6 kHz.
         let dyn_cutoff =
             var(&state.effective_cutoff) + fenv * var(&state.filter_env_amount) * dc(12000.0_f32);
-        let filtered = (osc | dyn_cutoff | var(&state.resonance)) >> moog();
+        let filtered = (driven | dyn_cutoff | var(&state.resonance)) >> moog();
 
         // Amp ADSR envelope (fully live-parametric).
         let env = var(vg)

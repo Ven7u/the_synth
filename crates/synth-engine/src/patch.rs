@@ -77,6 +77,10 @@ pub struct Patch {
     pub filter_enabled: bool,
     pub filter_cutoff: f32,
     pub filter_q: f32,
+    #[serde(default = "default_filter_drive")]
+    pub filter_drive: f32,
+    #[serde(default)]
+    pub filter_key_track: f32,
     pub filter_env_amount: f32,
     pub fenv_adsr: [f32; 4],
 
@@ -184,6 +188,9 @@ pub struct Patch {
     pub fx_crystal_pitch: u8,
 }
 
+fn default_filter_drive() -> f32 {
+    1.0
+}
 fn default_stereo_width() -> f32 {
     1.0
 }
