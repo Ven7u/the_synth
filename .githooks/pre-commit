@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-echo "→ cargo fmt --check"
+echo "→ cargo fmt"
 cargo fmt
 
 echo "→ cargo clippy"
