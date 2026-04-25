@@ -14,6 +14,11 @@ use eframe::egui;
 use fundsp::prelude::midi_hz;
 use std::sync::Arc;
 
+use std::sync::atomic::Ordering;
+use synth_common::{ClockDivision, RestartBatch, SyncTransport};
+use synth_control::midi::{MidiEngine, MidiEvent};
+use synth_control::{make_control_channel, ControlEvent, ControlSender};
+use synth_engine::arp::{ArpMode, ArpState, ClockDiv, Scale, ScaleWalker};
 use synth_engine::generative::{
     load_scene_json, save_scene_json, AmbientEngine, AmbientPatch, BeatClock, BeatClockShared,
     EuclideanGen, GenerativeMode, HarmonicFunction, MacroSetKind, MarkovEngine, ProbTableGen,
@@ -21,11 +26,6 @@ use synth_engine::generative::{
     LAUNCHPAD_COLS, MACRO_COUNT, MELODIC_STATES, MOOD_CALM, MOOD_COSMIC, MOOD_DARK, MOOD_EUPHORIC,
     MOOD_GRAVITY, MOOD_TENSE, N_MOODS, RHYTHMIC_STATES, TRACK_COUNT, VOICE_COUNT,
 };
-use std::sync::atomic::Ordering;
-use synth_common::{ClockDivision, RestartBatch, SyncTransport};
-use synth_control::midi::{MidiEngine, MidiEvent};
-use synth_control::{make_control_channel, ControlEvent, ControlSender};
-use synth_engine::arp::{ArpMode, ArpState, ClockDiv, Scale, ScaleWalker};
 
 #[derive(Clone)]
 struct PatchEntry {

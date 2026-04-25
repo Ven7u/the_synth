@@ -1,7 +1,9 @@
-use synth_engine::generative::{save_scene_json, AmbientPatch, MacroSetKind, Scene, SceneGlobal, SceneTrack};
 use bevy::{post_process::bloom::Bloom, prelude::*};
 use synth_bevy::{SceneTransitionMode, SynthBackendKind, SynthBevyConfig, SynthEvent, SynthPlugin};
 use synth_control::midi_note;
+use synth_engine::generative::{
+    save_scene_json, AmbientPatch, MacroSetKind, Scene, SceneGlobal, SceneTrack,
+};
 
 const BUBBLE_RADIUS: f32 = 18.0;
 const MAX_BUBBLES: usize = 4;

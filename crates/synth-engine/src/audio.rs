@@ -281,7 +281,9 @@ impl AudioState {
             ring_tap: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
             voice_freqs: (0..VOICE_COUNT).map(|_| shared(440.0)).collect(),
             voice_gates: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
-            voice_audible: (0..VOICE_COUNT).map(|_| Arc::new(AtomicBool::new(false))).collect(),
+            voice_audible: (0..VOICE_COUNT)
+                .map(|_| Arc::new(AtomicBool::new(false)))
+                .collect(),
             effective_cutoff: shared(3000.0),
             osc_buffer: Arc::new(std::sync::Mutex::new(vec![0.0f32; 1024])),
             buffer_frames: Arc::new(AtomicU32::new(0)),
@@ -610,7 +612,10 @@ pub fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Sen
         // Input saturation: soft-clip before the filter.
         // drive=1 is transparent (tanh(x/1)*1 ≈ x for small x); higher values
         // push the signal into the tanh knee for analog-style warmth.
-        let driven = osc >> An(DriveNode { drive: state.filter_drive.clone() });
+        let driven = osc
+            >> An(DriveNode {
+                drive: state.filter_drive.clone(),
+            });
 
         // Moog lowpass filter with per-voice filter ADSR (fully live-parametric).
         let fenv = var(vg)
@@ -645,9 +650,7 @@ pub fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Sen
     // Wrap each voice in a `GatedVoice` so silent voices short-circuit their
     // sub-graph (3×5 oscillators + Moog filter + 2 ADSRs). The audibility
     // flag is updated once per audio buffer by `VoiceAllocator`.
-    let gate = |vi: usize, voice| {
-        An(GatedVoice::new(voice, Arc::clone(&state.voice_audible[vi])))
-    };
+    let gate = |vi: usize, voice| An(GatedVoice::new(voice, Arc::clone(&state.voice_audible[vi])));
     let v0 = gate(0, make_voice(0).0);
     let v1 = gate(1, make_voice(1).0);
     let v2 = gate(2, make_voice(2).0);

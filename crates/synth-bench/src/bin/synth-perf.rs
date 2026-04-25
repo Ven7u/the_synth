@@ -44,11 +44,11 @@ const MEASURE_SECS: f32 = 10.0;
 // ---------------------------------------------------------------------------
 
 struct ScenarioResult {
-    name:       &'static str,
-    rtf:        f32,
-    wall_ms:    f32,
+    name: &'static str,
+    rtf: f32,
+    wall_ms: f32,
     us_per_buf: f32,
-    voices_on:  usize,
+    voices_on: usize,
 }
 
 fn bench(name: &'static str, setup: impl FnOnce(&SynthEngineHandle)) -> ScenarioResult {
@@ -63,11 +63,18 @@ fn bench(name: &'static str, setup: impl FnOnce(&SynthEngineHandle)) -> Scenario
     voices.begin_buffer(&state, &rx, 0, SR);
 
     let mut graph = BlockRateAdapter::new(build_synth_graph(&state, SR));
-    let mut lim   = LookaheadLimiter::new(SR_F, 1.5, 80.0);
+    let mut lim = LookaheadLimiter::new(SR_F, 1.5, 80.0);
 
     // Warm up.
     let warmup_samples = (SR_F * WARMUP_SECS) as usize;
-    render_chunk(&state, &rx, &mut voices, &mut graph, &mut lim, warmup_samples);
+    render_chunk(
+        &state,
+        &rx,
+        &mut voices,
+        &mut graph,
+        &mut lim,
+        warmup_samples,
+    );
 
     // Measure.
     let samples = (SR_F * MEASURE_SECS) as usize;
@@ -85,22 +92,28 @@ fn bench(name: &'static str, setup: impl FnOnce(&SynthEngineHandle)) -> Scenario
         .filter(|&i| state.voice_gates[i].value() > 0.5 || state.amp_cursors[i].value() > 0.5)
         .count();
 
-    ScenarioResult { name, rtf, wall_ms, us_per_buf, voices_on }
+    ScenarioResult {
+        name,
+        rtf,
+        wall_ms,
+        us_per_buf,
+        voices_on,
+    }
 }
 
 fn render_chunk(
-    state:  &AudioState,
-    rx:     &ControlReceiver,
+    state: &AudioState,
+    rx: &ControlReceiver,
     voices: &mut VoiceAllocator,
-    graph:  &mut BlockRateAdapter,
-    lim:    &mut LookaheadLimiter,
+    graph: &mut BlockRateAdapter,
+    lim: &mut LookaheadLimiter,
     total_samples: usize,
 ) {
     // Callback-shaped state.
-    let mut lfo_phase:  f32 = 0.0;
+    let mut lfo_phase: f32 = 0.0;
     let mut lfo2_phase: f32 = 0.25;
-    let mut peak_l:     f32 = 0.0;
-    let mut peak_r:     f32 = 0.0;
+    let mut peak_l: f32 = 0.0;
+    let mut peak_r: f32 = 0.0;
     let mut smoothed_freqs: [f32; VOICE_COUNT] = [440.0; VOICE_COUNT];
 
     let mut done = 0;
@@ -110,19 +123,21 @@ fn render_chunk(
         voices.begin_buffer(state, rx, frames, SR);
 
         // Per-buffer atomic reads (mirror of the real callback).
-        let lfo_rate  = state.lfo_rate.value();
+        let lfo_rate = state.lfo_rate.value();
         let lfo_depth = state.lfo_depth.value();
         let lfo_shape = state.lfo_shape.load(std::sync::atomic::Ordering::Relaxed);
-        let lfo_dest  = state.lfo_dest.load(std::sync::atomic::Ordering::Relaxed);
-        let lfo_dt    = lfo_rate / SR_F;
-        let lfo2_rate  = state.lfo2_rate.value();
+        let lfo_dest = state.lfo_dest.load(std::sync::atomic::Ordering::Relaxed);
+        let lfo_dt = lfo_rate / SR_F;
+        let lfo2_rate = state.lfo2_rate.value();
         let lfo2_depth = state.lfo2_depth.value();
         let lfo2_shape = state.lfo2_shape.load(std::sync::atomic::Ordering::Relaxed);
-        let lfo2_dest  = state.lfo2_dest.load(std::sync::atomic::Ordering::Relaxed);
-        let lfo2_dt    = lfo2_rate / SR_F;
+        let lfo2_dest = state.lfo2_dest.load(std::sync::atomic::Ordering::Relaxed);
+        let lfo2_dt = lfo2_rate / SR_F;
         let base_cutoff = state.cutoff.value().clamp(80.0, 18_000.0);
         let threshold = state.limiter_threshold.value();
-        let limiter_on = state.limiter_enabled.load(std::sync::atomic::Ordering::Relaxed);
+        let limiter_on = state
+            .limiter_enabled
+            .load(std::sync::atomic::Ordering::Relaxed);
 
         // Glide smoothing (once per buffer).
         let glide_time = state.glide_time.value();
@@ -140,16 +155,32 @@ fn render_chunk(
         for _ in 0..frames {
             // LFO 1 & 2 phase advance + waveform + mod routing.
             lfo_phase += lfo_dt;
-            if lfo_phase >= 1.0 { lfo_phase -= 1.0; }
+            if lfo_phase >= 1.0 {
+                lfo_phase -= 1.0;
+            }
             let lfo_raw = match lfo_shape {
-                1 => if lfo_phase < 0.5 { 4.0 * lfo_phase - 1.0 } else { 3.0 - 4.0 * lfo_phase },
+                1 => {
+                    if lfo_phase < 0.5 {
+                        4.0 * lfo_phase - 1.0
+                    } else {
+                        3.0 - 4.0 * lfo_phase
+                    }
+                }
                 2 => 2.0 * lfo_phase - 1.0,
                 _ => (lfo_phase * std::f32::consts::TAU).sin(),
             };
             lfo2_phase += lfo2_dt;
-            if lfo2_phase >= 1.0 { lfo2_phase -= 1.0; }
+            if lfo2_phase >= 1.0 {
+                lfo2_phase -= 1.0;
+            }
             let lfo2_raw = match lfo2_shape {
-                1 => if lfo2_phase < 0.5 { 4.0 * lfo2_phase - 1.0 } else { 3.0 - 4.0 * lfo2_phase },
+                1 => {
+                    if lfo2_phase < 0.5 {
+                        4.0 * lfo2_phase - 1.0
+                    } else {
+                        3.0 - 4.0 * lfo2_phase
+                    }
+                }
                 2 => 2.0 * lfo2_phase - 1.0,
                 _ => (lfo2_phase * std::f32::consts::TAU).sin(),
             };
@@ -158,18 +189,19 @@ fn render_chunk(
             let mut filter_mod: f32 = 0.0;
             let mut amp_mod: f32 = 1.0;
             for (raw, depth, dest) in [
-                (lfo_raw,  lfo_depth,  lfo_dest),
+                (lfo_raw, lfo_depth, lfo_dest),
                 (lfo2_raw, lfo2_depth, lfo2_dest),
             ] {
                 match dest {
-                    0 => pitch_mod  += raw * depth,
-                    2 => amp_mod    *= 1.0 - depth * (1.0 - raw) * 0.5,
+                    0 => pitch_mod += raw * depth,
+                    2 => amp_mod *= 1.0 - depth * (1.0 - raw) * 0.5,
                     _ => filter_mod += raw * depth,
                 }
             }
             state.lfo_pitch_mult.set(2_f32.powf(pitch_mod * 2.0 / 12.0));
-            state.effective_cutoff.set(
-                (base_cutoff + filter_mod * base_cutoff * 0.5).clamp(80.0, 18_000.0));
+            state
+                .effective_cutoff
+                .set((base_cutoff + filter_mod * base_cutoff * 0.5).clamp(80.0, 18_000.0));
             let lfo_amp = amp_mod;
 
             voices.tick_sample(state);
@@ -185,8 +217,12 @@ fn render_chunk(
             let out_l = if out_l.is_finite() { out_l.tanh() } else { 0.0 } * lfo_amp;
             let out_r = if out_r.is_finite() { out_r.tanh() } else { 0.0 } * lfo_amp;
 
-            if out_l.abs() > peak_l { peak_l = out_l.abs(); }
-            if out_r.abs() > peak_r { peak_r = out_r.abs(); }
+            if out_l.abs() > peak_l {
+                peak_l = out_l.abs();
+            }
+            if out_r.abs() > peak_r {
+                peak_r = out_r.abs();
+            }
 
             // Prevent LLVM from optimising the whole loop away.
             black_box((out_l, out_r));
@@ -196,8 +232,12 @@ fn render_chunk(
     }
 
     // Consume peaks so nothing is dead-stripped.
-    state.peak_l.store(peak_l.to_bits(), std::sync::atomic::Ordering::Relaxed);
-    state.peak_r.store(peak_r.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    state
+        .peak_l
+        .store(peak_l.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    state
+        .peak_r
+        .store(peak_r.to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
 // ---------------------------------------------------------------------------
@@ -214,18 +254,24 @@ fn scenarios() -> Vec<ScenarioResult> {
     }));
 
     out.push(bench("6 notes held (chord, clean)", |h| {
-        for p in [48, 52, 55, 60, 64, 67] { h.note_on(p, 100); }
+        for p in [48, 52, 55, 60, 64, 67] {
+            h.note_on(p, 100);
+        }
     }));
 
     out.push(bench("6 notes + mod FX (chorus + delay + reverb)", |h| {
-        for p in [48, 52, 55, 60, 64, 67] { h.note_on(p, 100); }
+        for p in [48, 52, 55, 60, 64, 67] {
+            h.note_on(p, 100);
+        }
         h.set_fx_chorus_mix(0.35);
         h.set_fx_delay_mix(0.35);
         h.set_fx_reverb_mix(0.4);
     }));
 
     out.push(bench("6 notes + all FX heavy (+ shimmer + crystal)", |h| {
-        for p in [48, 52, 55, 60, 64, 67] { h.note_on(p, 100); }
+        for p in [48, 52, 55, 60, 64, 67] {
+            h.note_on(p, 100);
+        }
         h.set_fx_overdrive_mix(0.5);
         h.set_fx_distortion_mix(0.3);
         h.set_fx_chorus_mix(0.5);
@@ -237,7 +283,9 @@ fn scenarios() -> Vec<ScenarioResult> {
     }));
 
     out.push(bench("6 notes + unison 5× on all 3 osc", |h| {
-        for p in [48, 52, 55, 60, 64, 67] { h.note_on(p, 100); }
+        for p in [48, 52, 55, 60, 64, 67] {
+            h.note_on(p, 100);
+        }
         // Activate all 5 unison copies per oscillator.
         for osc in 0..3 {
             for c in 0..5 {
@@ -256,12 +304,18 @@ fn scenarios() -> Vec<ScenarioResult> {
 
 fn print_header() {
     let arch = std::env::consts::ARCH;
-    let os   = std::env::consts::OS;
-    let profile = if cfg!(debug_assertions) { "DEBUG" } else { "release" };
+    let os = std::env::consts::OS;
+    let profile = if cfg!(debug_assertions) {
+        "DEBUG"
+    } else {
+        "release"
+    };
     println!();
     println!("=== synth-perf — realtime CPU benchmark ===");
-    println!("sample rate {} Hz, block size {}, measure {:.1}s/scenario, warmup {:.1}s",
-        SR as u32, BLOCK_SIZE, MEASURE_SECS, WARMUP_SECS);
+    println!(
+        "sample rate {} Hz, block size {}, measure {:.1}s/scenario, warmup {:.1}s",
+        SR as u32, BLOCK_SIZE, MEASURE_SECS, WARMUP_SECS
+    );
     println!("target {os}/{arch}, profile {profile}");
     println!();
 
@@ -270,18 +324,27 @@ fn print_header() {
         println!();
     }
 
-    println!("{:<52} {:>8}  {:>10}  {:>12}  {:>6}",
-        "scenario", "RTF", "wall (ms)", "µs/buffer", "voices");
+    println!(
+        "{:<52} {:>8}  {:>10}  {:>12}  {:>6}",
+        "scenario", "RTF", "wall (ms)", "µs/buffer", "voices"
+    );
     println!("{}", "-".repeat(100));
 }
 
 fn print_row(r: &ScenarioResult) {
-    let flag = if r.rtf >= 100.0 { "✓" }
-        else if r.rtf >= 10.0 { "·" }
-        else if r.rtf >= 1.0 { "!" }
-        else { "✗" };
-    println!("{flag} {:<50} {:>6.1}×  {:>10.2}  {:>12.2}  {:>6}",
-        r.name, r.rtf, r.wall_ms, r.us_per_buf, r.voices_on);
+    let flag = if r.rtf >= 100.0 {
+        "✓"
+    } else if r.rtf >= 10.0 {
+        "·"
+    } else if r.rtf >= 1.0 {
+        "!"
+    } else {
+        "✗"
+    };
+    println!(
+        "{flag} {:<50} {:>6.1}×  {:>10.2}  {:>12.2}  {:>6}",
+        r.name, r.rtf, r.wall_ms, r.us_per_buf, r.voices_on
+    );
 }
 
 fn print_legend() {
@@ -293,8 +356,10 @@ fn print_legend() {
     println!("  ✗  <   1×   cannot keep up — dropouts");
     println!();
     println!("µs/buffer is the wall-clock cost of rendering one {BLOCK_SIZE}-sample buffer.");
-    println!("At 48 kHz that buffer is {:.2} ms of audio.",
-        BLOCK_SIZE as f32 / SR_F * 1000.0);
+    println!(
+        "At 48 kHz that buffer is {:.2} ms of audio.",
+        BLOCK_SIZE as f32 / SR_F * 1000.0
+    );
 }
 
 fn main() {

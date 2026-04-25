@@ -34,12 +34,12 @@ pub struct GatedVoice<X>
 where
     X: AudioNode<Inputs = U0>,
 {
-    inner:       X,
-    audible:     Arc<AtomicBool>,
+    inner: X,
+    audible: Arc<AtomicBool>,
     /// Tracks whether we ticked the inner graph on the previous sample.
     /// Used to trigger `inner.reset()` on false→true transitions so the
     /// filter/envelope/oscillator state starts clean after long silences.
-    was_active:  bool,
+    was_active: bool,
 }
 
 impl<X> GatedVoice<X>
@@ -47,7 +47,11 @@ where
     X: AudioNode<Inputs = U0>,
 {
     pub fn new(inner: X, audible: Arc<AtomicBool>) -> Self {
-        Self { inner, audible, was_active: false }
+        Self {
+            inner,
+            audible,
+            was_active: false,
+        }
     }
 }
 
@@ -57,7 +61,7 @@ where
 {
     // Unique ID: "gated_vo" in ASCII.
     const ID: u64 = 0x6761_7465_645f_766f;
-    type Inputs  = U0;
+    type Inputs = U0;
     type Outputs = X::Outputs;
 
     fn reset(&mut self) {

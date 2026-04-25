@@ -1,7 +1,3 @@
-use synth_engine::generative::{
-    load_scene_json, AmbientEngine, BeatClock, BeatClockShared, EuclideanGen, GenerativeMode,
-    MarkovEngine, ProbTableGen, Scene, SceneGlobal, MACRO_COUNT, TRACK_COUNT,
-};
 use bevy::prelude::*;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample, Stream};
@@ -13,6 +9,10 @@ use std::sync::{Arc, Mutex};
 use synth_control::{make_control_channel, ControlEvent, ControlReceiver, ControlSender, ParamId};
 use synth_engine::arp::{ArpState, ScaleWalker};
 use synth_engine::audio::{build_synth_graph, AudioState, VOICE_COUNT as SYNTH_VOICE_COUNT};
+use synth_engine::generative::{
+    load_scene_json, AmbientEngine, BeatClock, BeatClockShared, EuclideanGen, GenerativeMode,
+    MarkovEngine, ProbTableGen, Scene, SceneGlobal, MACRO_COUNT, TRACK_COUNT,
+};
 
 /// Shared recorder sink: `Some(Recorder)` while recording, `None` otherwise.
 /// The audio callback holds an `Arc` clone and calls `try_lock` each sample.
@@ -1462,9 +1462,9 @@ where
 #[cfg(feature = "inspector")]
 mod inspector {
     use super::{SynthParam, SynthTempo, MACRO_COUNT, TRACK_COUNT};
-    use synth_engine::generative::ACTIVE_MACRO_KNOBS;
     use bevy::prelude::*;
     use bevy_egui::{egui, EguiContexts, EguiPlugin};
+    use synth_engine::generative::ACTIVE_MACRO_KNOBS;
 
     pub struct SynthInspectorPlugin;
 

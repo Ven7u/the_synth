@@ -206,8 +206,10 @@ where
                     last_keyed_freq = top_freq;
                 }
             }
+            // Exponent × 2 so KEY=0.5 = standard 1:1 tracking (one octave → 2× cutoff)
+            // and KEY=1.0 = hyper tracking (one octave → 4× cutoff).
             let key_mult = if key_track > 0.001 {
-                (last_keyed_freq / 261.63_f32).powf(key_track)
+                (last_keyed_freq / 261.63_f32).powf(key_track * 2.0)
             } else {
                 1.0
             };

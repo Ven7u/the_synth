@@ -23,28 +23,19 @@
 pub fn enable_ftz_on_current_thread() {
     #[cfg(target_arch = "x86_64")]
     unsafe {
-        use core::arch::x86_64::{
-            _mm_getcsr, _mm_setcsr,
-            _MM_DENORMALS_ZERO_ON, _MM_FLUSH_ZERO_ON,
-            _MM_DENORMALS_ZERO_MASK, _MM_FLUSH_ZERO_MASK,
-        };
-        let mut csr = _mm_getcsr();
-        csr = (csr & !_MM_FLUSH_ZERO_MASK) | _MM_FLUSH_ZERO_ON;
-        csr = (csr & !_MM_DENORMALS_ZERO_MASK) | _MM_DENORMALS_ZERO_ON;
-        _mm_setcsr(csr);
+        use core::arch::x86_64::{_mm_getcsr, _mm_setcsr};
+        // MXCSR bit 15: FTZ (flush-to-zero), bit 6: DAZ (denormals-are-zero)
+        const FTZ: u32 = 0x8000;
+        const DAZ: u32 = 0x0040;
+        _mm_setcsr((_mm_getcsr() | FTZ) | DAZ);
     }
 
     #[cfg(target_arch = "x86")]
     unsafe {
-        use core::arch::x86::{
-            _mm_getcsr, _mm_setcsr,
-            _MM_DENORMALS_ZERO_ON, _MM_FLUSH_ZERO_ON,
-            _MM_DENORMALS_ZERO_MASK, _MM_FLUSH_ZERO_MASK,
-        };
-        let mut csr = _mm_getcsr();
-        csr = (csr & !_MM_FLUSH_ZERO_MASK) | _MM_FLUSH_ZERO_ON;
-        csr = (csr & !_MM_DENORMALS_ZERO_MASK) | _MM_DENORMALS_ZERO_ON;
-        _mm_setcsr(csr);
+        use core::arch::x86::{_mm_getcsr, _mm_setcsr};
+        const FTZ: u32 = 0x8000;
+        const DAZ: u32 = 0x0040;
+        _mm_setcsr((_mm_getcsr() | FTZ) | DAZ);
     }
 
     #[cfg(target_arch = "aarch64")]
