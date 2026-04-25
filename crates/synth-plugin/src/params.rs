@@ -110,18 +110,28 @@ pub struct OscParams {
 fn osc_params(wave_default: WaveShapeParam, vol_default: f32) -> OscParams {
     OscParams {
         wave: EnumParam::new("Wave", wave_default),
-        vol: FloatParam::new("Volume", vol_default, FloatRange::Linear { min: 0.0, max: 1.0 })
-            .with_unit("%")
-            .with_value_to_string(formatters::v2s_f32_percentage(1)),
+        vol: FloatParam::new(
+            "Volume",
+            vol_default,
+            FloatRange::Linear { min: 0.0, max: 1.0 },
+        )
+        .with_unit("%")
+        .with_value_to_string(formatters::v2s_f32_percentage(1)),
         freq_mult: FloatParam::new(
             "Freq Mult",
             1.0,
-            FloatRange::Linear { min: 0.25, max: 4.0 },
+            FloatRange::Linear {
+                min: 0.25,
+                max: 4.0,
+            },
         ),
         pulse_width: FloatParam::new(
             "Pulse Width",
             0.5,
-            FloatRange::Linear { min: 0.01, max: 0.99 },
+            FloatRange::Linear {
+                min: 0.01,
+                max: 0.99,
+            },
         )
         .with_unit("%")
         .with_value_to_string(formatters::v2s_f32_percentage(1)),
@@ -229,20 +239,22 @@ impl Default for FilterParams {
             resonance: FloatParam::new(
                 "Resonance",
                 0.3,
-                FloatRange::Linear { min: 0.1, max: 20.0 },
+                FloatRange::Linear {
+                    min: 0.1,
+                    max: 20.0,
+                },
             ),
             drive: FloatParam::new(
                 "Filter Drive",
                 1.0,
-                FloatRange::Linear { min: 1.0, max: 10.0 },
+                FloatRange::Linear {
+                    min: 1.0,
+                    max: 10.0,
+                },
             ),
-            key_track: FloatParam::new(
-                "Key Track",
-                0.0,
-                FloatRange::Linear { min: 0.0, max: 1.0 },
-            )
-            .with_unit("%")
-            .with_value_to_string(formatters::v2s_f32_percentage(1)),
+            key_track: FloatParam::new("Key Track", 0.0, FloatRange::Linear { min: 0.0, max: 1.0 })
+                .with_unit("%")
+                .with_value_to_string(formatters::v2s_f32_percentage(1)),
             env_amount: FloatParam::new(
                 "Env Amount",
                 0.3,
@@ -270,13 +282,9 @@ impl Default for FilterParams {
                 },
             )
             .with_unit(" s"),
-            sustain: FloatParam::new(
-                "Sustain",
-                0.0,
-                FloatRange::Linear { min: 0.0, max: 1.0 },
-            )
-            .with_unit("%")
-            .with_value_to_string(formatters::v2s_f32_percentage(1)),
+            sustain: FloatParam::new("Sustain", 0.0, FloatRange::Linear { min: 0.0, max: 1.0 })
+                .with_unit("%")
+                .with_value_to_string(formatters::v2s_f32_percentage(1)),
             release: FloatParam::new(
                 "Release",
                 0.2,
@@ -375,13 +383,9 @@ impl Default for AmpParams {
                 },
             )
             .with_unit(" s"),
-            sustain: FloatParam::new(
-                "Sustain",
-                0.7,
-                FloatRange::Linear { min: 0.0, max: 1.0 },
-            )
-            .with_unit("%")
-            .with_value_to_string(formatters::v2s_f32_percentage(1)),
+            sustain: FloatParam::new("Sustain", 0.7, FloatRange::Linear { min: 0.0, max: 1.0 })
+                .with_unit("%")
+                .with_value_to_string(formatters::v2s_f32_percentage(1)),
             release: FloatParam::new(
                 "Release",
                 0.15,
@@ -392,12 +396,8 @@ impl Default for AmpParams {
                 },
             )
             .with_unit(" s"),
-            glide_time: FloatParam::new(
-                "Glide",
-                0.0,
-                FloatRange::Linear { min: 0.0, max: 0.5 },
-            )
-            .with_unit(" s"),
+            glide_time: FloatParam::new("Glide", 0.0, FloatRange::Linear { min: 0.0, max: 0.5 })
+                .with_unit(" s"),
         }
     }
 }
@@ -495,7 +495,10 @@ impl Default for FxParams {
             overdrive_drive: FloatParam::new(
                 "OD Drive",
                 1.0,
-                FloatRange::Linear { min: 1.0, max: 10.0 },
+                FloatRange::Linear {
+                    min: 1.0,
+                    max: 10.0,
+                },
             ),
             overdrive_mix: FloatParam::new(
                 "OD Mix",
@@ -517,7 +520,10 @@ impl Default for FxParams {
             distortion_drive: FloatParam::new(
                 "Dist Drive",
                 1.0,
-                FloatRange::Linear { min: 1.0, max: 20.0 },
+                FloatRange::Linear {
+                    min: 1.0,
+                    max: 20.0,
+                },
             ),
             distortion_mix: FloatParam::new(
                 "Dist Mix",
@@ -549,7 +555,10 @@ impl Default for FxParams {
             chorus_depth: FloatParam::new(
                 "Chorus Depth",
                 0.005,
-                FloatRange::Linear { min: 0.0, max: 0.02 },
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 0.02,
+                },
             )
             .with_unit(" s"),
             chorus_mix: FloatParam::new(
@@ -568,17 +577,16 @@ impl Default for FxParams {
             delay_feedback: FloatParam::new(
                 "Delay Feedback",
                 0.3,
-                FloatRange::Linear { min: 0.0, max: 0.95 },
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 0.95,
+                },
             )
             .with_unit("%")
             .with_value_to_string(formatters::v2s_f32_percentage(1)),
-            delay_mix: FloatParam::new(
-                "Delay Mix",
-                0.0,
-                FloatRange::Linear { min: 0.0, max: 1.0 },
-            )
-            .with_unit("%")
-            .with_value_to_string(formatters::v2s_f32_percentage(1)),
+            delay_mix: FloatParam::new("Delay Mix", 0.0, FloatRange::Linear { min: 0.0, max: 1.0 })
+                .with_unit("%")
+                .with_value_to_string(formatters::v2s_f32_percentage(1)),
             reverb_size: FloatParam::new(
                 "Reverb Size",
                 0.5,
@@ -606,7 +614,10 @@ impl Default for FxParams {
             stereo_spread: FloatParam::new(
                 "Stereo Spread",
                 0.002,
-                FloatRange::Linear { min: 0.0, max: 0.012 },
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 0.012,
+                },
             )
             .with_unit(" s"),
             stereo_width: FloatParam::new(
@@ -651,7 +662,10 @@ impl Default for FxParams {
             crystal_grain: FloatParam::new(
                 "Crystal Grain",
                 80.0,
-                FloatRange::Linear { min: 10.0, max: 400.0 },
+                FloatRange::Linear {
+                    min: 10.0,
+                    max: 400.0,
+                },
             )
             .with_unit(" ms"),
             crystal_scatter: FloatParam::new(
@@ -662,14 +676,20 @@ impl Default for FxParams {
             crystal_feedback: FloatParam::new(
                 "Crystal Feedback",
                 0.0,
-                FloatRange::Linear { min: 0.0, max: 0.95 },
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 0.95,
+                },
             )
             .with_unit("%")
             .with_value_to_string(formatters::v2s_f32_percentage(1)),
             crystal_delay: FloatParam::new(
                 "Crystal Delay",
                 0.0,
-                FloatRange::Linear { min: 0.0, max: 500.0 },
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 500.0,
+                },
             )
             .with_unit(" ms"),
             crystal_mix: FloatParam::new(
@@ -783,23 +803,15 @@ impl Default for TheSynthParams {
             osc2: osc_params(WaveShapeParam::Sine, 0.3),
             osc3: osc_params(WaveShapeParam::Sine, 0.0),
             hard_sync: BoolParam::new("Hard Sync", false),
-            fm_depth: FloatParam::new(
-                "FM Depth",
-                0.0,
-                FloatRange::Linear { min: 0.0, max: 2.0 },
-            ),
+            fm_depth: FloatParam::new("FM Depth", 0.0, FloatRange::Linear { min: 0.0, max: 2.0 }),
             ring_depth: FloatParam::new(
                 "Ring Depth",
                 0.0,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             ),
-            noise_vol: FloatParam::new(
-                "Noise Vol",
-                0.0,
-                FloatRange::Linear { min: 0.0, max: 1.0 },
-            )
-            .with_unit("%")
-            .with_value_to_string(formatters::v2s_f32_percentage(1)),
+            noise_vol: FloatParam::new("Noise Vol", 0.0, FloatRange::Linear { min: 0.0, max: 1.0 })
+                .with_unit("%")
+                .with_value_to_string(formatters::v2s_f32_percentage(1)),
             filter: FilterParams::default(),
             lfo1: lfo_params(),
             lfo2: lfo_params(),

@@ -169,10 +169,7 @@ impl TheSynthPlugin {
         set!(s.osc_unison_vol[2][4], p.osc3.unison_vol_4.value());
 
         // Mod sources
-        store!(
-            s.hard_sync_enabled,
-            p.hard_sync.value()
-        );
+        store!(s.hard_sync_enabled, p.hard_sync.value());
         set!(s.fm_depth, p.fm_depth.value());
         set!(s.ring_depth, p.ring_depth.value());
         set!(s.noise_vol, p.noise_vol.value());
@@ -210,10 +207,7 @@ impl TheSynthPlugin {
         // Master
         set!(s.master_vol, p.master.master_vol.value());
         set!(s.global_vol, p.master.global_vol.value());
-        store!(
-            s.limiter_enabled,
-            p.master.limiter_enabled.value()
-        );
+        store!(s.limiter_enabled, p.master.limiter_enabled.value());
         set!(s.limiter_threshold, p.master.limiter_threshold.value());
 
         // FX
@@ -298,9 +292,7 @@ impl Plugin for TheSynthPlugin {
         self.sample_rate = sr;
 
         enable_ftz_on_current_thread();
-        self.state
-            .sample_rate
-            .store(sr as u32, Ordering::Relaxed);
+        self.state.sample_rate.store(sr as u32, Ordering::Relaxed);
 
         // Build graph once; never rebuilt (all params live in AudioState atomics)
         let mut graph = build_synth_graph(&self.state, sr);
@@ -436,8 +428,7 @@ impl Plugin for TheSynthPlugin {
                 self.smoothed_freqs[vi] = target;
             } else {
                 let coeff = (-(frames as f32) / (glide_time * sr_f)).exp();
-                self.smoothed_freqs[vi] =
-                    coeff * self.smoothed_freqs[vi] + (1.0 - coeff) * target;
+                self.smoothed_freqs[vi] = coeff * self.smoothed_freqs[vi] + (1.0 - coeff) * target;
             }
             self.state.voice_freqs[vi].set(self.smoothed_freqs[vi]);
         }
@@ -502,9 +493,9 @@ impl Plugin for TheSynthPlugin {
             self.state
                 .lfo_pitch_mult
                 .set(2_f32.powf(pitch_mod * 2.0 / 12.0));
-            self.state.effective_cutoff.set(
-                (keyed_cutoff + filter_mod * keyed_cutoff * 0.5).clamp(80.0, 18000.0),
-            );
+            self.state
+                .effective_cutoff
+                .set((keyed_cutoff + filter_mod * keyed_cutoff * 0.5).clamp(80.0, 18000.0));
 
             // Retrigger countdown (4-sample gate gap for click-free retriggering)
             self.voice_alloc.tick_sample(&self.state);
@@ -533,10 +524,12 @@ impl Plugin for TheSynthPlugin {
             let target_global = self.state.global_vol.value() as f32;
             self.global_vol_smooth =
                 target_global + self.global_vol_coeff * (self.global_vol_smooth - target_global);
-            let l =
-                if raw_l.is_finite() { raw_l.tanh() } else { 0.0 } * amp_mod * self.global_vol_smooth;
-            let r =
-                if raw_r.is_finite() { raw_r.tanh() } else { 0.0 } * amp_mod * self.global_vol_smooth;
+            let l = if raw_l.is_finite() { raw_l.tanh() } else { 0.0 }
+                * amp_mod
+                * self.global_vol_smooth;
+            let r = if raw_r.is_finite() { raw_r.tanh() } else { 0.0 }
+                * amp_mod
+                * self.global_vol_smooth;
 
             if l.abs() > peak_l_local {
                 peak_l_local = l.abs();
