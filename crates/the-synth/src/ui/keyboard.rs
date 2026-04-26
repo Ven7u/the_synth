@@ -4,7 +4,7 @@ use crate::sequencer::{
 };
 use crate::SynthApp;
 use eframe::egui;
-use egui::{Color32, Pos2, Rect, Rounding, Sense, Stroke, Vec2};
+use egui::{Color32, Pos2, Rect, Rounding, Sense, Stroke, StrokeKind, Vec2};
 
 const WHITE_SEMITONES: &[i32] = &[0, 2, 4, 5, 7, 9, 11];
 const BLACK_SEMITONES: &[Option<i32>] = &[Some(1), Some(3), None, Some(6), Some(8), Some(10), None];
@@ -399,7 +399,7 @@ impl SynthApp {
                         } else {
                             self.theme.c(&self.theme.seq_kb_major)
                         };
-                        painter.rect_filled(r, Rounding::same(6.0), bg);
+                        painter.rect_filled(r, 6.0, bg);
                         let stroke_color = if is_held {
                             Color32::WHITE
                         } else if is_editing {
@@ -409,11 +409,12 @@ impl SynthApp {
                         };
                         painter.rect_stroke(
                             r,
-                            Rounding::same(6.0),
+                            6.0,
                             Stroke::new(
                                 if is_held || is_editing { 2.0 } else { 1.0 },
                                 stroke_color,
                             ),
+                            StrokeKind::Middle,
                         );
 
                         // Chord name
@@ -582,11 +583,12 @@ impl SynthApp {
             } else {
                 Color32::from_rgb(230, 230, 230)
             };
-            painter.rect_filled(rect, Rounding::same(2.0), fill);
+            painter.rect_filled(rect, 2.0, fill);
             painter.rect_stroke(
                 rect,
-                Rounding::same(2.0),
+                2.0,
                 Stroke::new(0.5, Color32::from_rgb(160, 160, 160)),
+                StrokeKind::Middle,
             );
 
             if midi % 12 == 0 {
@@ -618,7 +620,7 @@ impl SynthApp {
             } else {
                 Color32::from_rgb(25, 25, 25)
             };
-            painter.rect_filled(rect, Rounding::same(1.5), fill);
+            painter.rect_filled(rect, 1.5, fill);
         }
     }
 
@@ -677,11 +679,12 @@ impl SynthApp {
                 Color32::from_rgb(245, 245, 245)
             };
 
-            painter.rect_filled(rect, Rounding::same(2.0), fill);
+            painter.rect_filled(rect, 2.0, fill);
             painter.rect_stroke(
                 rect,
-                Rounding::same(2.0),
+                2.0,
                 Stroke::new(0.5, Color32::from_rgb(180, 180, 180)),
+                StrokeKind::Middle,
             );
 
             // C note labels at the bottom of each C key.
@@ -731,7 +734,7 @@ impl SynthApp {
                 Color32::from_rgb(25, 25, 25)
             };
 
-            painter.rect_filled(rect, Rounding::same(1.5), fill);
+            painter.rect_filled(rect, 1.5, fill);
 
             if let Some(pos) = pointer_pos {
                 if rect.contains(pos) {
@@ -769,7 +772,7 @@ impl SynthApp {
                     origin + Vec2::new(range_left, 0.0),
                     Vec2::new(range_right - range_left, 2.5),
                 );
-                painter.rect_filled(bar, Rounding::same(1.0), accent);
+                painter.rect_filled(bar, 1.0, accent);
             }
         }
 

@@ -21,6 +21,7 @@ use synth_engine::{enable_ftz_on_current_thread, VoiceAllocator, VOICE_COUNT};
 
 mod editor;
 mod params;
+mod plugin_param_writer;
 
 use params::TheSynthParams;
 
