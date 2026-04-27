@@ -7956,6 +7956,7 @@ dependencies = [
  "fundsp",
  "nih_plug",
  "nih_plug_egui",
+ "serde_json",
  "synth-control",
  "synth-dsp",
  "synth-engine",

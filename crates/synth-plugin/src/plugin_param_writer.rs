@@ -1,9 +1,7 @@
 use nih_plug::prelude::*;
 use synth_ui::ParamWriter;
 
-use crate::params::{
-    LfoDestParam, LfoShapeParam, ReverbTypeParam, TheSynthParams, WaveShapeParam,
-};
+use crate::params::{LfoDestParam, LfoShapeParam, ReverbTypeParam, TheSynthParams, WaveShapeParam};
 
 pub struct PluginParamWriter<'a> {
     pub params: &'a TheSynthParams,

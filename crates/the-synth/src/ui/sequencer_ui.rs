@@ -254,11 +254,7 @@ impl SynthApp {
                     let (bar_resp, painter) =
                         ui.allocate_painter(Vec2::new(step_w, bar_area_h), Sense::click_and_drag());
                     let r = bar_resp.rect;
-                    painter.rect_filled(
-                        r,
-                        4.0,
-                        self.theme.c(&self.theme.bg_seq_bar),
-                    );
+                    painter.rect_filled(r, 4.0, self.theme.c(&self.theme.bg_seq_bar));
                     let t = (note_f - midi_min) / (midi_max - midi_min);
                     let bar_h = (t * (bar_area_h - 4.0)).max(4.0);
                     let bar_rect = egui::Rect::from_min_size(
@@ -359,11 +355,7 @@ impl SynthApp {
                     let (bar_resp, painter) =
                         ui.allocate_painter(Vec2::new(step_w, bar_area_h), Sense::click_and_drag());
                     let r = bar_resp.rect;
-                    painter.rect_filled(
-                        r,
-                        4.0,
-                        self.theme.c(&self.theme.bg_seq_bar),
-                    );
+                    painter.rect_filled(r, 4.0, self.theme.c(&self.theme.bg_seq_bar));
                     let t = degree as f32 / 6.0;
                     let bar_h = (t * (bar_area_h - 4.0)).max(4.0);
                     let bar_rect = egui::Rect::from_min_size(

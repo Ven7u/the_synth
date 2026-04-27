@@ -62,12 +62,14 @@ pub fn ui_osc_panel(
                     let flip_col = theme.c(&theme.text_secondary);
                     if ui
                         .add(
-                            egui::Label::new(
-                                RichText::new(flip_label).size(10.0).color(flip_col),
-                            )
-                            .sense(egui::Sense::click()),
+                            egui::Label::new(RichText::new(flip_label).size(10.0).color(flip_col))
+                                .sense(egui::Sense::click()),
                         )
-                        .on_hover_text(if flip { "Back to main controls" } else { "Sync / FM / Ring mod" })
+                        .on_hover_text(if flip {
+                            "Back to main controls"
+                        } else {
+                            "Sync / FM / Ring mod"
+                        })
                         .clicked()
                     {
                         s.osc1_mod_view = !s.osc1_mod_view;

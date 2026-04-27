@@ -128,6 +128,12 @@ pub struct SynthUiState {
     pub fx_crystal_delay_ms: f32,
     pub fx_crystal_mix: f32,
     pub fx_crystal_pitch: u8,
+
+    // ── Plugin browser UI state ───────────────────────────────────────────────
+    pub browser_open: bool,
+    pub browser_search: String,
+    pub browser_category: usize, // 0 = All
+    pub current_patch_name: String,
 }
 
 impl Default for SynthUiState {
@@ -240,6 +246,11 @@ impl Default for SynthUiState {
             fx_crystal_delay_ms: 200.0,
             fx_crystal_mix: 0.3,
             fx_crystal_pitch: 2,
+
+            browser_open: false,
+            browser_search: String::new(),
+            browser_category: 0,
+            current_patch_name: "Init".to_string(),
         }
     }
 }

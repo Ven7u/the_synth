@@ -19,7 +19,12 @@ impl SynthFrame {
         let h = theme.sp_md as i8;
         Frame::none()
             .fill(theme.c(&theme.bg_bar))
-            .inner_margin(Margin { left: h, right: h, top: 6, bottom: 6 })
+            .inner_margin(Margin {
+                left: h,
+                right: h,
+                top: 6,
+                bottom: 6,
+            })
     }
 
     /// Transport / keyboard strip variant — tighter vertical margin.
@@ -28,7 +33,12 @@ impl SynthFrame {
         let y = theme.sp_xs as i8;
         Frame::none()
             .fill(theme.c(&theme.bg_bar))
-            .inner_margin(Margin { left: x, right: x, top: y, bottom: y })
+            .inner_margin(Margin {
+                left: x,
+                right: x,
+                top: y,
+                bottom: y,
+            })
     }
 
     /// Section card — the primary container for editing zones.

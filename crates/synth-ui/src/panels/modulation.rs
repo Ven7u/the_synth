@@ -33,17 +33,21 @@ pub fn ui_lfo_panel(
     let sp_xs = theme.sp_xs;
 
     SynthFrame::section(theme).show(ui, |ui| {
-        ui.set_min_width(ui.available_width());
-
         ui.horizontal(|ui| {
             let on = s.lfo_enabled;
-            let col = if on { theme.c(&theme.accent) } else { theme.c(&theme.text_disabled) };
+            let col = if on {
+                theme.c(&theme.accent)
+            } else {
+                theme.c(&theme.text_disabled)
+            };
             if ui
                 .add(egui::SelectableLabel::new(
                     on,
                     RichText::new("LFO 1").size(12.0).strong().color(col),
                 ))
-                .on_hover_text("Low Frequency Oscillator — modulates pitch, filter cutoff, or amplitude")
+                .on_hover_text(
+                    "Low Frequency Oscillator — modulates pitch, filter cutoff, or amplitude",
+                )
                 .clicked()
             {
                 s.lfo_enabled = !on;
@@ -73,7 +77,11 @@ pub fn ui_lfo_panel(
 
                 ui.add_enabled_ui(!s.global_sync, |ui| {
                     let sync_on = s.lfo_sync_active();
-                    let sync_col = if sync_on { theme.c(&theme.accent) } else { theme.c(&theme.text_disabled) };
+                    let sync_col = if sync_on {
+                        theme.c(&theme.accent)
+                    } else {
+                        theme.c(&theme.text_disabled)
+                    };
                     if ui
                         .add(egui::SelectableLabel::new(
                             sync_on,
@@ -107,7 +115,10 @@ pub fn ui_lfo_panel(
                                     theme.c(&theme.text_secondary)
                                 }),
                             )
-                            .on_hover_text(format!("{} → {:.3} Hz @ {} BPM", label, rate, s.global_bpm))
+                            .on_hover_text(format!(
+                                "{} → {:.3} Hz @ {} BPM",
+                                label, rate, s.global_bpm
+                            ))
                             .clicked()
                         {
                             s.lfo_division = i;
@@ -121,7 +132,11 @@ pub fn ui_lfo_panel(
             ui.add_space(sp_xs);
 
             ui.horizontal(|ui| {
-                ui.label(RichText::new("SHAPE").size(10.0).color(theme.c(&theme.text_secondary)));
+                ui.label(
+                    RichText::new("SHAPE")
+                        .size(10.0)
+                        .color(theme.c(&theme.text_secondary)),
+                );
                 let shape_tips = ["Sine — smooth.", "Triangle — linear.", "Saw — ramps up."];
                 for (sh, label) in [(0usize, "Sin"), (1, "Tri"), (2, "Saw")] {
                     if ui
@@ -136,7 +151,11 @@ pub fn ui_lfo_panel(
             });
 
             ui.horizontal(|ui| {
-                ui.label(RichText::new("→").size(10.0).color(theme.c(&theme.text_secondary)));
+                ui.label(
+                    RichText::new("→")
+                        .size(10.0)
+                        .color(theme.c(&theme.text_secondary)),
+                );
                 let dest_tips = ["Pitch — vibrato.", "Filter — wobble.", "Amp — tremolo."];
                 for (d, label) in [(0usize, "Pitch"), (1, "Filter"), (2, "Amp")] {
                     if ui
@@ -168,7 +187,11 @@ pub fn ui_lfo2_panel(
 
         ui.horizontal(|ui| {
             let on = s.lfo2_enabled;
-            let col = if on { theme.c(&theme.accent) } else { theme.c(&theme.text_disabled) };
+            let col = if on {
+                theme.c(&theme.accent)
+            } else {
+                theme.c(&theme.text_disabled)
+            };
             if ui
                 .add(egui::SelectableLabel::new(
                     on,
@@ -203,7 +226,11 @@ pub fn ui_lfo2_panel(
             ui.add_space(sp_xs);
 
             ui.horizontal(|ui| {
-                ui.label(RichText::new("SHAPE").size(10.0).color(theme.c(&theme.text_secondary)));
+                ui.label(
+                    RichText::new("SHAPE")
+                        .size(10.0)
+                        .color(theme.c(&theme.text_secondary)),
+                );
                 for (sh, label) in [(0usize, "Sin"), (1, "Tri"), (2, "Saw")] {
                     if ui.selectable_label(s.lfo2_shape == sh, label).clicked() {
                         s.lfo2_shape = sh;
@@ -213,7 +240,11 @@ pub fn ui_lfo2_panel(
             });
 
             ui.horizontal(|ui| {
-                ui.label(RichText::new("→").size(10.0).color(theme.c(&theme.text_secondary)));
+                ui.label(
+                    RichText::new("→")
+                        .size(10.0)
+                        .color(theme.c(&theme.text_secondary)),
+                );
                 for (d, label) in [(0usize, "Pitch"), (1, "Filter"), (2, "Amp")] {
                     if ui.selectable_label(s.lfo2_dest == d, label).clicked() {
                         s.lfo2_dest = d;
@@ -240,7 +271,11 @@ pub fn ui_filter_panel(
 
         ui.horizontal(|ui| {
             let on = s.filter_enabled;
-            let col = if on { theme.c(&theme.accent) } else { theme.c(&theme.text_disabled) };
+            let col = if on {
+                theme.c(&theme.accent)
+            } else {
+                theme.c(&theme.text_disabled)
+            };
             if ui
                 .add(egui::SelectableLabel::new(
                     on,
@@ -360,30 +395,16 @@ pub fn ui_filter_panel(
                     pw.set_filter_resonance(s.filter_q);
                 }
 
-                if crate::widgets::knob(
-                    ui,
-                    &mut s.filter_drive,
-                    1.0..=10.0,
-                    "DRIVE",
-                    theme,
-                    false,
-                )
-                .on_hover_text("Input drive — saturates the signal before the filter.")
-                .changed()
+                if crate::widgets::knob(ui, &mut s.filter_drive, 1.0..=10.0, "DRIVE", theme, false)
+                    .on_hover_text("Input drive — saturates the signal before the filter.")
+                    .changed()
                 {
                     pw.set_filter_drive(s.filter_drive);
                 }
 
-                if crate::widgets::knob(
-                    ui,
-                    &mut s.filter_key_track,
-                    0.0..=1.0,
-                    "KEY",
-                    theme,
-                    false,
-                )
-                .on_hover_text("Keyboard tracking — cutoff follows pitch.")
-                .changed()
+                if crate::widgets::knob(ui, &mut s.filter_key_track, 0.0..=1.0, "KEY", theme, false)
+                    .on_hover_text("Keyboard tracking — cutoff follows pitch.")
+                    .changed()
                 {
                     pw.set_filter_key_track(s.filter_key_track);
                 }
@@ -455,17 +476,41 @@ pub fn ui_adsr_panel(
                         let v = adsr[i];
                         if is_filter {
                             match i {
-                                0 => { s.fenv_attack = v; pw.set_fenv_attack(v); }
-                                1 => { s.fenv_decay = v; pw.set_fenv_decay(v); }
-                                2 => { s.fenv_sustain = v; pw.set_fenv_sustain(v); }
-                                _ => { s.fenv_release = v; pw.set_fenv_release(v); }
+                                0 => {
+                                    s.fenv_attack = v;
+                                    pw.set_fenv_attack(v);
+                                }
+                                1 => {
+                                    s.fenv_decay = v;
+                                    pw.set_fenv_decay(v);
+                                }
+                                2 => {
+                                    s.fenv_sustain = v;
+                                    pw.set_fenv_sustain(v);
+                                }
+                                _ => {
+                                    s.fenv_release = v;
+                                    pw.set_fenv_release(v);
+                                }
                             }
                         } else {
                             match i {
-                                0 => { s.amp_attack = v; pw.set_amp_attack(v); }
-                                1 => { s.amp_decay = v; pw.set_amp_decay(v); }
-                                2 => { s.amp_sustain = v; pw.set_amp_sustain(v); }
-                                _ => { s.amp_release = v; pw.set_amp_release(v); }
+                                0 => {
+                                    s.amp_attack = v;
+                                    pw.set_amp_attack(v);
+                                }
+                                1 => {
+                                    s.amp_decay = v;
+                                    pw.set_amp_decay(v);
+                                }
+                                2 => {
+                                    s.amp_sustain = v;
+                                    pw.set_amp_sustain(v);
+                                }
+                                _ => {
+                                    s.amp_release = v;
+                                    pw.set_amp_release(v);
+                                }
                             }
                         }
                     }
@@ -527,7 +572,11 @@ pub fn draw_adsr_visualizer(
         Pos2::new(rect.right(), rect.bottom() - pad_y),
         Pos2::new(rect.left(), rect.bottom() - pad_y),
     ];
-    painter.add(egui::Shape::convex_polygon(fill_pts, theme.ca(&theme.adsr_fill), Stroke::NONE));
+    painter.add(egui::Shape::convex_polygon(
+        fill_pts,
+        theme.ca(&theme.adsr_fill),
+        Stroke::NONE,
+    ));
 
     let pts = vec![p0, p1, p2, p3, p4];
     let stroke = Stroke::new(1.5, theme.c(&theme.adsr_outline));
@@ -591,7 +640,11 @@ fn draw_lp_response_curve(
     let q_display = 0.5 + (q_engine / 0.95) * 9.5;
 
     let accent = theme.c(&theme.accent);
-    let border_col = if active { accent } else { Color32::from_gray(55) };
+    let border_col = if active {
+        accent
+    } else {
+        Color32::from_gray(55)
+    };
 
     let log_range = (F_MAX / F_MIN).ln();
     let freq_to_t = |f: f32| ((f / F_MIN).ln() / log_range).clamp(0.0, 1.0);
@@ -647,7 +700,8 @@ fn draw_lp_response_curve(
         pts.push(egui::pos2(sx(t), sy(db_of(f))));
     }
 
-    let fill_col = Color32::from_rgba_premultiplied(accent.r() / 3, accent.g() / 3, accent.b() / 3, 110);
+    let fill_col =
+        Color32::from_rgba_premultiplied(accent.r() / 3, accent.g() / 3, accent.b() / 3, 110);
     let baseline = rect.bottom();
     for w in pts.windows(2) {
         let quad = vec![
@@ -656,7 +710,11 @@ fn draw_lp_response_curve(
             egui::pos2(w[1].x, baseline),
             egui::pos2(w[0].x, baseline),
         ];
-        painter.add(egui::Shape::convex_polygon(quad, fill_col, egui::Stroke::NONE));
+        painter.add(egui::Shape::convex_polygon(
+            quad,
+            fill_col,
+            egui::Stroke::NONE,
+        ));
     }
 
     let line_col = Color32::from_rgba_premultiplied(accent.r(), accent.g(), accent.b(), 210);
@@ -669,11 +727,17 @@ fn draw_lp_response_curve(
 
     let cross = Color32::from_rgba_premultiplied(accent.r(), accent.g(), accent.b(), 45);
     painter.line_segment(
-        [egui::pos2(node_x, rect.top()), egui::pos2(node_x, rect.bottom())],
+        [
+            egui::pos2(node_x, rect.top()),
+            egui::pos2(node_x, rect.bottom()),
+        ],
         egui::Stroke::new(1.0, cross),
     );
     painter.line_segment(
-        [egui::pos2(rect.left(), node_y), egui::pos2(rect.right(), node_y)],
+        [
+            egui::pos2(rect.left(), node_y),
+            egui::pos2(rect.right(), node_y),
+        ],
         egui::Stroke::new(1.0, cross),
     );
 
@@ -684,5 +748,10 @@ fn draw_lp_response_curve(
         egui::Stroke::new(1.5, Color32::WHITE),
     );
 
-    painter.rect_stroke(rect, 5.0, egui::Stroke::new(1.0, border_col), egui::StrokeKind::Outside);
+    painter.rect_stroke(
+        rect,
+        5.0,
+        egui::Stroke::new(1.0, border_col),
+        egui::StrokeKind::Outside,
+    );
 }

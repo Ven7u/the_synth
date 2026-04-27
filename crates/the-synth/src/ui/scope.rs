@@ -71,11 +71,7 @@ impl SynthApp {
         );
 
         // CRT background (scope only)
-        painter.rect_filled(
-            rect,
-            4.0,
-            self.theme.c(&self.theme.scope_bg),
-        );
+        painter.rect_filled(rect, 4.0, self.theme.c(&self.theme.scope_bg));
 
         if !buf.is_empty() {
             // Scanlines
@@ -130,11 +126,7 @@ impl SynthApp {
         // Vertical stereo peak meter — drawn into the right strip using the same painter
         {
             let ch_w = (METER_W - 1.0) / 2.0;
-            painter.rect_filled(
-                meter_rect,
-                2.0,
-                self.theme.c(&self.theme.meter_bg),
-            );
+            painter.rect_filled(meter_rect, 2.0, self.theme.c(&self.theme.meter_bg));
 
             for (ci, peak_raw) in [peak_raw_l, peak_raw_r].iter().enumerate() {
                 let x_left = meter_rect.left() + ci as f32 * (ch_w + 1.0);
