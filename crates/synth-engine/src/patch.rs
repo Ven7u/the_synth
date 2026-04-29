@@ -249,7 +249,7 @@ fn default_shimmer_damp() -> f32 {
     0.4
 }
 fn default_shimmer_mix() -> f32 {
-    0.4
+    0.0
 }
 fn default_shimmer_amt() -> f32 {
     0.5
@@ -264,7 +264,7 @@ fn default_shimmer_pitch() -> u8 {
     1
 }
 fn default_crystal_mix() -> f32 {
-    0.35
+    0.0
 }
 fn default_crystal_grain() -> f32 {
     120.0

@@ -1,5 +1,5 @@
 use nih_plug::prelude::*;
-use nih_plug_egui::{create_egui_editor, egui, resizable_window::ResizableWindow, EguiState};
+use nih_plug_egui::{create_egui_editor, egui, EguiState};
 use std::sync::Arc;
 use synth_engine::Patch;
 use synth_ui::{
@@ -15,7 +15,7 @@ use crate::params::TheSynthParams;
 use crate::plugin_param_writer::PluginParamWriter;
 
 pub(crate) fn default_state() -> Arc<EguiState> {
-    EguiState::from_size(1300, 720)
+    EguiState::from_size(1050, 780)
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +253,97 @@ fn apply_patch(patch: &Patch, state: &mut SynthUiState, pw: &mut impl ParamWrite
     pw.set_global_volume(state.global_vol);
     pw.set_limiter_enabled(state.limiter_enabled);
     pw.set_limiter_threshold(state.limiter_threshold);
+
+    if !state.patch_load_fx {
+        return;
+    }
+
+    // FX chain — mix is gated by the on/off flag so an "off" effect with a
+    // non-zero saved mix value never bleeds into audio.
+    state.fx_overdrive_on = patch.fx_overdrive_on;
+    state.fx_overdrive_drive = patch.fx_overdrive_drive;
+    state.fx_overdrive_mix = patch.fx_overdrive_mix;
+    state.fx_overdrive_tone = patch.fx_overdrive_tone;
+    state.fx_overdrive_asym = patch.fx_overdrive_asym;
+    pw.set_fx_overdrive_drive(state.fx_overdrive_drive);
+    pw.set_fx_overdrive_mix(if state.fx_overdrive_on { state.fx_overdrive_mix } else { 0.0 });
+    pw.set_fx_overdrive_tone(state.fx_overdrive_tone);
+    pw.set_fx_overdrive_asym(state.fx_overdrive_asym);
+
+    state.fx_distortion_on = patch.fx_distortion_on;
+    state.fx_distortion_drive = patch.fx_distortion_drive;
+    state.fx_distortion_mix = patch.fx_distortion_mix;
+    state.fx_distortion_tone = patch.fx_distortion_tone;
+    state.fx_distortion_pre = patch.fx_distortion_pre;
+    pw.set_fx_distortion_drive(state.fx_distortion_drive);
+    pw.set_fx_distortion_mix(if state.fx_distortion_on { state.fx_distortion_mix } else { 0.0 });
+    pw.set_fx_distortion_tone(state.fx_distortion_tone);
+    pw.set_fx_distortion_pre(state.fx_distortion_pre);
+
+    state.fx_chorus_on = patch.fx_chorus_on;
+    state.fx_chorus_rate = patch.fx_chorus_rate;
+    state.fx_chorus_depth = patch.fx_chorus_depth;
+    state.fx_chorus_mix = patch.fx_chorus_mix;
+    pw.set_fx_chorus_rate(state.fx_chorus_rate);
+    pw.set_fx_chorus_depth(state.fx_chorus_depth);
+    pw.set_fx_chorus_mix(if state.fx_chorus_on { state.fx_chorus_mix } else { 0.0 });
+
+    state.fx_delay_on = patch.fx_delay_on;
+    state.fx_delay_time = patch.fx_delay_time;
+    state.fx_delay_feedback = patch.fx_delay_feedback;
+    state.fx_delay_mix = patch.fx_delay_mix;
+    state.fx_delay_sync = patch.fx_delay_sync;
+    state.fx_delay_division = patch.fx_delay_division;
+    pw.set_fx_delay_time(state.fx_delay_time);
+    pw.set_fx_delay_feedback(state.fx_delay_feedback);
+    pw.set_fx_delay_mix(if state.fx_delay_on { state.fx_delay_mix } else { 0.0 });
+
+    state.fx_reverb_on = patch.fx_reverb_on;
+    state.fx_reverb_size = patch.fx_reverb_size;
+    state.fx_reverb_damp = patch.fx_reverb_damp;
+    state.fx_reverb_mix = patch.fx_reverb_mix;
+    state.fx_reverb_predelay = patch.fx_reverb_predelay;
+    state.fx_reverb_type = patch.fx_reverb_type;
+    pw.set_fx_reverb_size(state.fx_reverb_size);
+    pw.set_fx_reverb_damp(state.fx_reverb_damp);
+    pw.set_fx_reverb_mix(if state.fx_reverb_on { state.fx_reverb_mix } else { 0.0 });
+    pw.set_fx_reverb_predelay(state.fx_reverb_predelay);
+    pw.set_fx_reverb_type(state.fx_reverb_type);
+
+    state.stereo_spread = patch.stereo_spread;
+    state.stereo_width = patch.stereo_width;
+    pw.set_stereo_spread(state.stereo_spread);
+    pw.set_stereo_width(state.stereo_width);
+
+    state.fx_shimmer_on = patch.fx_shimmer_on;
+    state.fx_shimmer_size = patch.fx_shimmer_size;
+    state.fx_shimmer_damp = patch.fx_shimmer_damp;
+    state.fx_shimmer_mix = patch.fx_shimmer_mix;
+    state.fx_shimmer_amt = patch.fx_shimmer_amt;
+    state.fx_shimmer_width = patch.fx_shimmer_width;
+    state.fx_shimmer_spread = patch.fx_shimmer_spread;
+    state.fx_shimmer_pitch = patch.fx_shimmer_pitch;
+    pw.set_shimmer_size(state.fx_shimmer_size);
+    pw.set_shimmer_damp(state.fx_shimmer_damp);
+    pw.set_shimmer_mix(if state.fx_shimmer_on { state.fx_shimmer_mix } else { 0.0 });
+    pw.set_shimmer_amount(state.fx_shimmer_amt);
+    pw.set_shimmer_width(state.fx_shimmer_width);
+    pw.set_shimmer_spread(state.fx_shimmer_spread);
+    pw.set_shimmer_pitch(state.fx_shimmer_pitch);
+
+    state.fx_crystal_on = patch.fx_crystal_on;
+    state.fx_crystal_grain_ms = patch.fx_crystal_grain_ms;
+    state.fx_crystal_scatter = patch.fx_crystal_scatter;
+    state.fx_crystal_feedback = patch.fx_crystal_feedback;
+    state.fx_crystal_delay_ms = patch.fx_crystal_delay_ms;
+    state.fx_crystal_mix = patch.fx_crystal_mix;
+    state.fx_crystal_pitch = patch.fx_crystal_pitch;
+    pw.set_crystal_grain(state.fx_crystal_grain_ms);
+    pw.set_crystal_scatter(state.fx_crystal_scatter);
+    pw.set_crystal_feedback(state.fx_crystal_feedback);
+    pw.set_crystal_delay(state.fx_crystal_delay_ms);
+    pw.set_crystal_mix(if state.fx_crystal_on { state.fx_crystal_mix } else { 0.0 });
+    pw.set_crystal_pitch(state.fx_crystal_pitch);
 }
 
 // ---------------------------------------------------------------------------
@@ -315,14 +406,15 @@ fn draw_header(
 
         ui.separator();
 
-        let browse_label = if state.browser_open {
-            "▲ Close"
-        } else {
-            "⊞ Browse"
-        };
+        let browse_label = if state.browser_open { "▲ Close" } else { "⊞ Browse" };
         if ui.button(browse_label).clicked() {
             state.browser_open = !state.browser_open;
         }
+
+        ui.selectable_label(state.patch_load_fx, "Load FX")
+            .on_hover_text("When enabled, loading a patch also replaces the FX chain settings")
+            .clicked()
+            .then(|| state.patch_load_fx = !state.patch_load_fx);
 
         // Right-aligned master vol + limiter
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -406,7 +498,8 @@ fn draw_patch_browser(
         .show(ui, |ui| {
             egui::Grid::new("patch_grid")
                 .num_columns(2)
-                .min_col_width(ui.available_width() / 2.0 - 8.0)
+                .min_col_width(180.0)
+                .max_col_width(320.0)
                 .min_row_height(row_height)
                 .show(ui, |ui| {
                     for (idx, patch) in visible.iter().enumerate() {
@@ -455,7 +548,6 @@ pub(crate) fn create_editor(
 ) -> Option<Box<dyn Editor>> {
     let patches = Arc::new(load_patches());
     let theme = midnight();
-    let state_for_resize = Arc::clone(&editor_state);
 
     create_egui_editor(
         editor_state,
@@ -471,93 +563,65 @@ pub(crate) fn create_editor(
                 setter,
             };
 
-            ResizableWindow::new("synth_resize")
-                .min_size([900.0, 500.0])
-                .show(ctx, &state_for_resize, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        // ── Header ────────────────────────────────────────────────
-                        draw_header(ui, state, &patches, &mut pw, &theme);
-                        ui.separator();
+            egui::CentralPanel::default().show(ctx, |ui| {
+                // Vertical scroll is the escape valve when the patch browser
+                // is open. Core synthesis controls fit the 1050×780 window.
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    // ── Header ────────────────────────────────────────────────
+                    draw_header(ui, state, &patches, &mut pw, &theme);
+                    ui.separator();
 
-                        // ── Inline patch browser ──────────────────────────────────
-                        if state.browser_open {
-                            draw_patch_browser(ui, state, &patches, &mut pw, &theme);
-                            ui.separator();
+                    // ── Inline patch browser ──────────────────────────────────
+                    if state.browser_open {
+                        draw_patch_browser(ui, state, &patches, &mut pw, &theme);
+                        ui.separator();
+                    }
+
+                    // ── ROW 1: OSC bank ──────────────────────────────────────
+                    // Each OSC gets exactly 1/3 of the available width so that
+                    // chip_w calculations inside each panel use the right value.
+                    ui.horizontal(|ui| {
+                        let osc_w = (ui.available_width() / 3.0).floor();
+                        for i in 0..3 {
+                            ui.vertical(|ui| {
+                                ui.set_max_width(osc_w);
+                                ui_osc_panel(ui, state, &mut pw, &theme, i, false);
+                            });
                         }
+                    });
+                    ui_mixer_panel(ui, state, &mut pw, &theme);
+                    ui.separator();
 
-                        // ── ROW 1: OSC bank ──────────────────────────────────────
-                        // Each OSC panel is given exactly 1/3 of available width so
-                        // that chip_w calculations inside the panel use the right value.
-                        ui.horizontal(|ui| {
-                            let osc_w = (ui.available_width() / 3.0).floor();
-                            for i in 0..3 {
-                                ui.vertical(|ui| {
-                                    ui.set_max_width(osc_w);
-                                    ui_osc_panel(ui, state, &mut pw, &theme, i, false);
-                                });
-                            }
+                    // ── ROW 2: Filter | Envelopes | Modulation (full width) ──
+                    // Three equal columns — no FX here so each column gets ~350 px
+                    // at 1050 px window width, comfortably fitting filter knobs.
+                    ui.horizontal(|ui| {
+                        let col_w = (ui.available_width() - theme.sp_sm * 2.0) / 3.0;
+                        ui.vertical(|ui| {
+                            ui.set_max_width(col_w);
+                            ui_filter_panel(ui, state, &mut pw, &theme);
                         });
-                        ui.horizontal(|ui| {
-                            ui_mixer_panel(ui, state, &mut pw, &theme);
+                        ui.vertical(|ui| {
+                            ui.set_max_width(col_w);
+                            ui_adsr_panel(ui, state, &mut pw, &theme, "FILTER ENV", true, &[]);
+                            ui.add_space(theme.sp_xs);
+                            ui_adsr_panel(ui, state, &mut pw, &theme, "AMP", false, &[]);
                         });
-                        ui.separator();
-
-                        // ── ROW 2: Filter+Env+LFO (left) | FX chain (right) ──────
-                        ui.horizontal(|ui| {
-                            let total_w = ui.available_width();
-                            let fx_w = 420.0_f32.min(total_w * 0.35);
-                            let left_w = total_w - fx_w - theme.sp_sm;
-
-                            // Left column: filter, envelopes, modulation
-                            ui.vertical(|ui| {
-                                ui.set_max_width(left_w);
-                                let col_w = (left_w - theme.sp_sm * 2.0) / 3.0;
-                                ui.horizontal(|ui| {
-                                    ui.vertical(|ui| {
-                                        ui.set_max_width(col_w);
-                                        ui_filter_panel(ui, state, &mut pw, &theme);
-                                    });
-                                    ui.vertical(|ui| {
-                                        ui.set_max_width(col_w);
-                                        ui_adsr_panel(
-                                            ui,
-                                            state,
-                                            &mut pw,
-                                            &theme,
-                                            "FILTER ENV",
-                                            true,
-                                            &[],
-                                        );
-                                        ui.add_space(theme.sp_xs);
-                                        ui_adsr_panel(
-                                            ui,
-                                            state,
-                                            &mut pw,
-                                            &theme,
-                                            "AMP",
-                                            false,
-                                            &[],
-                                        );
-                                    });
-                                    ui.vertical(|ui| {
-                                        ui.set_max_width(col_w);
-                                        ui_lfo_panel(ui, state, &mut pw, &theme);
-                                        ui.add_space(theme.sp_xs);
-                                        ui_lfo2_panel(ui, state, &mut pw, &theme);
-                                    });
-                                });
-                            });
-
-                            ui.separator();
-
-                            // Right column: vertical FX strip
-                            ui.vertical(|ui| {
-                                ui.set_max_width(fx_w);
-                                ui_fx_chain_vertical(ui, state, &mut pw, &theme);
-                            });
+                        ui.vertical(|ui| {
+                            ui.set_max_width(col_w);
+                            ui_lfo_panel(ui, state, &mut pw, &theme);
+                            ui.add_space(theme.sp_xs);
+                            ui_lfo2_panel(ui, state, &mut pw, &theme);
                         });
                     });
+                    ui.separator();
+
+                    // ── ROW 3: FX chain (full width) ─────────────────────────
+                    // Each effect row needs ~460 px (toggle + 4 label/DragValue
+                    // pairs). Full window width gives 1050 px — no clipping.
+                    ui_fx_chain_vertical(ui, state, &mut pw, &theme);
                 });
+            });
         },
     )
 }

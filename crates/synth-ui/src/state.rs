@@ -134,6 +134,7 @@ pub struct SynthUiState {
     pub browser_search: String,
     pub browser_category: usize, // 0 = All
     pub current_patch_name: String,
+    pub patch_load_fx: bool,
 }
 
 impl Default for SynthUiState {
@@ -251,6 +252,7 @@ impl Default for SynthUiState {
             browser_search: String::new(),
             browser_category: 0,
             current_patch_name: "Init".to_string(),
+            patch_load_fx: false,
         }
     }
 }
