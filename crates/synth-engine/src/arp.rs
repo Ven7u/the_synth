@@ -323,6 +323,7 @@ impl ArpState {
         self.held[..n].copy_from_slice(&notes[..n]);
         self.held_count = n;
         self.step_idx = 0;
+        self.restart_pending = true;
         self.rebuild_sorted();
     }
 
