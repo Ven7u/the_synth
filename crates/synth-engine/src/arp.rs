@@ -291,9 +291,17 @@ impl ArpState {
         if self.held[..self.held_count].contains(&pitch) {
             return;
         }
+        let was_empty = self.held_count == 0;
         self.held[self.held_count] = pitch;
         self.held_count += 1;
         self.rebuild_sorted();
+        // First note of a fresh chord: rewind so step 0 plays index 0
+        // (lowest in Up mode) instead of advancing past it.
+        if was_empty {
+            self.step_idx = 0;
+            self.direction = 1;
+            self.restart_pending = true;
+        }
     }
 
     /// Call from callback when arp is enabled and a NoteOff arrives.
