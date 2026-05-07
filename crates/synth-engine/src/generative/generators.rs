@@ -79,6 +79,10 @@ pub enum GenerativeMode {
     /// Global Markov music engine (Phase 8.3). When set on track 0, all tracks
     /// are driven by `MarkovEngine`; per-track Euclidean/ProbTable modes are ignored.
     Markov = 4,
+    /// Human-authored step sequence: a fixed loop of note/chord steps.
+    Step = 5,
+    /// Human-authored step sequence with per-step fire probability.
+    StepProb = 6,
 }
 
 impl GenerativeMode {
@@ -88,6 +92,8 @@ impl GenerativeMode {
             2 => Self::ProbTable,
             3 => Self::ScaleWalk,
             4 => Self::Markov,
+            5 => Self::Step,
+            6 => Self::StepProb,
             _ => Self::Off,
         }
     }
@@ -97,9 +103,18 @@ impl GenerativeMode {
         Self::ProbTable,
         Self::ScaleWalk,
         Self::Markov,
+        Self::Step,
+        Self::StepProb,
     ];
-    pub const LABELS: &'static [&'static str] =
-        &["Off", "Euclidean", "Prob.Table", "ScaleWalk", "Markov"];
+    pub const LABELS: &'static [&'static str] = &[
+        "Off",
+        "Euclidean",
+        "Prob.Table",
+        "ScaleWalk",
+        "Markov",
+        "Step",
+        "Step+Prob",
+    ];
 }
 
 // ===========================================================================

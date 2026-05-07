@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8};
 use std::sync::Arc;
 
 use crate::arp::{ArpShared, ScaleWalkerShared};
+use crate::drum::{DrumDspState, DrumTrackState};
 use synth_dsp::crystallizer::{Crystallizer, CrystallizerShared};
 use synth_dsp::dynamics::PeakLimiter;
 use synth_dsp::envelope::LiveAdsr;
@@ -522,6 +523,10 @@ pub struct MultiTrackEngine {
     out_limiter: PeakLimiter,
     sr: f64,
     smoothed_freqs: Vec<Vec<f32>>,
+
+    // Drum track (optional; enabled via enable_drum_track)
+    pub drum_state: Option<DrumTrackState>,
+    drum_dsp: Option<DrumDspState>,
 }
 
 impl MultiTrackEngine {
@@ -547,6 +552,16 @@ impl MultiTrackEngine {
             out_limiter: PeakLimiter::new(sr as f32, 2.0, 80.0),
             sr,
             smoothed_freqs,
+            drum_state: None,
+            drum_dsp: None,
+        }
+    }
+
+    /// Enable the drum track. Safe to call before the audio stream starts.
+    pub fn enable_drum_track(&mut self) {
+        if self.drum_state.is_none() {
+            self.drum_state = Some(DrumTrackState::new());
+            self.drum_dsp = Some(DrumDspState::new());
         }
     }
 
@@ -616,6 +631,20 @@ impl MultiTrackEngine {
         }
     }
 
+    /// Call on every bar boundary to refresh the drum pattern snapshot.
+    pub fn tick_drum_bar(&mut self) {
+        if let (Some(dsp), Some(state)) = (&mut self.drum_dsp, &self.drum_state) {
+            dsp.on_bar(state);
+        }
+    }
+
+    /// Call on every subdivision (step) boundary to advance the drum sequencer.
+    pub fn tick_drum_step(&mut self) {
+        if let (Some(dsp), Some(state)) = (&mut self.drum_dsp, &self.drum_state) {
+            dsp.on_step(state);
+        }
+    }
+
     /// Get one stereo sample pair summed from all tracks.
     /// Call `tick_glide` once per buffer and `tick_lfo_sample` once per sample before this.
     #[inline]
@@ -662,7 +691,13 @@ impl MultiTrackEngine {
             0.0
         };
 
-        let dry = dry_sum / TRACK_COUNT as f32;
+        let drum_sample = if let (Some(dsp), Some(state)) = (&mut self.drum_dsp, &self.drum_state) {
+            dsp.tick_sample(state, self.sr as f32)
+        } else {
+            0.0
+        };
+
+        let dry = dry_sum / TRACK_COUNT as f32 + drum_sample;
         let wet_total = (shim_mix + crys_mix).clamp(0.0, 1.0);
         let mix = dry * (1.0 - wet_total) + shim_mix * shim_wet + crys_mix * crys_wet;
         let mut out_pre = mix * self.master_vol.value();

@@ -43,8 +43,8 @@ fn patches_dir() -> std::path::PathBuf {
     }
     if let Ok(exe) = std::env::current_exe() {
         let bundle_path = exe
-            .parent()                  // Contents/MacOS
-            .and_then(|p| p.parent())  // Contents
+            .parent() // Contents/MacOS
+            .and_then(|p| p.parent()) // Contents
             .map(|p| p.join("Resources").join("assets").join("patches"));
         if let Some(p) = bundle_path {
             if p.is_dir() {
