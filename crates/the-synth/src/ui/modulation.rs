@@ -1,7 +1,7 @@
 use crate::ui::frame::SynthFrame;
 use crate::SynthApp;
 use eframe::egui;
-use egui::{Color32, Pos2, RichText, Stroke};
+use egui::{Color32, Pos2, RichText, Stroke, StrokeKind};
 
 /// (label, beats_per_cycle) — beats relative to a quarter note.
 /// rate_hz = bpm / 60.0 / beats_per_cycle
@@ -649,7 +649,7 @@ fn draw_lp_response_curve(
 
     // ── Background ────────────────────────────────────────────────────────
     let bg = Color32::from_rgba_premultiplied(accent.r() / 6, accent.g() / 6, accent.b() / 6, 140);
-    painter.rect_filled(rect, egui::Rounding::same(5.0), bg);
+    painter.rect_filled(rect, 5.0, bg);
 
     // ── Grid — log-spaced vertical frequency lines ────────────────────────
     let grid_col = Color32::from_gray(42);
@@ -764,8 +764,9 @@ fn draw_lp_response_curve(
     // Border (drawn last so it's on top of the curve)
     painter.rect_stroke(
         rect,
-        egui::Rounding::same(5.0),
+        5.0,
         egui::Stroke::new(1.0, border_col),
+        StrokeKind::Middle,
     );
 }
 
@@ -782,7 +783,7 @@ pub fn draw_adsr_visualizer(
     );
     let rect = resp.rect;
 
-    painter.rect_filled(rect, egui::Rounding::same(3.0), theme.c(&theme.bg_adsr));
+    painter.rect_filled(rect, 3.0, theme.c(&theme.bg_adsr));
 
     let a = adsr[0];
     let d = adsr[1];

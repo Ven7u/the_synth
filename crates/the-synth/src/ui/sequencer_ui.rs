@@ -1,7 +1,7 @@
 use crate::sequencer::{chord_name, chord_quality, ScaleType, SeqMode, DEGREE_LABELS, NOTE_NAMES};
 use crate::SynthApp;
 use eframe::egui;
-use egui::{Color32, Rounding, Sense, Stroke, Vec2};
+use egui::{Color32, Rounding, Sense, Stroke, StrokeKind, Vec2};
 use std::sync::atomic::Ordering;
 
 const SEQ_CHROMATIC: &[u8] = &[
@@ -254,11 +254,7 @@ impl SynthApp {
                     let (bar_resp, painter) =
                         ui.allocate_painter(Vec2::new(step_w, bar_area_h), Sense::click_and_drag());
                     let r = bar_resp.rect;
-                    painter.rect_filled(
-                        r,
-                        Rounding::same(4.0),
-                        self.theme.c(&self.theme.bg_seq_bar),
-                    );
+                    painter.rect_filled(r, 4.0, self.theme.c(&self.theme.bg_seq_bar));
                     let t = (note_f - midi_min) / (midi_max - midi_min);
                     let bar_h = (t * (bar_area_h - 4.0)).max(4.0);
                     let bar_rect = egui::Rect::from_min_size(
@@ -272,7 +268,7 @@ impl SynthApp {
                     } else {
                         self.theme.c(&self.theme.seq_note_bar_off)
                     };
-                    painter.rect_filled(bar_rect, Rounding::same(3.0), bar_color);
+                    painter.rect_filled(bar_rect, 3.0, bar_color);
                     painter.text(
                         r.center(),
                         egui::Align2::CENTER_CENTER,
@@ -309,10 +305,10 @@ impl SynthApp {
                         self.theme.c(&self.theme.seq_step_off)
                     };
                     let (r, painter) = ui.allocate_painter(Vec2::new(step_w, 28.0), Sense::click());
-                    painter.rect_filled(r.rect, Rounding::same(5.0), fill);
+                    painter.rect_filled(r.rect, 5.0, fill);
                     painter.rect_stroke(
                         r.rect,
-                        Rounding::same(5.0),
+                        5.0,
                         Stroke::new(
                             1.0,
                             if is_current {
@@ -321,6 +317,7 @@ impl SynthApp {
                                 Color32::GRAY
                             },
                         ),
+                        StrokeKind::Middle,
                     );
                     if r.clicked() {
                         let mut ns = self.seq.note_seq.lock().unwrap();
@@ -358,11 +355,7 @@ impl SynthApp {
                     let (bar_resp, painter) =
                         ui.allocate_painter(Vec2::new(step_w, bar_area_h), Sense::click_and_drag());
                     let r = bar_resp.rect;
-                    painter.rect_filled(
-                        r,
-                        Rounding::same(4.0),
-                        self.theme.c(&self.theme.bg_seq_bar),
-                    );
+                    painter.rect_filled(r, 4.0, self.theme.c(&self.theme.bg_seq_bar));
                     let t = degree as f32 / 6.0;
                     let bar_h = (t * (bar_area_h - 4.0)).max(4.0);
                     let bar_rect = egui::Rect::from_min_size(
@@ -381,7 +374,7 @@ impl SynthApp {
                     } else {
                         self.theme.c(&self.theme.seq_chord_major)
                     };
-                    painter.rect_filled(bar_rect, Rounding::same(3.0), bar_color);
+                    painter.rect_filled(bar_rect, 3.0, bar_color);
 
                     let cname = chord_name(root, scale, degree);
                     painter.text(
@@ -424,10 +417,10 @@ impl SynthApp {
                         self.theme.c(&self.theme.seq_step_off)
                     };
                     let (r, painter) = ui.allocate_painter(Vec2::new(step_w, 28.0), Sense::click());
-                    painter.rect_filled(r.rect, Rounding::same(5.0), fill);
+                    painter.rect_filled(r.rect, 5.0, fill);
                     painter.rect_stroke(
                         r.rect,
-                        Rounding::same(5.0),
+                        5.0,
                         Stroke::new(
                             1.0,
                             if is_current {
@@ -436,6 +429,7 @@ impl SynthApp {
                                 Color32::GRAY
                             },
                         ),
+                        StrokeKind::Middle,
                     );
                     if r.clicked() {
                         let mut cs = self.seq.chord_seq.lock().unwrap();

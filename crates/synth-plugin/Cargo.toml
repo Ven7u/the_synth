@@ -1,0 +1,17 @@
+[package]
+name = "synth-plugin"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+synth-engine  = { path = "../synth-engine" }
+synth-dsp     = { path = "../synth-dsp" }
+synth-control = { path = "../synth-control" }
+synth-ui      = { path = "../synth-ui" }
+fundsp        = { version = "0.23", features = ["files", "fft"] }
+nih-plug      = { workspace = true }
+nih-plug-egui = { workspace = true }
+serde_json    = "1"

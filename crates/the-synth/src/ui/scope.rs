@@ -71,11 +71,7 @@ impl SynthApp {
         );
 
         // CRT background (scope only)
-        painter.rect_filled(
-            rect,
-            Rounding::same(4.0),
-            self.theme.c(&self.theme.scope_bg),
-        );
+        painter.rect_filled(rect, 4.0, self.theme.c(&self.theme.scope_bg));
 
         if !buf.is_empty() {
             // Scanlines
@@ -130,11 +126,7 @@ impl SynthApp {
         // Vertical stereo peak meter — drawn into the right strip using the same painter
         {
             let ch_w = (METER_W - 1.0) / 2.0;
-            painter.rect_filled(
-                meter_rect,
-                Rounding::same(2.0),
-                self.theme.c(&self.theme.meter_bg),
-            );
+            painter.rect_filled(meter_rect, 2.0, self.theme.c(&self.theme.meter_bg));
 
             for (ci, peak_raw) in [peak_raw_l, peak_raw_r].iter().enumerate() {
                 let x_left = meter_rect.left() + ci as f32 * (ch_w + 1.0);
@@ -291,7 +283,7 @@ pub fn draw_peak_meter(
     let (resp, painter) =
         ui.allocate_painter(Vec2::new(ui.available_width(), 14.0), Sense::hover());
     let rect = resp.rect;
-    painter.rect_filled(rect, Rounding::same(2.0), theme.c(&theme.meter_bg));
+    painter.rect_filled(rect, 2.0, theme.c(&theme.meter_bg));
 
     let max_display = 1.5_f32;
     let bar_frac = (level / max_display).clamp(0.0, 1.0);
@@ -313,7 +305,7 @@ pub fn draw_peak_meter(
             theme.c(&theme.meter_clip)
         };
         let bar_rect = Rect::from_min_size(rect.min, Vec2::new(bar_w, rect.height()));
-        painter.rect_filled(bar_rect, Rounding::same(2.0), color);
+        painter.rect_filled(bar_rect, 2.0, color);
     }
 
     let unity_x = rect.left() + rect.width() * (1.0 / max_display);

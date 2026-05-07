@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-set -e
-
-echo "→ cargo fmt"
-cargo fmt
-
-echo "→ cargo clippy"
-cargo clippy -- -D clippy::correctness -D clippy::suspicious

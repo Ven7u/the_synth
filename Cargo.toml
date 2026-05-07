@@ -4,6 +4,10 @@ members = [
     "crates/*",
 ]
 
+[workspace.dependencies]
+nih-plug      = { git = "https://github.com/robbert-vdh/nih-plug", package = "nih_plug" }
+nih-plug-egui = { git = "https://github.com/robbert-vdh/nih-plug", package = "nih_plug_egui" }
+
 [profile.dev]
 opt-level = 2
 

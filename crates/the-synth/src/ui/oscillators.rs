@@ -548,7 +548,7 @@ fn draw_wave_preview(
     line_color: Color32,
     rounding: f32,
 ) {
-    painter.rect_filled(rect, egui::Rounding::same(rounding), bg);
+    painter.rect_filled(rect, rounding, bg);
 
     let w = rect.width();
     let h = rect.height();

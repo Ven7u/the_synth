@@ -9,16 +9,17 @@ synth-dsp     = { path = "../synth-dsp" }
 synth-engine  = { path = "../synth-engine" }
 synth-control = { path = "../synth-control" }
 synth-common  = { path = "../synth-common" }
+synth-ui      = { path = "../synth-ui" }
 
 # Dipendenze esterne (spostate dalla root)
 fundsp      = { version = "0.23", features = ["files", "fft"] }
 cpal        = "0.15"
 anyhow      = "1"
-eframe      = "0.29"
-egui        = "0.29"
+eframe      = "0.31"
+egui        = "0.31"
 midir       = "0.9"
 serde       = { version = "1", features = ["derive"] }
 serde_json  = "1"
 rfd         = "0.15"
-egui_dock = "0.14.0"
+egui_dock = "0.16"
 hound       = "3"

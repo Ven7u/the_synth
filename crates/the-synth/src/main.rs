@@ -4,6 +4,7 @@
 #![allow(clippy::precedence)]
 
 mod audio;
+mod engine_param_writer;
 mod patch;
 mod recorder;
 mod sequencer;
@@ -627,85 +628,75 @@ impl eframe::App for SynthApp {
         // ── Zones 2 + 3: central editing area (dock in Studio, placeholder in Live) ──
         egui::CentralPanel::default()
             .frame(SynthFrame::app_bg(&self.theme))
-            .show(ctx, |ui| {
-                match self.app_mode {
-                    AppMode::Studio => {
-                        if self.reset_layout_pending {
-                            self.dock_state = ui::dock::default_dock_state();
-                            self.reset_layout_pending = false;
-                        }
-                        let mut dock_state = std::mem::replace(
-                            &mut self.dock_state,
-                            egui_dock::DockState::new(vec![]),
+            .show(ctx, |ui| match self.app_mode {
+                AppMode::Studio => {
+                    if self.reset_layout_pending {
+                        self.dock_state = ui::dock::default_dock_state();
+                        self.reset_layout_pending = false;
+                    }
+                    let mut dock_state =
+                        std::mem::replace(&mut self.dock_state, egui_dock::DockState::new(vec![]));
+                    let mut dock_style = egui_dock::Style::from_egui(ui.style());
+                    dock_style.separator.width = 6.0;
+                    dock_style.separator.color_idle = egui::Color32::TRANSPARENT;
+                    dock_style.separator.color_hovered = egui::Color32::from_black_alpha(60);
+                    dock_style.separator.color_dragged = egui::Color32::from_black_alpha(100);
+                    dock_style.dock_area_padding = Some(egui::Margin::same(6));
+                    let rm = self.theme.rounding_md as u8;
+                    let r_top = egui::CornerRadius {
+                        nw: rm,
+                        ne: rm,
+                        sw: 0,
+                        se: 0,
+                    };
+                    let r_body = egui::CornerRadius {
+                        nw: 0,
+                        ne: rm,
+                        sw: rm,
+                        se: rm,
+                    };
+                    let bg_app = self.theme.c(&self.theme.bg_app);
+                    let bg_surface = self.theme.c(&self.theme.bg_surface);
+                    let border = self.theme.c(&self.theme.border);
+                    let text_pri = self.theme.c(&self.theme.text_primary);
+                    let text_sec = self.theme.c(&self.theme.text_secondary);
+                    let accent = self.theme.c(&self.theme.accent);
+                    dock_style.tab.tab_body.corner_radius = r_body;
+                    dock_style.tab.tab_body.stroke =
+                        egui::Stroke::new(self.theme.stroke_ui, border);
+                    dock_style.tab_bar.bg_fill = egui::Color32::TRANSPARENT;
+                    dock_style.tab_bar.hline_color = egui::Color32::TRANSPARENT;
+                    dock_style.tab_bar.corner_radius = r_body;
+                    dock_style.tab_bar.height = 28.0;
+                    dock_style.tab.active.corner_radius = r_top;
+                    dock_style.tab.active.bg_fill = bg_surface;
+                    dock_style.tab.active.text_color = text_pri;
+                    dock_style.tab.active.outline_color = accent;
+                    dock_style.tab.focused.corner_radius = r_top;
+                    dock_style.tab.focused.bg_fill = bg_surface;
+                    dock_style.tab.focused.text_color = accent;
+                    dock_style.tab.focused.outline_color = accent;
+                    dock_style.tab.inactive.corner_radius = r_top;
+                    dock_style.tab.inactive.bg_fill = egui::Color32::TRANSPARENT;
+                    dock_style.tab.inactive.text_color = text_sec;
+                    dock_style.tab.inactive.outline_color = egui::Color32::TRANSPARENT;
+                    dock_style.tab.hovered.corner_radius = r_top;
+                    dock_style.tab.hovered.bg_fill = bg_surface;
+                    dock_style.tab.hovered.text_color = text_pri;
+                    dock_style.tab.hovered.outline_color = border;
+                    egui_dock::DockArea::new(&mut dock_state)
+                        .style(dock_style)
+                        .show_inside(ui, &mut ui::dock::SynthTabViewer { app: self });
+                    self.dock_state = dock_state;
+                }
+                AppMode::Live => {
+                    ui.centered_and_justified(|ui| {
+                        ui.label(
+                            egui::RichText::new("LIVE MODE — coming soon.")
+                                .size(18.0)
+                                .color(self.theme.c(&self.theme.text_secondary)),
                         );
-                        let mut dock_style = egui_dock::Style::from_egui(ui.style());
-                        dock_style.separator.width = 6.0;
-                        dock_style.separator.color_idle = egui::Color32::TRANSPARENT;
-                        dock_style.separator.color_hovered = egui::Color32::from_black_alpha(60);
-                        dock_style.separator.color_dragged = egui::Color32::from_black_alpha(100);
-                        dock_style.dock_area_padding = Some(egui::Margin::same(6.0));
-                        let rm = self.theme.rounding_md;
-                        let r_top = egui::Rounding {
-                            nw: rm,
-                            ne: rm,
-                            sw: 0.0,
-                            se: 0.0,
-                        };
-                        let r_body = egui::Rounding {
-                            nw: 0.0,
-                            ne: rm,
-                            sw: rm,
-                            se: rm,
-                        };
-                        let bg_app = self.theme.c(&self.theme.bg_app);
-                        let bg_surface = self.theme.c(&self.theme.bg_surface);
-                        let border = self.theme.c(&self.theme.border);
-                        let text_pri = self.theme.c(&self.theme.text_primary);
-                        let text_sec = self.theme.c(&self.theme.text_secondary);
-                        let accent = self.theme.c(&self.theme.accent);
-                        // Tab body: rounded corners + subtle border
-                        dock_style.tab.tab_body.rounding = r_body;
-                        dock_style.tab.tab_body.stroke =
-                            egui::Stroke::new(self.theme.stroke_ui, border);
-                        // Tab bar: transparent so the panel background shows through
-                        dock_style.tab_bar.bg_fill = egui::Color32::TRANSPARENT;
-                        dock_style.tab_bar.hline_color = egui::Color32::TRANSPARENT;
-                        dock_style.tab_bar.rounding = r_body;
-                        dock_style.tab_bar.height = 28.0;
-                        // Active tab: raised (bg_surface), top-only rounding, accent outline
-                        dock_style.tab.active.rounding = r_top;
-                        dock_style.tab.active.bg_fill = bg_surface;
-                        dock_style.tab.active.text_color = text_pri;
-                        dock_style.tab.active.outline_color = accent;
-                        // Focused: same as active with accent text
-                        dock_style.tab.focused.rounding = r_top;
-                        dock_style.tab.focused.bg_fill = bg_surface;
-                        dock_style.tab.focused.text_color = accent;
-                        dock_style.tab.focused.outline_color = accent;
-                        // Inactive: transparent, dimmed text
-                        dock_style.tab.inactive.rounding = r_top;
-                        dock_style.tab.inactive.bg_fill = egui::Color32::TRANSPARENT;
-                        dock_style.tab.inactive.text_color = text_sec;
-                        dock_style.tab.inactive.outline_color = egui::Color32::TRANSPARENT;
-                        // Hovered: slightly raised
-                        dock_style.tab.hovered.rounding = r_top;
-                        dock_style.tab.hovered.bg_fill = bg_surface;
-                        dock_style.tab.hovered.text_color = text_pri;
-                        dock_style.tab.hovered.outline_color = border;
-                        egui_dock::DockArea::new(&mut dock_state)
-                            .style(dock_style)
-                            .show_inside(ui, &mut ui::dock::SynthTabViewer { app: self });
-                        self.dock_state = dock_state;
-                    }
-                    AppMode::Live => {
-                        ui.centered_and_justified(|ui| {
-                            ui.label(
-                                egui::RichText::new("LIVE MODE — coming soon.")
-                                    .size(18.0)
-                                    .color(self.theme.c(&self.theme.text_secondary)),
-                            );
-                        });
-                    }
+                    });
                 }
             });
 
