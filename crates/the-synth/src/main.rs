@@ -215,6 +215,7 @@ pub(crate) struct SynthApp {
     pub(crate) scope_height: f32,
     pub(crate) scope_x_scale: f32,
     pub(crate) scope_y_scale: f32,
+    pub(crate) show_voice_debug: bool,
 
     // Patch system
     pub(crate) patch_name: String,
@@ -377,6 +378,7 @@ impl SynthApp {
             scope_height: 140.0,
             scope_x_scale: 1.0,
             scope_y_scale: 2.5,
+            show_voice_debug: false,
             patch_name: "Init".into(),
             patch_library: default_patches(),
             patch_browser_open: false,
@@ -873,6 +875,9 @@ impl SynthApp {
     pub(crate) fn apply_patch(&mut self, p: Patch) {
         // Silence all voices before changing parameters to prevent Moog filter blowup.
         self.all_notes_off();
+        // Clear FX tail buffers so old reverb/delay from the previous patch does not
+        // bleed into the new sound. Runs on the next audio callback tick.
+        self.engine.reset_fx_tails();
 
         // -- Sync UI mirror fields from the patch. Only the fields still
         // living on the UI mirror get copied. Fields that the engine

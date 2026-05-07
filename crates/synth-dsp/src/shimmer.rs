@@ -17,6 +17,14 @@ use fundsp::prelude32::{shared, Shared};
 use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 
+/// Replace non-finite values (NaN, ±Inf) with 0.0 before writing to circular
+/// buffers. A single NaN written to a delay line circulates forever; this
+/// guard prevents permanent buffer poisoning at no cost on the normal path.
+#[inline(always)]
+fn sanitize(x: f32) -> f32 {
+    if x.is_finite() { x } else { 0.0 }
+}
+
 // ---------------------------------------------------------------------------
 // ShimmerShared — UI ↔ audio thread parameter bridge
 // ---------------------------------------------------------------------------
@@ -171,7 +179,7 @@ impl PlateState {
             let len = self.id_buf[i].len();
             let pos = self.id_pos[i];
             let buf = self.id_buf[i][pos];
-            self.id_buf[i][pos] = diff + buf * gi;
+            self.id_buf[i][pos] = sanitize(diff + buf * gi);
             self.id_pos[i] = (pos + 1) % len;
             diff = buf - diff * gi;
         }
@@ -185,7 +193,7 @@ impl PlateState {
         let ma_delay = (ma_base + self.ma_lfo.sin() * ma_mod).max(1.0);
         let u_old = frac_read(&self.ma_buf, self.ma_pos, ma_delay);
         const MA_G: f32 = 0.6;
-        self.ma_buf[self.ma_pos] = (1.0 - MA_G * MA_G) * tank_in + MA_G * u_old;
+        self.ma_buf[self.ma_pos] = sanitize((1.0 - MA_G * MA_G) * tank_in + MA_G * u_old);
         self.ma_pos = (self.ma_pos + 1) % self.ma_buf.len();
         let ma_out = -MA_G * tank_in + u_old;
 
@@ -193,18 +201,18 @@ impl PlateState {
         self.td1_lfo = (self.td1_lfo + tau * PLATE_LFO_RATES[0] / sr).rem_euclid(tau);
         let td1_d_mod = self.td1_delay + self.td1_lfo.sin() * self.mod_depth;
         let td1_out = frac_read(&self.td1_buf, self.td1_pos, td1_d_mod);
-        self.td1_buf[self.td1_pos] = ma_out;
+        self.td1_buf[self.td1_pos] = sanitize(ma_out);
         self.td1_pos = (self.td1_pos + 1) % self.td1_buf.len();
 
         // LP damping — consistent scaling with Freeverb/FDN
         let d = damp * 0.85;
-        self.td1_lp = td1_out * (1.0 - d) + self.td1_lp * d;
+        self.td1_lp = sanitize(td1_out * (1.0 - d) + self.td1_lp * d);
 
         // Second allpass — flat-magnitude Schroeder (g=0.5)
         let len = self.ta2_buf.len();
         let pos = self.ta2_pos;
         let u_old2 = self.ta2_buf[pos];
-        self.ta2_buf[pos] = 0.75 * self.td1_lp + 0.5 * u_old2;
+        self.ta2_buf[pos] = sanitize(0.75 * self.td1_lp + 0.5 * u_old2);
         self.ta2_pos = (pos + 1) % len;
         let ta2_out = -0.5 * self.td1_lp + u_old2;
 
@@ -212,7 +220,7 @@ impl PlateState {
         self.td2_lfo = (self.td2_lfo + tau * PLATE_LFO_RATES[1] / sr).rem_euclid(tau);
         let td2_d_mod = self.td2_delay + self.td2_lfo.sin() * self.mod_depth;
         let td2_out = frac_read(&self.td2_buf, self.td2_pos, td2_d_mod);
-        self.td2_buf[self.td2_pos] = ta2_out;
+        self.td2_buf[self.td2_pos] = sanitize(ta2_out);
         self.td2_pos = (self.td2_pos + 1) % self.td2_buf.len();
 
         self.feedback = td2_out;
@@ -295,8 +303,8 @@ impl FdnState {
 
         let d = damp * 0.85;
         for (i, &xi) in x.iter().enumerate() {
-            self.lp[i] = xi * (1.0 - d) + self.lp[i] * d;
-            self.buf[i][self.pos[i]] = self.lp[i] * decay + input * 0.125;
+            self.lp[i] = sanitize(xi * (1.0 - d) + self.lp[i] * d);
+            self.buf[i][self.pos[i]] = sanitize(self.lp[i] * decay + input * 0.125);
             self.pos[i] = (self.pos[i] + 1) % self.buf[i].len();
         }
 
@@ -524,8 +532,8 @@ impl ShimmerReverb {
             self.comb_lfo[i] = (self.comb_lfo[i] + self.comb_lfo_inc[i]).rem_euclid(tau);
             let delay = self.comb_delay[i] + self.comb_lfo[i].sin() * self.comb_mod_depth;
             let delayed = frac_read(&self.comb_buf[i], self.comb_pos[i], delay);
-            self.comb_feed[i] = delayed * (1.0 - d) + self.comb_feed[i] * d;
-            self.comb_buf[i][self.comb_pos[i]] = rev_in + self.comb_feed[i] * feed;
+            self.comb_feed[i] = sanitize(delayed * (1.0 - d) + self.comb_feed[i] * d);
+            self.comb_buf[i][self.comb_pos[i]] = sanitize(rev_in + self.comb_feed[i] * feed);
             let len = self.comb_buf[i].len();
             self.comb_pos[i] = (self.comb_pos[i] + 1) % len;
             out += delayed;
@@ -538,7 +546,7 @@ impl ShimmerReverb {
             let pos = self.ap_pos[i];
             let buf = self.ap_buf[i][pos];
             let input_ap = out;
-            self.ap_buf[i][pos] = input_ap + buf * 0.5;
+            self.ap_buf[i][pos] = sanitize(input_ap + buf * 0.5);
             self.ap_pos[i] = (pos + 1) % len;
             out = buf - input_ap;
         }

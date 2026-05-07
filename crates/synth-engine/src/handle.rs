@@ -925,6 +925,15 @@ impl SynthEngineHandle {
         }
     }
 
+    /// Flush all FX tail buffers (delay, reverb, shimmer, crystallizer, pre-delay,
+    /// Haas widener). Runs on the next audio callback tick — no allocation or locking.
+    /// Call on patch load or when enabling an effect to prevent old signal bleeding in.
+    pub fn reset_fx_tails(&self) {
+        self.state
+            .fx_clear_requested
+            .store(true, Ordering::Relaxed);
+    }
+
     /// Latch a chord into the arpeggiator.
     pub fn chord_hold(&self, notes: &[u8]) {
         let _ = self.control.try_send(ControlEvent::ChordHold {
@@ -965,6 +974,12 @@ impl SynthEngineHandle {
     /// rate — fine). Length is always `crate::audio::VOICE_COUNT`.
     pub fn amp_cursors(&self) -> Vec<f32> {
         self.state.amp_cursors.iter().map(|s| s.value()).collect()
+    }
+
+    /// Snapshot every voice's gate value (1.0 = held, 0.0 = released).
+    /// Length is always `crate::audio::VOICE_COUNT`.
+    pub fn voice_gates(&self) -> Vec<f32> {
+        self.state.voice_gates.iter().map(|s| s.value()).collect()
     }
 
     /// Current filter-envelope cursor for a voice. Same encoding as amp cursor.

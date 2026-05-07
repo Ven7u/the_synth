@@ -16,6 +16,11 @@ impl SynthApp {
             });
             if ui.button(label).clicked() {
                 let new_enabled = !enabled;
+                // Silence held voices before switching mode — voice_notes and
+                // pitch_hold_count in the audio thread are mode-specific, so a
+                // note started in one mode never receives the matching note_off
+                // in the other, leaving the gate permanently high.
+                self.all_notes_off();
                 self.engine.set_arp_enabled(new_enabled);
                 if new_enabled && self.arp_sync_active() {
                     self.apply_clock_sync();

@@ -124,6 +124,7 @@ impl SynthApp {
                         .color(if *on { col_dly } else { Color32::GRAY });
                     if ui.button(label).on_hover_text("Toggle delay (echo effect with feedback).").clicked() {
                         *on = !*on;
+                        if *on { self.engine.reset_fx_tails(); }
                         self.engine.set_fx_delay_mix(if *on { self.fx_delay_mix } else { 0.0 });
                     }
 
@@ -182,6 +183,7 @@ impl SynthApp {
                         .color(if *on { col_rev } else { Color32::GRAY });
                     if ui.button(label).on_hover_text("Toggle reverb.").clicked() {
                         *on = !*on;
+                        if *on { self.engine.reset_fx_tails(); }
                         self.engine.set_fx_reverb_mix(if *on { self.fx_reverb_mix } else { 0.0 });
                     }
                     ui.horizontal(|ui| {
@@ -227,6 +229,7 @@ impl SynthApp {
                         .color(if *on { col_shim } else { Color32::GRAY });
                     if ui.button(label).on_hover_text("Shimmer reverb — pitch-shifted feedback loop creates a rising harmonic halo.").clicked() {
                         *on = !*on;
+                        if *on { self.engine.reset_fx_tails(); }
                         self.engine.set_shimmer_mix(if *on { self.fx_shimmer_mix } else { 0.0 });
                     }
                     ui.add(egui::Slider::new(&mut self.fx_shimmer_size, 0.0_f32..=1.0)

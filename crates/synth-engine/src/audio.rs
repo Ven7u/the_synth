@@ -6,7 +6,7 @@
 #![allow(clippy::precedence)]
 
 use fundsp::prelude32::*;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU8};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
 
 use crate::gated_voice::GatedVoice;
@@ -185,6 +185,11 @@ pub struct AudioState {
     pub limiter_enabled: Arc<AtomicBool>,
     pub limiter_threshold: Shared, // 0.5..1.0
 
+    // Set true by the UI thread to request a full FX tail flush (delay + reverb +
+    // shimmer + crystallizer buffers zeroed). Checked and cleared by FxChain::tick()
+    // so the clear runs on the audio thread without any allocation or locking.
+    pub fx_clear_requested: Arc<AtomicBool>,
+
     // FX chain (post-mix, pre-output) — all wet/dry 0.0 = bypass
     pub fx_overdrive_drive: Shared,  // 1.0..10.0
     pub fx_overdrive_mix: Shared,    // 0.0..1.0
@@ -346,6 +351,7 @@ impl AudioState {
             walker: crate::arp::ScaleWalkerShared::new(),
             limiter_enabled: Arc::new(AtomicBool::new(true)),
             limiter_threshold: shared(0.95),
+            fx_clear_requested: Arc::new(AtomicBool::new(false)),
             fx_overdrive_drive: shared(3.0),
             fx_overdrive_mix: shared(0.0),
             fx_overdrive_tone: shared(0.8),
@@ -829,6 +835,7 @@ struct FxChain {
     crys_l: Crystallizer,
     crys_r: Crystallizer,
     sr: f32,
+    clear_requested: Arc<AtomicBool>,
 }
 
 impl FxChain {
@@ -896,6 +903,7 @@ impl FxChain {
             crys_l: Crystallizer::new(sr),
             crys_r: Crystallizer::new(sr),
             sr,
+            clear_requested: Arc::clone(&state.fx_clear_requested),
         }
     }
 }
@@ -909,6 +917,10 @@ impl AudioNode for FxChain {
         self.cho_phase = 0.0;
         self.del_buf.fill(0.0);
         self.del_pos = 0;
+        self.rev_pre_buf.fill(0.0);
+        self.rev_pre_pos = 0;
+        self.haas_buf.fill(0.0);
+        self.haas_pos = 0;
         self.od_drive.reset();
         self.od_mix.reset();
         self.dist_drive.reset();
@@ -976,6 +988,23 @@ impl AudioNode for FxChain {
 
     #[inline]
     fn tick(&mut self, input: &Frame<f32, U1>) -> Frame<f32, U2> {
+        // Flush all FX tails when requested (e.g. on patch load or effect toggle).
+        // swap(false) clears the flag and runs the clear only once, on the audio thread.
+        if self.clear_requested.swap(false, Ordering::Relaxed) {
+            self.del_buf.fill(0.0);
+            self.del_pos = 0;
+            self.rev_pre_buf.fill(0.0);
+            self.rev_pre_pos = 0;
+            self.haas_buf.fill(0.0);
+            self.haas_pos = 0;
+            self.rev_l.reset();
+            self.rev_r.reset();
+            self.shim_l.reset();
+            self.shim_r.reset();
+            self.crys_l.reset();
+            self.crys_r.reset();
+        }
+
         let dry = input[0];
 
         // ── Overdrive (tanh soft clip) ──────────────────────────────────────
@@ -1067,13 +1096,18 @@ impl AudioNode for FxChain {
             let i1 = (i0 + 1) % buf_len;
             let delayed =
                 self.del_buf[i0] * (1.0 - read_f.fract()) + self.del_buf[i1] * read_f.fract();
-            self.del_buf[self.del_pos] = s3 + delayed * del_feedback;
+            // tanh saturation prevents runaway: at feedback=0.95 an unsaturated
+            // buffer converges to 20× input, which overwhelms the reverb that follows.
+            self.del_buf[self.del_pos] = (s3 + delayed * del_feedback).tanh();
             delayed
         } else {
             0.0
         };
         // Additive model: dry stays at full level, echo is added on top.
-        let s4 = s3 + del_mix * del_wet;
+        let s4_raw = s3 + del_mix * del_wet;
+        // Guard against NaN/Inf before they enter reverb buffers — once poisoned,
+        // reverb buffers never recover until app restart.
+        let s4 = if s4_raw.is_finite() { s4_raw } else { 0.0 };
 
         self.del_pos = (self.del_pos + 1) % buf_len;
 
