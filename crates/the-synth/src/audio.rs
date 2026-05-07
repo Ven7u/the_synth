@@ -136,7 +136,7 @@ where
     let mut duck_attacking: bool = false;
     let duck_attack_coeff: f32 = (-1.0_f32 / (0.0015 * sr as f32)).exp(); // 1.5 ms attack
     let duck_decay_coeff: f32 = (-1.0_f32 / (0.150 * sr as f32)).exp(); // 150 ms decay
-    // Smoothed depth — prevents zipper noise / micro-clicks when the user moves the slider.
+                                                                        // Smoothed depth — prevents zipper noise / micro-clicks when the user moves the slider.
     let depth_smooth_coeff: f32 = (-1.0_f32 / (0.010 * sr as f32)).exp(); // 10 ms
     let mut depth_smooth: f32 = 0.0;
 

@@ -832,7 +832,12 @@ static TABLE: &[ParamDescriptor] = &[
     d_discrete(ParamId::Lfo2Shape, "LFO 2 Shape", "lfo2/shape", 3, 0.0),
     d_discrete(ParamId::Lfo2Dest, "LFO 2 Dest", "lfo2/dest", 3, 2.0),
     // -- Gate lane: amp ducker ("Pulse") --
-    d_bool(ParamId::GateAenvEnabled, "Pulse Enable", "pulse/enabled", false),
+    d_bool(
+        ParamId::GateAenvEnabled,
+        "Pulse Enable",
+        "pulse/enabled",
+        false,
+    ),
     d_linear(
         ParamId::GateAenvPattern,
         "Pulse Pattern",

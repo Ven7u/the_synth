@@ -929,9 +929,7 @@ impl SynthEngineHandle {
     /// Haas widener). Runs on the next audio callback tick — no allocation or locking.
     /// Call on patch load or when enabling an effect to prevent old signal bleeding in.
     pub fn reset_fx_tails(&self) {
-        self.state
-            .fx_clear_requested
-            .store(true, Ordering::Relaxed);
+        self.state.fx_clear_requested.store(true, Ordering::Relaxed);
     }
 
     /// Latch a chord into the arpeggiator.

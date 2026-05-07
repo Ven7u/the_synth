@@ -22,7 +22,11 @@ use std::sync::Arc;
 /// guard prevents permanent buffer poisoning at no cost on the normal path.
 #[inline(always)]
 fn sanitize(x: f32) -> f32 {
-    if x.is_finite() { x } else { 0.0 }
+    if x.is_finite() {
+        x
+    } else {
+        0.0
+    }
 }
 
 // ---------------------------------------------------------------------------

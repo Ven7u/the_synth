@@ -544,19 +544,13 @@ impl SynthApp {
                 for i in 0..16u8 {
                     let on_step = (pattern >> i) & 1 != 0;
                     let in_active_len = i < length;
-                    let (rect, resp) = ui.allocate_exact_size(
-                        egui::Vec2::new(step_w, cell_h),
-                        egui::Sense::click(),
-                    );
+                    let (rect, resp) = ui
+                        .allocate_exact_size(egui::Vec2::new(step_w, cell_h), egui::Sense::click());
                     let painter = ui.painter_at(rect);
                     let fill = if on_step { active_col } else { inactive_col };
                     let alpha = if in_active_len { 255 } else { 90 };
-                    let fill = egui::Color32::from_rgba_unmultiplied(
-                        fill.r(),
-                        fill.g(),
-                        fill.b(),
-                        alpha,
-                    );
+                    let fill =
+                        egui::Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), alpha);
                     painter.rect_filled(rect, egui::Rounding::same(2.0), fill);
                     painter.rect_stroke(rect, egui::Rounding::same(2.0), Stroke::new(1.0, edge));
                     if resp.clicked() {

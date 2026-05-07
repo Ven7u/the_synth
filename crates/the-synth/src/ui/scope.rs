@@ -228,16 +228,23 @@ impl SynthApp {
                     };
                     // Red = gate held (should be releasing), amber = in envelope, gray = idle
                     let (dot_color, label_color) = if gate > 0.5 {
-                        (Color32::from_rgb(220, 60, 60), Color32::from_rgb(255, 120, 120))
+                        (
+                            Color32::from_rgb(220, 60, 60),
+                            Color32::from_rgb(255, 120, 120),
+                        )
                     } else if cursor > 0.5 {
-                        (Color32::from_rgb(200, 140, 40), Color32::from_rgb(220, 180, 80))
+                        (
+                            Color32::from_rgb(200, 140, 40),
+                            Color32::from_rgb(220, 180, 80),
+                        )
                     } else {
                         (Color32::from_gray(50), Color32::from_gray(100))
                     };
                     ui.vertical(|ui| {
                         ui.set_min_width(48.0);
                         ui.horizontal(|ui| {
-                            let (rect, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
+                            let (rect, _) =
+                                ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
                             ui.painter().circle_filled(rect.center(), 4.0, dot_color);
                             ui.label(
                                 egui::RichText::new(format!("V{}", vi + 1))
@@ -246,14 +253,10 @@ impl SynthApp {
                             );
                         });
                         ui.label(
-                            egui::RichText::new(format!(
-                                "g:{:.0} {}",
-                                gate,
-                                stage,
-                            ))
-                            .monospace()
-                            .size(9.0)
-                            .color(label_color),
+                            egui::RichText::new(format!("g:{:.0} {}", gate, stage,))
+                                .monospace()
+                                .size(9.0)
+                                .color(label_color),
                         );
                     });
                 }
