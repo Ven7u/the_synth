@@ -401,11 +401,14 @@ impl SynthApp {
                     self.engine.set_filter_resonance(self.filter_q);
                 }
 
+                let mod_offset = self.piano_mod_wheel as f32 / 5.0 * 8000.0;
+                let effective_cutoff = (self.filter_cutoff + mod_offset).clamp(80.0, 18000.0);
+
                 if ui.is_rect_visible(rect) {
                     draw_lp_response_curve(
                         ui.painter(),
                         rect,
-                        self.filter_cutoff,
+                        effective_cutoff,
                         self.filter_q,
                         response.hovered() || response.dragged(),
                         &self.theme,
@@ -416,19 +419,36 @@ impl SynthApp {
 
                 // ── Knobs ─────────────────────────────────────────────────────
                 ui.horizontal(|ui| {
-                    if super::widgets::knob(
-                        ui,
-                        &mut self.filter_cutoff,
-                        80.0..=18000.0,
-                        "CUTOFF",
-                        &self.theme,
-                        true,
-                    )
-                    .on_hover_text("Cutoff frequency. 80 Hz = dark, 18 kHz = fully open.")
-                    .changed()
-                    {
-                        self.engine.set_filter_cutoff(self.filter_cutoff);
-                    }
+                    ui.vertical(|ui| {
+                        let mut display_cutoff = effective_cutoff;
+                        let knob_resp = super::widgets::knob(
+                            ui,
+                            &mut display_cutoff,
+                            80.0..=18000.0,
+                            "CUTOFF",
+                            &self.theme,
+                            true,
+                        )
+                        .on_hover_text("Cutoff frequency. 80 Hz = dark, 18 kHz = fully open.");
+                        if knob_resp.changed() {
+                            // Knob moved: keep mod offset, back-solve base cutoff
+                            self.filter_cutoff = (display_cutoff - mod_offset).clamp(80.0, 18000.0);
+                            self.engine.set_filter_cutoff(self.filter_cutoff);
+                        }
+                        if mod_offset > 0.0 {
+                            let hz_str = if effective_cutoff >= 1000.0 {
+                                format!("{:.1}k", effective_cutoff / 1000.0)
+                            } else {
+                                format!("{:.0}", effective_cutoff)
+                            };
+                            ui.label(
+                                RichText::new(format!("▲ {hz_str}"))
+                                    .size(9.0)
+                                    .color(Color32::from_rgb(180, 120, 255)),
+                            )
+                            .on_hover_text("Effective cutoff with mod wheel offset");
+                        }
+                    });
 
                     if super::widgets::knob(
                         ui,

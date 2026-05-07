@@ -10,20 +10,24 @@ const WHITE_SEMITONES: &[i32] = &[0, 2, 4, 5, 7, 9, 11];
 const BLACK_SEMITONES: &[Option<i32>] = &[Some(1), Some(3), None, Some(6), Some(8), Some(10), None];
 
 const KEY_MAP: &[(egui::Key, i32)] = &[
-    (egui::Key::A, 0),
-    (egui::Key::W, 1),
-    (egui::Key::S, 2),
-    (egui::Key::E, 3),
-    (egui::Key::D, 4),
-    (egui::Key::F, 5),
-    (egui::Key::T, 6),
-    (egui::Key::G, 7),
-    (egui::Key::Y, 8),
-    (egui::Key::H, 9),
-    (egui::Key::U, 10),
-    (egui::Key::J, 11),
-    (egui::Key::K, 12),
-    (egui::Key::L, 14),
+    (egui::Key::A, 0),   // C
+    (egui::Key::W, 1),   // C#
+    (egui::Key::S, 2),   // D
+    (egui::Key::E, 3),   // D#
+    (egui::Key::D, 4),   // E
+    (egui::Key::F, 5),   // F
+    (egui::Key::T, 6),   // F#
+    (egui::Key::G, 7),   // G
+    (egui::Key::Y, 8),   // G#
+    (egui::Key::H, 9),   // A
+    (egui::Key::U, 10),  // A#
+    (egui::Key::J, 11),  // B
+    (egui::Key::K, 12),  // C
+    (egui::Key::O, 13),  // C#
+    (egui::Key::L, 14),  // D
+    (egui::Key::P, 15),  // D#
+    (egui::Key::Semicolon, 16), // E
+    (egui::Key::Quote, 17),     // F
 ];
 
 /// 88-key piano: A0 (MIDI 21) to C8 (MIDI 108).
@@ -187,6 +191,56 @@ impl SynthApp {
                     self.push_note_off(m);
                 }
             } else {
+                // Z/X = octave, C/V = velocity, 1/2 = pitch bend, 3–8 = mod wheel → filter
+                let prev_pitch_bend = self.piano_pitch_bend;
+                let prev_mod = self.piano_mod_wheel;
+                ctx.input(|inp| {
+                    if inp.key_pressed(egui::Key::Z) && self.piano_octave > 1 {
+                        self.piano_octave -= 1;
+                    }
+                    if inp.key_pressed(egui::Key::X) && self.piano_octave < 7 {
+                        self.piano_octave += 1;
+                    }
+                    if inp.key_pressed(egui::Key::C) {
+                        self.piano_velocity = self.piano_velocity.saturating_sub(10).max(10);
+                    }
+                    if inp.key_pressed(egui::Key::V) {
+                        self.piano_velocity = self.piano_velocity.saturating_add(10).min(127);
+                    }
+                    // 1 = pitch bend down, 2 = pitch bend up (hold), release = reset
+                    let bend_down = inp.key_down(egui::Key::Num1);
+                    let bend_up   = inp.key_down(egui::Key::Num2);
+                    self.piano_pitch_bend = if bend_down && !bend_up {
+                        -2
+                    } else if bend_up && !bend_down {
+                        2
+                    } else {
+                        0
+                    };
+                    // 3=off, 4=20%, 5=40%, 6=60%, 7=80%, 8=100% filter offset
+                    let mod_keys = [
+                        (egui::Key::Num3, 0u8),
+                        (egui::Key::Num4, 1),
+                        (egui::Key::Num5, 2),
+                        (egui::Key::Num6, 3),
+                        (egui::Key::Num7, 4),
+                        (egui::Key::Num8, 5),
+                    ];
+                    for (key, level) in mod_keys {
+                        if inp.key_pressed(key) {
+                            self.piano_mod_wheel = level;
+                        }
+                    }
+                });
+                if self.piano_pitch_bend != prev_pitch_bend {
+                    let semitones = self.piano_pitch_bend as f32;
+                    self.engine.set_lfo_pitch_mult(2_f32.powf(semitones / 12.0));
+                }
+                if self.piano_mod_wheel != prev_mod {
+                    // level 0–5 → 0–8000 Hz additive filter offset
+                    let hz = self.piano_mod_wheel as f32 / 5.0 * 8000.0;
+                    self.engine.set_mod_wheel_cutoff_add(hz);
+                }
                 let mut current_held = std::collections::HashSet::<u8>::new();
                 ctx.input(|inp| {
                     for &(key, semitone) in KEY_MAP {
@@ -311,20 +365,66 @@ impl SynthApp {
                 }
                 ui.label(egui::RichText::new("  A–J / Q–U / Z–M = rows 1–3").weak().small());
             } else {
-                // Octave controls for piano
-                ui.label("Oct:").on_hover_text("Keyboard octave (1–7).");
-                if ui.button("−").on_hover_text("One octave down").clicked() && self.piano_octave > 1 {
+                // Octave controls
+                ui.label("Oct:").on_hover_text("Keyboard octave (1–7).  Z = down, X = up");
+                if ui.button("−").on_hover_text("One octave down  [Z]").clicked() && self.piano_octave > 1 {
                     self.piano_octave -= 1;
                 }
-                ui.label(format!("{}", self.piano_octave));
-                if ui.button("+").on_hover_text("One octave up").clicked() && self.piano_octave < 7 {
+                ui.label(format!("C{}", self.piano_octave));
+                if ui.button("+").on_hover_text("One octave up  [X]").clicked() && self.piano_octave < 7 {
                     self.piano_octave += 1;
                 }
+
+                ui.separator();
+
+                // Velocity controls
+                ui.label("Vel:").on_hover_text("Note velocity (10–127).  C = down, V = up");
+                if ui.button("−").on_hover_text("Velocity −10  [C]").clicked() {
+                    self.piano_velocity = self.piano_velocity.saturating_sub(10).max(10);
+                }
+                ui.label(format!("{}", self.piano_velocity));
+                if ui.button("+").on_hover_text("Velocity +10  [V]").clicked() {
+                    self.piano_velocity = self.piano_velocity.saturating_add(10).min(127);
+                }
+
+                ui.separator();
+
+                // Pitch bend indicator (keys 1/2)
+                let bend_color = if self.piano_pitch_bend != 0 {
+                    Color32::from_rgb(100, 180, 255)
+                } else {
+                    Color32::GRAY
+                };
+                let bend_text = match self.piano_pitch_bend {
+                    -2 => "Bend ▼",
+                    2  => "Bend ▲",
+                    _  => "Bend",
+                };
+                ui.label(egui::RichText::new(bend_text).color(bend_color))
+                    .on_hover_text("Pitch bend ±2 semitones.  Hold 1 = down,  Hold 2 = up");
+
+                ui.separator();
+
+                // Mod wheel indicator (keys 3–8 → filter cutoff offset)
+                let mod_color = if self.piano_mod_wheel > 0 {
+                    Color32::from_rgb(180, 120, 255)
+                } else {
+                    Color32::GRAY
+                };
+                let mod_bars = ["▁", "▃", "▅", "▆", "█"];
+                let mod_label = if self.piano_mod_wheel == 0 {
+                    "Mod: off".to_string()
+                } else {
+                    format!("Mod: {}", mod_bars[(self.piano_mod_wheel as usize).saturating_sub(1).min(4)])
+                };
+                ui.label(egui::RichText::new(mod_label).color(mod_color))
+                    .on_hover_text("Modulation wheel → filter cutoff.  3=off, 4–8=levels  (up to +8 kHz)");
+
                 let hint = if SeqMode::from_u8(self.seq.mode.load(std::sync::atomic::Ordering::Relaxed)) == SeqMode::ChordSeq
                     && self.seq.playing.load(std::sync::atomic::Ordering::Relaxed) {
                     "  any key = set root note (live transpose)"
                 } else {
-                    "  a–l = white keys,  w e t y u = sharps"
+                    "  a–' = notes  |  z/x = oct  |  c/v = vel  |  1/2 = bend  |  3–8 = mod"
                 };
                 ui.label(egui::RichText::new(hint).weak().small());
             }

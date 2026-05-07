@@ -52,6 +52,7 @@ pub struct AudioState {
     pub resonance: Shared,         // Q (0.5..20)
     pub filter_drive: Shared,      // 1.0..10.0 — input saturation before moog
     pub filter_key_track: Shared,  // 0.0..1.0 — cutoff follows voice pitch (0=off, 1=full)
+    pub mod_wheel_cutoff_add: Shared, // 0..8000 Hz — modulation wheel additive filter offset
     pub filter_env_amount: Shared, // 0.0..1.0
     // Filter ADSR
     pub fenv_attack: Shared,
@@ -104,6 +105,7 @@ pub struct AudioState {
     // Polyphonic voice pool
     pub voice_freqs: Vec<Shared>,
     pub voice_gates: Vec<Shared>,
+    pub voice_velocities: Vec<Shared>, // 0.0..1.0, set on NoteOn
     /// Per-voice audibility flag, written by `VoiceAllocator::begin_buffer`.
     /// The DSP graph's `GatedVoice` wrapper skips the voice's sub-graph when
     /// this is `false` — the main CPU win at idle and under light load.
@@ -244,6 +246,7 @@ impl AudioState {
             resonance: shared(0.3),
             filter_drive: shared(1.0),
             filter_key_track: shared(0.0),
+            mod_wheel_cutoff_add: shared(0.0),
             filter_env_amount: shared(0.3),
             fenv_attack: shared(0.01),
             fenv_decay: shared(0.3),
@@ -281,6 +284,7 @@ impl AudioState {
             ring_tap: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
             voice_freqs: (0..VOICE_COUNT).map(|_| shared(440.0)).collect(),
             voice_gates: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
+            voice_velocities: (0..VOICE_COUNT).map(|_| shared(1.0)).collect(),
             voice_audible: (0..VOICE_COUNT)
                 .map(|_| Arc::new(AtomicBool::new(false)))
                 .collect(),
@@ -644,7 +648,7 @@ pub fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Sen
                 Some(state.amp_cursors[vi].clone()),
                 sr as f32,
             ));
-        filtered * env
+        filtered * env * var(&state.voice_velocities[vi])
     };
 
     // Wrap each voice in a `GatedVoice` so silent voices short-circuit their

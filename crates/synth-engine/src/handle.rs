@@ -195,6 +195,9 @@ impl SynthEngineHandle {
     pub fn filter_key_track(&self) -> f32 {
         self.state.filter_key_track.value()
     }
+    pub fn set_mod_wheel_cutoff_add(&self, v: f32) {
+        self.state.mod_wheel_cutoff_add.set(v.clamp(0.0, 8000.0));
+    }
 
     pub fn set_filter_env_amount(&self, v: f32) {
         self.state.filter_env_amount.set(v);

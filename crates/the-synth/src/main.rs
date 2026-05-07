@@ -157,6 +157,9 @@ pub(crate) struct SynthApp {
 
     // Keyboard
     pub(crate) piano_octave: i32,
+    pub(crate) piano_velocity: u8,
+    pub(crate) piano_pitch_bend: i8,  // -2, -1, 0, +1, +2 semitones
+    pub(crate) piano_mod_wheel: u8,   // 0–5: keys 3(off)–8(max); maps to 0–8000 Hz filter offset
     pub(crate) piano_held_midi: std::collections::HashSet<u8>,
     pub(crate) piano_mouse_midi: Option<u8>,
     pub(crate) kb_chord_mode: bool, // true = chord pads, false = standard piano
@@ -320,6 +323,9 @@ impl SynthApp {
             filter_cutoff: 3000.0,
             filter_q: 0.3,
             piano_octave: 4,
+            piano_velocity: 100,
+            piano_pitch_bend: 0,
+            piano_mod_wheel: 0,
             kb_chord_mode: false,
             kb_freeze: false,
             frozen_notes: std::collections::HashSet::new(),
@@ -470,7 +476,7 @@ impl SynthApp {
     /// Push a NoteOn event into the audio thread's control queue.
     /// `engine.note_on` also records the timestamp used for latency measurement.
     pub(crate) fn push_note_on(&mut self, midi: u8) {
-        self.engine.note_on(midi, 100);
+        self.engine.note_on(midi, self.piano_velocity);
     }
 
     /// Push a NoteOff event into the audio thread's control queue.

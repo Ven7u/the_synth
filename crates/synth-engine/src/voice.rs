@@ -144,11 +144,11 @@ impl VoiceAllocator {
     fn drain_events(&mut self, state: &AudioState, rx: &ControlReceiver) {
         while let Ok(ev) = rx.try_recv() {
             match ev {
-                ControlEvent::NoteOn { pitch, .. } => {
+                ControlEvent::NoteOn { pitch, velocity, .. } => {
                     if state.arp.enabled.load(Ordering::Relaxed) {
                         self.arp.note_on(pitch);
                     } else {
-                        self.trigger_note(state, pitch);
+                        self.trigger_note(state, pitch, velocity);
                     }
                 }
                 ControlEvent::NoteOff { pitch, .. } => {
@@ -199,7 +199,7 @@ impl VoiceAllocator {
                 self.release_note(state, pitch);
             }
             if let Some(pitch) = ev.note_on {
-                self.trigger_note(state, pitch);
+                self.trigger_note(state, pitch, 127);
             }
         }
     }
@@ -238,7 +238,7 @@ impl VoiceAllocator {
     ///   countdown. The next `tick_sample` calls flip the gate back to 1.0,
     ///   giving the ADSR a real 0→1 edge.
     /// - Otherwise (fresh / silent slot): sets gate=1.0 immediately.
-    fn trigger_note(&mut self, state: &AudioState, pitch: u8) {
+    fn trigger_note(&mut self, state: &AudioState, pitch: u8, velocity: u8) {
         let count = &mut self.pitch_hold_count[pitch as usize];
         *count = count.saturating_add(1);
 
@@ -263,6 +263,7 @@ impl VoiceAllocator {
 
         self.voice_notes[slot] = Some(pitch);
         state.voice_freq_targets[slot].set(midi_hz(pitch as f64) as f32);
+        state.voice_velocities[slot].set(velocity as f32 / 127.0);
 
         if audible {
             // Force a brief gap so the ADSR sees a real 0→1 edge.
