@@ -21,6 +21,11 @@ pub use patch::Patch;
 pub mod voice;
 pub use voice::VoiceAllocator;
 
+pub mod drum;
+pub use drum::{
+    DrumDspState, DrumTrackState, DRUM_LANES, DRUM_LANE_NAMES, DRUM_PATTERNS, DRUM_STEPS,
+};
+
 pub mod multi;
 pub use multi::{MultiTrackEngine, TrackState, TRACK_COUNT};
 pub use synth_dsp::crystallizer::{Crystallizer, CrystallizerShared};

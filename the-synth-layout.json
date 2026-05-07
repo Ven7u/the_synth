@@ -1,0 +1,15 @@
+{
+  "theme_name": "Winamp Classic",
+  "panels": {
+    "oscillators": true,
+    "modulation": true,
+    "keyboard": true,
+    "sequencer": true,
+    "arp_walker": true,
+    "fx_chain": true,
+    "scope": true,
+    "midi": true
+  },
+  "app_mode": "Studio",
+  "studio_tab": "Fx"
+}

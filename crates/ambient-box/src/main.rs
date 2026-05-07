@@ -26,6 +26,7 @@ use synth_engine::generative::{
     LAUNCHPAD_COLS, MACRO_COUNT, MELODIC_STATES, MOOD_CALM, MOOD_COSMIC, MOOD_DARK, MOOD_EUPHORIC,
     MOOD_GRAVITY, MOOD_TENSE, N_MOODS, RHYTHMIC_STATES, TRACK_COUNT, VOICE_COUNT,
 };
+use synth_engine::{DRUM_LANES, DRUM_LANE_NAMES, DRUM_PATTERNS, DRUM_STEPS};
 
 #[derive(Clone)]
 struct PatchEntry {
@@ -184,6 +185,12 @@ where
     T: SizedSample + FromSample<f32>,
 {
     let channels = config.channels as usize;
+
+    // Enable the drum track before the stream closure captures the engine.
+    {
+        let mut eng = engine.lock().expect("engine lock for drum init");
+        eng.enable_drum_track();
+    }
 
     // Per-track voice allocation state on the audio thread
     let mut voice_notes: [[Option<u8>; VOICE_COUNT]; TRACK_COUNT] =
@@ -398,8 +405,10 @@ where
                     if markov_active {
                         markov_engine.on_bar(&eng.markov_shared);
                     }
+                    eng.tick_drum_bar();
                 }
                 if beat_ev.subdivision {
+                    eng.tick_drum_step();
                     if markov_active {
                         // Apply clock division: only step the engine every N subdivisions.
                         markov_subdiv_counter += 1;
@@ -730,6 +739,25 @@ struct AmbientBoxApp {
     midi_recorder: Option<midi_recorder::MidiRecorder>,
     midi_rec_status: String,
     sample_rate: u32,
+
+    // Track strip UI state (per melodic track)
+    track_expanded: [bool; TRACK_COUNT],
+    track_muted: [bool; TRACK_COUNT],
+    track_pre_mute_vol: [f32; TRACK_COUNT],
+
+    // Drum track UI state
+    drum_enabled_ui: bool,
+    drum_active_pattern_ui: u8,
+    /// Local mirror of step active: [lane][step]
+    drum_step_ui: [[bool; DRUM_STEPS]; DRUM_LANES],
+    /// Local mirror of step probability: [lane][step]
+    drum_prob_ui: [[u8; DRUM_STEPS]; DRUM_LANES],
+    drum_lane_vol_ui: [f32; DRUM_LANES],
+    drum_lane_muted_ui: [bool; DRUM_LANES],
+    drum_lane_gen_mode_ui: [u8; DRUM_LANES],
+    drum_master_vol_ui: f32,
+    /// Current playhead step (read from DrumTrackState.playhead_step).
+    drum_playhead_step: usize,
 }
 
 impl AmbientBoxApp {
@@ -953,6 +981,22 @@ impl AmbientBoxApp {
             midi_recorder: None,
             midi_rec_status: String::new(),
             sample_rate: sr,
+
+            // Track strip
+            track_expanded: [false; TRACK_COUNT],
+            track_muted: [false; TRACK_COUNT],
+            track_pre_mute_vol: [1.0; TRACK_COUNT],
+
+            // Drum track
+            drum_enabled_ui: true,
+            drum_active_pattern_ui: 0,
+            drum_step_ui: [[false; DRUM_STEPS]; DRUM_LANES],
+            drum_prob_ui: [[100u8; DRUM_STEPS]; DRUM_LANES],
+            drum_lane_vol_ui: [1.0; DRUM_LANES],
+            drum_lane_muted_ui: [false; DRUM_LANES],
+            drum_lane_gen_mode_ui: [0u8; DRUM_LANES],
+            drum_master_vol_ui: 0.8,
+            drum_playhead_step: 0,
         }
     }
 
@@ -1344,6 +1388,24 @@ impl eframe::App for AmbientBoxApp {
                 }
                 // Cache a clone of markov_shared for heatmap rendering outside the lock
                 self.markov_shared_cache = Some(eng.markov_shared.clone());
+
+                // Sync drum UI state from engine
+                if let Some(ref drum) = eng.drum_state {
+                    self.drum_enabled_ui = drum.enabled.load(Ordering::Relaxed);
+                    self.drum_active_pattern_ui = drum.active_pattern.load(Ordering::Relaxed);
+                    self.drum_master_vol_ui = drum.master_vol.value();
+                    self.drum_playhead_step = drum.playhead_step.load(Ordering::Relaxed);
+                    let pat = self.drum_active_pattern_ui as usize;
+                    for lane in 0..DRUM_LANES {
+                        self.drum_lane_vol_ui[lane] = drum.lane_vol[lane].value();
+                        self.drum_lane_muted_ui[lane] = drum.lane_muted[lane].load(Ordering::Relaxed);
+                        self.drum_lane_gen_mode_ui[lane] = drum.lane_gen_mode[lane].load(Ordering::Relaxed);
+                        for step in 0..DRUM_STEPS {
+                            self.drum_step_ui[lane][step] = drum.get_step_active(pat, lane, step);
+                            self.drum_prob_ui[lane][step] = drum.get_step_prob(pat, lane, step);
+                        }
+                    }
+                }
             }
 
             let ti = self.active_track;
@@ -1397,6 +1459,94 @@ impl eframe::App for AmbientBoxApp {
                     self.auto_load_ambient_patches();
                 }
             });
+            ui.separator();
+
+            // ── Track strips ──────────────────────────────────────────────────
+            let track_names = ["Pad", "Bass", "Melody", "Texture"];
+            egui::Grid::new("track_strips")
+                .num_columns(1)
+                .spacing([0.0, 2.0])
+                .show(ui, |ui| {
+                for ti in 0..TRACK_COUNT {
+                    ui.horizontal(|ui| {
+                        // Track label (click to select active track)
+                        let is_active = self.active_track == ti;
+                        let label_color = if is_active {
+                            egui::Color32::from_rgb(100, 200, 255)
+                        } else {
+                            egui::Color32::GRAY
+                        };
+                        if ui.selectable_label(
+                            is_active,
+                            egui::RichText::new(track_names[ti]).color(label_color).strong(),
+                        ).clicked() {
+                            self.active_track = ti;
+                        }
+
+                        // Sequence mode dropdown
+                        egui::ComboBox::from_id_salt(format!("track_mode_{ti}"))
+                            .width(90.0)
+                            .selected_text(GenerativeMode::LABELS[self.gen_mode_ui[ti] as usize % GenerativeMode::LABELS.len()])
+                            .show_ui(ui, |ui| {
+                                for mode in GenerativeMode::ALL {
+                                    ui.selectable_value(
+                                        &mut self.gen_mode_ui[ti],
+                                        *mode as u8,
+                                        GenerativeMode::LABELS[*mode as usize],
+                                    );
+                                }
+                            });
+
+                        // Mute button
+                        let mute_color = if self.track_muted[ti] {
+                            egui::Color32::from_rgb(220, 80, 80)
+                        } else {
+                            egui::Color32::DARK_GRAY
+                        };
+                        if ui.add(egui::Button::new("M").fill(mute_color).min_size([20.0, 20.0].into())).clicked() {
+                            self.track_muted[ti] = !self.track_muted[ti];
+                            if self.track_muted[ti] {
+                                self.track_pre_mute_vol[ti] = self.track_vol_ui[ti].max(0.01);
+                                self.track_vol_ui[ti] = 0.0;
+                            } else {
+                                self.track_vol_ui[ti] = self.track_pre_mute_vol[ti];
+                            }
+                        }
+
+                        // Primary knobs: Vol, Cutoff, Shimmer
+                        let _ = synth_ui::knob(ui, "Vol", &mut self.track_vol_ui[ti], 0.0, 1.0);
+                        let _ = synth_ui::knob(ui, "Cut", &mut self.track_cutoff_ui[ti], 80.0, 18000.0);
+                        let _ = synth_ui::knob(ui, "Shim", &mut self.track_shimmer_send_ui[ti], 0.0, 1.0);
+
+                        // Expand toggle
+                        let expand_label = if self.track_expanded[ti] { "▼" } else { "▶" };
+                        if ui.small_button(expand_label).clicked() {
+                            self.track_expanded[ti] = !self.track_expanded[ti];
+                        }
+                    });
+
+                    // Expanded quick-edit section
+                    if self.track_expanded[ti] {
+                        ui.horizontal(|ui| {
+                            ui.add_space(16.0);
+                            let _ = synth_ui::knob(ui, "Res", &mut self.track_resonance_ui[ti], 0.1, 10.0);
+                            let _ = synth_ui::knob(ui, "Crys", &mut self.track_crystal_send_ui[ti], 0.0, 1.0);
+                            let _ = synth_ui::knob(ui, "LFO", &mut self.lfo_depth_ui[ti], 0.0, 1.0);
+                            ui.label("LFO→");
+                            egui::ComboBox::from_id_salt(format!("lfo_dest_strip_{ti}"))
+                                .width(60.0)
+                                .selected_text(["Pitch", "Filter", "Amp"][self.lfo_dest_ui[ti] as usize % 3])
+                                .show_ui(ui, |ui| {
+                                    for (i, &label) in ["Pitch", "Filter", "Amp"].iter().enumerate() {
+                                        ui.selectable_value(&mut self.lfo_dest_ui[ti], i as u8, label);
+                                    }
+                                });
+                        });
+                    }
+                    ui.end_row();
+                }
+            });
+
             ui.separator();
 
             // ── MARKOV content ────────────────────────────────────────────────
@@ -2411,6 +2561,101 @@ impl eframe::App for AmbientBoxApp {
                 }
             }
 
+            // ── Drum track ────────────────────────────────────────────────────
+            ui.separator();
+            ui.collapsing("DRUMS", |ui| {
+                // Header row: enable, master vol, pattern selector
+                ui.horizontal(|ui| {
+                    if ui.checkbox(&mut self.drum_enabled_ui, "Enable").changed() {
+                        if let Ok(eng) = self.engine.try_lock() {
+                            if let Some(ref drum) = eng.drum_state {
+                                drum.enabled.store(self.drum_enabled_ui, Ordering::Relaxed);
+                            }
+                        }
+                    }
+                    let _ = synth_ui::knob(ui, "Vol", &mut self.drum_master_vol_ui, 0.0, 1.0);
+                    ui.label("Pattern:");
+                    for p in 0..DRUM_PATTERNS {
+                        let is_active = self.drum_active_pattern_ui as usize == p;
+                        if ui.selectable_label(is_active, format!("{}", p + 1)).clicked() {
+                            self.drum_active_pattern_ui = p as u8;
+                            // Read new pattern's steps immediately
+                            if let Ok(eng) = self.engine.try_lock() {
+                                if let Some(ref drum) = eng.drum_state {
+                                    drum.active_pattern.store(p as u8, Ordering::Relaxed);
+                                    for lane in 0..DRUM_LANES {
+                                        for step in 0..DRUM_STEPS {
+                                            self.drum_step_ui[lane][step] = drum.get_step_active(p, lane, step);
+                                            self.drum_prob_ui[lane][step] = drum.get_step_prob(p, lane, step);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+
+                // Step grid
+                egui::Grid::new("drum_grid")
+                    .num_columns(2 + DRUM_STEPS)
+                    .spacing([2.0, 2.0])
+                    .show(ui, |ui| {
+                    for lane in 0..DRUM_LANES {
+                        // Lane label + mute
+                        let muted = self.drum_lane_muted_ui[lane];
+                        let lane_color = if muted {
+                            egui::Color32::DARK_GRAY
+                        } else {
+                            egui::Color32::from_rgb(180, 180, 200)
+                        };
+                        ui.label(egui::RichText::new(DRUM_LANE_NAMES[lane]).color(lane_color).small());
+                        let mute_btn_color = if muted { egui::Color32::from_rgb(180, 60, 60) } else { egui::Color32::from_gray(50) };
+                        if ui.add(egui::Button::new("M").fill(mute_btn_color).min_size([16.0, 16.0].into())).clicked() {
+                            self.drum_lane_muted_ui[lane] = !muted;
+                        }
+
+                        // 16 step buttons
+                        for step in 0..DRUM_STEPS {
+                            let active = self.drum_step_ui[lane][step];
+                            let is_playhead = step == self.drum_playhead_step && self.transport_sync.playing;
+                            // Group steps into bars of 4 with slight color shift
+                            let base_on  = if step % 8 < 4 { egui::Color32::from_rgb(60, 140, 220) } else { egui::Color32::from_rgb(50, 120, 200) };
+                            let base_off = if step % 8 < 4 { egui::Color32::from_gray(35) } else { egui::Color32::from_gray(28) };
+                            let fill = match (active, is_playhead) {
+                                (true,  true)  => egui::Color32::WHITE,
+                                (true,  false) => base_on,
+                                (false, true)  => egui::Color32::from_gray(70),
+                                (false, false) => base_off,
+                            };
+                            let resp = ui.add(
+                                egui::Button::new("").fill(fill).min_size([18.0, 18.0].into())
+                            );
+                            if resp.clicked() {
+                                self.drum_step_ui[lane][step] = !active;
+                                let pat = self.drum_active_pattern_ui as usize;
+                                if let Ok(eng) = self.engine.try_lock() {
+                                    if let Some(ref drum) = eng.drum_state {
+                                        drum.set_step_active(pat, lane, step, !active);
+                                    }
+                                }
+                            }
+                            resp.on_hover_ui(|ui| {
+                                ui.label(format!("Step {} prob: {}%", step + 1, self.drum_prob_ui[lane][step]));
+                                if ui.add(egui::Slider::new(&mut self.drum_prob_ui[lane][step], 0u8..=100).text("Prob%")).changed() {
+                                    let pat = self.drum_active_pattern_ui as usize;
+                                    if let Ok(eng) = self.engine.try_lock() {
+                                        if let Some(ref drum) = eng.drum_state {
+                                            drum.set_step_prob(pat, lane, step, self.drum_prob_ui[lane][step]);
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                        ui.end_row();
+                    }
+                });
+            });
+
             // ── Engine write-back ─────────────────────────────────────────────
             if let Ok(mut eng) = self.engine.try_lock() {
                 let track = &eng.tracks[ti];
@@ -2559,6 +2804,17 @@ impl eframe::App for AmbientBoxApp {
                 eng.crystal.mix.set(if self.crystal_on {
                     self.crystal_mix.clamp(0.0, 1.0)
                 } else { 0.0 });
+
+                // Write drum params back to engine
+                if let Some(ref drum) = eng.drum_state {
+                    drum.master_vol.set(self.drum_master_vol_ui);
+                    drum.active_pattern.store(self.drum_active_pattern_ui, Ordering::Relaxed);
+                    for lane in 0..DRUM_LANES {
+                        drum.lane_vol[lane].set(self.drum_lane_vol_ui[lane]);
+                        drum.lane_muted[lane].store(self.drum_lane_muted_ui[lane], Ordering::Relaxed);
+                        drum.lane_gen_mode[lane].store(self.drum_lane_gen_mode_ui[lane], Ordering::Relaxed);
+                    }
+                }
 
                 if let Some((track_idx, patch_idx)) = self.pending_patch_load.pop_front() {
                     if patch_idx < self.patch_library.len() {
