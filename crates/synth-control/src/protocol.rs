@@ -84,6 +84,20 @@ pub enum ParamId {
     GateAenvRate,
     GateAenvDepth,
 
+    // --- Gate lane: LFO1 retrigger ---
+    GateLfo1Enabled,
+    GateLfo1Pattern,
+    GateLfo1Length,
+    GateLfo1Division,
+    GateLfo1Rate,
+
+    // --- Gate lane: LFO2 retrigger ---
+    GateLfo2Enabled,
+    GateLfo2Pattern,
+    GateLfo2Length,
+    GateLfo2Division,
+    GateLfo2Rate,
+
     // --- Amp envelope + glide + master ---
     AmpAttack,
     AmpDecay,
@@ -859,6 +873,84 @@ static TABLE: &[ParamDescriptor] = &[
         1.0,
         0.0,
         "",
+    ),
+    // -- Gate lane: LFO1 retrigger --
+    d_bool(
+        ParamId::GateLfo1Enabled,
+        "LFO1 Gate Enable",
+        "gate/lfo1/enabled",
+        false,
+    ),
+    d_linear(
+        ParamId::GateLfo1Pattern,
+        "LFO1 Gate Pattern",
+        "gate/lfo1/pattern",
+        0.0,
+        65535.0,
+        0.0,
+        "",
+    ),
+    d_discrete(
+        ParamId::GateLfo1Length,
+        "LFO1 Gate Length",
+        "gate/lfo1/length",
+        16,
+        15.0,
+    ),
+    d_discrete(
+        ParamId::GateLfo1Division,
+        "LFO1 Gate Division",
+        "gate/lfo1/division",
+        14,
+        3.0,
+    ),
+    d_log(
+        ParamId::GateLfo1Rate,
+        "LFO1 Gate Rate",
+        "gate/lfo1/rate",
+        0.1,
+        40.0,
+        4.0,
+        "Hz",
+    ),
+    // -- Gate lane: LFO2 retrigger --
+    d_bool(
+        ParamId::GateLfo2Enabled,
+        "LFO2 Gate Enable",
+        "gate/lfo2/enabled",
+        false,
+    ),
+    d_linear(
+        ParamId::GateLfo2Pattern,
+        "LFO2 Gate Pattern",
+        "gate/lfo2/pattern",
+        0.0,
+        65535.0,
+        0.0,
+        "",
+    ),
+    d_discrete(
+        ParamId::GateLfo2Length,
+        "LFO2 Gate Length",
+        "gate/lfo2/length",
+        16,
+        15.0,
+    ),
+    d_discrete(
+        ParamId::GateLfo2Division,
+        "LFO2 Gate Division",
+        "gate/lfo2/division",
+        14,
+        3.0,
+    ),
+    d_log(
+        ParamId::GateLfo2Rate,
+        "LFO2 Gate Rate",
+        "gate/lfo2/rate",
+        0.1,
+        40.0,
+        4.0,
+        "Hz",
     ),
     // -- Amp envelope + glide + master --
     d_log(

@@ -29,8 +29,26 @@ use std::sync::Arc;
 
 use synth_control::{Command, ControlEvent, ControlSender, ParamId};
 
-use crate::audio::AudioState;
+use crate::audio::{AudioState, GatePattern};
 use crate::patch::Patch;
+
+#[inline]
+fn gate_set_step(g: &GatePattern, step: u8, on: bool) {
+    if step >= 16 {
+        return;
+    }
+    let bit = 1u16 << step;
+    let prev = g.pattern.load(Ordering::Relaxed);
+    let next = if on { prev | bit } else { prev & !bit };
+    g.pattern.store(next, Ordering::Relaxed);
+}
+#[inline]
+fn gate_get_step(g: &GatePattern, step: u8) -> bool {
+    if step >= 16 {
+        return false;
+    }
+    (g.pattern.load(Ordering::Relaxed) >> step) & 1 != 0
+}
 
 /// Clonable, `Send + Sync` facade over the audio engine. Hand one of these
 /// to the UI, the MIDI thread, the sequencer — each thread `.clone()`s its
@@ -315,67 +333,139 @@ impl SynthEngineHandle {
         self.state.lfo2_dest.load(Ordering::Relaxed)
     }
 
-    // -- Gate lane: amp ducker ("Pulse") --
+    // -- Gate lanes (amp ducker "Pulse" + LFO1 retrigger + LFO2 retrigger) --
+    //
+    // Each lane shares the same five universal fields (enabled / pattern / length /
+    // division / rate). Lane-specific extras (e.g. duck depth on the amp lane) are
+    // separate setters. The `set_gate_*` family delegates to the same low-level
+    // ops on a `&GatePattern`, just routed to a different lane.
 
     pub fn set_gate_aenv_enabled(&self, on: bool) {
-        self.state.gate_aenv_enabled.store(on, Ordering::Relaxed);
+        self.state.gate_aenv.enabled.store(on, Ordering::Relaxed);
     }
     pub fn gate_aenv_enabled(&self) -> bool {
-        self.state.gate_aenv_enabled.load(Ordering::Relaxed)
+        self.state.gate_aenv.enabled.load(Ordering::Relaxed)
     }
-
     pub fn set_gate_aenv_pattern(&self, mask: u16) {
-        self.state.gate_aenv_pattern.store(mask, Ordering::Relaxed);
+        self.state.gate_aenv.pattern.store(mask, Ordering::Relaxed);
     }
     pub fn gate_aenv_pattern(&self) -> u16 {
-        self.state.gate_aenv_pattern.load(Ordering::Relaxed)
+        self.state.gate_aenv.pattern.load(Ordering::Relaxed)
     }
-
-    /// Toggle a single step (0..=15). No-op if `step >= 16`.
     pub fn set_gate_aenv_step(&self, step: u8, on: bool) {
-        if step >= 16 {
-            return;
-        }
-        let bit = 1u16 << step;
-        let prev = self.state.gate_aenv_pattern.load(Ordering::Relaxed);
-        let next = if on { prev | bit } else { prev & !bit };
-        self.state.gate_aenv_pattern.store(next, Ordering::Relaxed);
+        gate_set_step(&self.state.gate_aenv, step, on);
     }
     pub fn gate_aenv_step(&self, step: u8) -> bool {
-        if step >= 16 {
-            return false;
-        }
-        (self.state.gate_aenv_pattern.load(Ordering::Relaxed) >> step) & 1 != 0
+        gate_get_step(&self.state.gate_aenv, step)
     }
-
     pub fn set_gate_aenv_length(&self, len: u8) {
         self.state
-            .gate_aenv_length
+            .gate_aenv
+            .length
             .store(len.clamp(1, 16), Ordering::Relaxed);
     }
     pub fn gate_aenv_length(&self) -> u8 {
-        self.state.gate_aenv_length.load(Ordering::Relaxed)
+        self.state.gate_aenv.length.load(Ordering::Relaxed)
     }
-
     pub fn set_gate_aenv_division(&self, d: u8) {
-        self.state.gate_aenv_division.store(d, Ordering::Relaxed);
+        self.state.gate_aenv.division.store(d, Ordering::Relaxed);
     }
     pub fn gate_aenv_division(&self) -> u8 {
-        self.state.gate_aenv_division.load(Ordering::Relaxed)
+        self.state.gate_aenv.division.load(Ordering::Relaxed)
     }
-
     pub fn set_gate_aenv_rate(&self, hz: f32) {
-        self.state.gate_aenv_rate.set(hz);
+        self.state.gate_aenv.rate.set(hz);
     }
     pub fn gate_aenv_rate(&self) -> f32 {
-        self.state.gate_aenv_rate.value()
+        self.state.gate_aenv.rate.value()
     }
-
     pub fn set_gate_aenv_depth(&self, v: f32) {
         self.state.gate_aenv_depth.set(v);
     }
     pub fn gate_aenv_depth(&self) -> f32 {
         self.state.gate_aenv_depth.value()
+    }
+
+    // LFO1 retrigger lane
+    pub fn set_gate_lfo1_enabled(&self, on: bool) {
+        self.state.gate_lfo1.enabled.store(on, Ordering::Relaxed);
+    }
+    pub fn gate_lfo1_enabled(&self) -> bool {
+        self.state.gate_lfo1.enabled.load(Ordering::Relaxed)
+    }
+    pub fn set_gate_lfo1_pattern(&self, mask: u16) {
+        self.state.gate_lfo1.pattern.store(mask, Ordering::Relaxed);
+    }
+    pub fn gate_lfo1_pattern(&self) -> u16 {
+        self.state.gate_lfo1.pattern.load(Ordering::Relaxed)
+    }
+    pub fn set_gate_lfo1_step(&self, step: u8, on: bool) {
+        gate_set_step(&self.state.gate_lfo1, step, on);
+    }
+    pub fn gate_lfo1_step(&self, step: u8) -> bool {
+        gate_get_step(&self.state.gate_lfo1, step)
+    }
+    pub fn set_gate_lfo1_length(&self, len: u8) {
+        self.state
+            .gate_lfo1
+            .length
+            .store(len.clamp(1, 16), Ordering::Relaxed);
+    }
+    pub fn gate_lfo1_length(&self) -> u8 {
+        self.state.gate_lfo1.length.load(Ordering::Relaxed)
+    }
+    pub fn set_gate_lfo1_division(&self, d: u8) {
+        self.state.gate_lfo1.division.store(d, Ordering::Relaxed);
+    }
+    pub fn gate_lfo1_division(&self) -> u8 {
+        self.state.gate_lfo1.division.load(Ordering::Relaxed)
+    }
+    pub fn set_gate_lfo1_rate(&self, hz: f32) {
+        self.state.gate_lfo1.rate.set(hz);
+    }
+    pub fn gate_lfo1_rate(&self) -> f32 {
+        self.state.gate_lfo1.rate.value()
+    }
+
+    // LFO2 retrigger lane
+    pub fn set_gate_lfo2_enabled(&self, on: bool) {
+        self.state.gate_lfo2.enabled.store(on, Ordering::Relaxed);
+    }
+    pub fn gate_lfo2_enabled(&self) -> bool {
+        self.state.gate_lfo2.enabled.load(Ordering::Relaxed)
+    }
+    pub fn set_gate_lfo2_pattern(&self, mask: u16) {
+        self.state.gate_lfo2.pattern.store(mask, Ordering::Relaxed);
+    }
+    pub fn gate_lfo2_pattern(&self) -> u16 {
+        self.state.gate_lfo2.pattern.load(Ordering::Relaxed)
+    }
+    pub fn set_gate_lfo2_step(&self, step: u8, on: bool) {
+        gate_set_step(&self.state.gate_lfo2, step, on);
+    }
+    pub fn gate_lfo2_step(&self, step: u8) -> bool {
+        gate_get_step(&self.state.gate_lfo2, step)
+    }
+    pub fn set_gate_lfo2_length(&self, len: u8) {
+        self.state
+            .gate_lfo2
+            .length
+            .store(len.clamp(1, 16), Ordering::Relaxed);
+    }
+    pub fn gate_lfo2_length(&self) -> u8 {
+        self.state.gate_lfo2.length.load(Ordering::Relaxed)
+    }
+    pub fn set_gate_lfo2_division(&self, d: u8) {
+        self.state.gate_lfo2.division.store(d, Ordering::Relaxed);
+    }
+    pub fn gate_lfo2_division(&self) -> u8 {
+        self.state.gate_lfo2.division.load(Ordering::Relaxed)
+    }
+    pub fn set_gate_lfo2_rate(&self, hz: f32) {
+        self.state.gate_lfo2.rate.set(hz);
+    }
+    pub fn gate_lfo2_rate(&self) -> f32 {
+        self.state.gate_lfo2.rate.value()
     }
 
     // -- Amp envelope + glide + master --
@@ -999,7 +1089,7 @@ impl SynthEngineHandle {
             ParamId::Lfo2Shape => self.set_lfo2_shape(u8c(v, 2)),
             ParamId::Lfo2Dest => self.set_lfo2_dest(u8c(v, 2)),
 
-            // -- Gate lane: amp ducker --
+            // -- Gate lanes (amp ducker + LFO1 retrigger + LFO2 retrigger) --
             ParamId::GateAenvEnabled => self.set_gate_aenv_enabled(b(v)),
             ParamId::GateAenvPattern => {
                 let mask = (v.round().clamp(0.0, 65535.0) as u32 & 0xFFFF) as u16;
@@ -1009,6 +1099,22 @@ impl SynthEngineHandle {
             ParamId::GateAenvDivision => self.set_gate_aenv_division(u8c(v, 13)),
             ParamId::GateAenvRate => self.set_gate_aenv_rate(v),
             ParamId::GateAenvDepth => self.set_gate_aenv_depth(v),
+            ParamId::GateLfo1Enabled => self.set_gate_lfo1_enabled(b(v)),
+            ParamId::GateLfo1Pattern => {
+                let mask = (v.round().clamp(0.0, 65535.0) as u32 & 0xFFFF) as u16;
+                self.set_gate_lfo1_pattern(mask);
+            }
+            ParamId::GateLfo1Length => self.set_gate_lfo1_length(u8c(v.max(1.0), 16)),
+            ParamId::GateLfo1Division => self.set_gate_lfo1_division(u8c(v, 13)),
+            ParamId::GateLfo1Rate => self.set_gate_lfo1_rate(v),
+            ParamId::GateLfo2Enabled => self.set_gate_lfo2_enabled(b(v)),
+            ParamId::GateLfo2Pattern => {
+                let mask = (v.round().clamp(0.0, 65535.0) as u32 & 0xFFFF) as u16;
+                self.set_gate_lfo2_pattern(mask);
+            }
+            ParamId::GateLfo2Length => self.set_gate_lfo2_length(u8c(v.max(1.0), 16)),
+            ParamId::GateLfo2Division => self.set_gate_lfo2_division(u8c(v, 13)),
+            ParamId::GateLfo2Rate => self.set_gate_lfo2_rate(v),
 
             // -- Amp envelope + glide + master --
             ParamId::AmpAttack => self.set_amp_attack(v),
@@ -1123,6 +1229,16 @@ impl SynthEngineHandle {
             ParamId::GateAenvDivision => self.gate_aenv_division() as f32,
             ParamId::GateAenvRate => self.gate_aenv_rate(),
             ParamId::GateAenvDepth => self.gate_aenv_depth(),
+            ParamId::GateLfo1Enabled => bf(self.gate_lfo1_enabled()),
+            ParamId::GateLfo1Pattern => self.gate_lfo1_pattern() as f32,
+            ParamId::GateLfo1Length => self.gate_lfo1_length() as f32,
+            ParamId::GateLfo1Division => self.gate_lfo1_division() as f32,
+            ParamId::GateLfo1Rate => self.gate_lfo1_rate(),
+            ParamId::GateLfo2Enabled => bf(self.gate_lfo2_enabled()),
+            ParamId::GateLfo2Pattern => self.gate_lfo2_pattern() as f32,
+            ParamId::GateLfo2Length => self.gate_lfo2_length() as f32,
+            ParamId::GateLfo2Division => self.gate_lfo2_division() as f32,
+            ParamId::GateLfo2Rate => self.gate_lfo2_rate(),
             ParamId::AmpAttack => self.amp_attack(),
             ParamId::AmpDecay => self.amp_decay(),
             ParamId::AmpSustain => self.amp_sustain(),
@@ -1244,7 +1360,7 @@ impl SynthEngineHandle {
         self.set_lfo2_shape(p.lfo2_shape as u8);
         self.set_lfo2_dest(p.lfo2_dest as u8);
 
-        // -- Gate lane: amp ducker ("Pulse") --
+        // -- Gate lanes (amp ducker + LFO1 retrigger + LFO2 retrigger) --
         // Rate is recomputed UI-side from BPM + division when the patch loads;
         // here we only restore the user's choice (division) and the pattern state.
         self.set_gate_aenv_enabled(p.gate_aenv_enabled);
@@ -1252,6 +1368,14 @@ impl SynthEngineHandle {
         self.set_gate_aenv_length(p.gate_aenv_length);
         self.set_gate_aenv_division(p.gate_aenv_division as u8);
         self.set_gate_aenv_depth(p.gate_aenv_depth);
+        self.set_gate_lfo1_enabled(p.gate_lfo1_enabled);
+        self.set_gate_lfo1_pattern(p.gate_lfo1_pattern);
+        self.set_gate_lfo1_length(p.gate_lfo1_length);
+        self.set_gate_lfo1_division(p.gate_lfo1_division as u8);
+        self.set_gate_lfo2_enabled(p.gate_lfo2_enabled);
+        self.set_gate_lfo2_pattern(p.gate_lfo2_pattern);
+        self.set_gate_lfo2_length(p.gate_lfo2_length);
+        self.set_gate_lfo2_division(p.gate_lfo2_division as u8);
 
         // -- Amp envelope + glide + master --
         self.set_amp_attack(p.amp_adsr[0]);
@@ -1406,6 +1530,14 @@ impl SynthEngineHandle {
             gate_aenv_length: self.gate_aenv_length(),
             gate_aenv_division: self.gate_aenv_division() as usize,
             gate_aenv_depth: self.gate_aenv_depth(),
+            gate_lfo1_enabled: self.gate_lfo1_enabled(),
+            gate_lfo1_pattern: self.gate_lfo1_pattern(),
+            gate_lfo1_length: self.gate_lfo1_length(),
+            gate_lfo1_division: self.gate_lfo1_division() as usize,
+            gate_lfo2_enabled: self.gate_lfo2_enabled(),
+            gate_lfo2_pattern: self.gate_lfo2_pattern(),
+            gate_lfo2_length: self.gate_lfo2_length(),
+            gate_lfo2_division: self.gate_lfo2_division() as usize,
 
             filter_enabled: self.filter_cutoff() < 17_999.0 || self.filter_resonance() > 0.0,
             filter_cutoff: self.filter_cutoff(),

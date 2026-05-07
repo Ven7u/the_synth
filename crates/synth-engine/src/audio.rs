@@ -18,6 +18,38 @@ use synth_dsp::shimmer::{ShimmerReverb, ShimmerShared};
 
 pub const VOICE_COUNT: usize = 6;
 
+/// Tempo-synced 16-step gate sequencer attached to a single modulation source.
+///
+/// Each lane carries the *universal* gate state: enable flag, 16-bit step mask,
+/// active pattern length (1..=16), clock division, and current rate in Hz.
+/// Lane-specific parameters (e.g. duck depth on the amp lane) live as sibling
+/// fields on `AudioState`, not on `GatePattern`.
+///
+/// Rate is computed UI-side from global BPM + division (same idiom as
+/// `lfo_rate` in synced mode); the audio callback reads `rate` once per buffer
+/// and advances a phase accumulator at `rate / sr` per sample.
+pub struct GatePattern {
+    pub enabled: Arc<AtomicBool>,
+    pub pattern: Arc<AtomicU16>,
+    pub length: Arc<AtomicU8>,
+    pub division: Arc<AtomicU8>,
+    pub rate: Shared,
+}
+
+impl GatePattern {
+    /// Build a disabled lane with an empty pattern at the given default
+    /// division. `rate_hz` should match `division.hz(default_bpm)`.
+    pub fn new_disabled(division: ClockDivision, rate_hz: f32) -> Self {
+        Self {
+            enabled: Arc::new(AtomicBool::new(false)),
+            pattern: Arc::new(AtomicU16::new(0)),
+            length: Arc::new(AtomicU8::new(16)),
+            division: Arc::new(AtomicU8::new(division.to_u8())),
+            rate: shared(rate_hz),
+        }
+    }
+}
+
 pub struct AudioState {
     // OSC bank — 3 oscillators per voice
     pub osc_wave: [Arc<AtomicU8>; 3], // 0=sine 1=saw 2=square 3=triangle
@@ -78,16 +110,14 @@ pub struct AudioState {
     pub lfo2_shape: Arc<AtomicU8>, // 0=sin 1=tri 2=saw
     pub lfo2_dest: Arc<AtomicU8>,  // 0=pitch 1=filter 2=amp
 
-    // Gate-lane: amp ducker ("Pulse"). 16-step pattern, tempo-synced. When enabled, every
-    // "on" step fires a fast exponential duck on the master output post-FX, post-tanh.
-    // Rate is computed UI-side from BPM + division (same idiom as lfo_rate when synced),
-    // so the callback only needs to read `gate_aenv_rate` (Hz) and advance an accumulator.
-    pub gate_aenv_enabled: Arc<AtomicBool>,
-    pub gate_aenv_pattern: Arc<AtomicU16>, // 16-bit step mask (LSB = step 0)
-    pub gate_aenv_length: Arc<AtomicU8>,   // 1..=16
-    pub gate_aenv_division: Arc<AtomicU8>, // ClockDivision::to_u8() — source of truth for serialization
-    pub gate_aenv_rate: Shared,            // Hz (cycles per second), derived from bpm + division
-    pub gate_aenv_depth: Shared,           // 0.0..1.0 — ducks master by `depth` at peak
+    // Gate lanes — tempo-synced 16-step gate sequencers per modulation source.
+    //   `gate_aenv` ducks the master output ("Pulse"): each "on" step fires a
+    //   fast exponential duck on the post-FX, post-tanh signal, scaled by `gate_aenv_depth`.
+    //   `gate_lfo1`/`gate_lfo2` retrigger their LFO's phase to 0 on each "on" step.
+    pub gate_aenv: GatePattern,
+    pub gate_aenv_depth: Shared, // 0.0..1.0 — ducks master by `depth` at peak (lane-specific)
+    pub gate_lfo1: GatePattern,
+    pub gate_lfo2: GatePattern,
 
     // Voice target frequencies — UI writes here; callback smooths to voice_freqs for glide
     pub voice_freq_targets: Vec<Shared>,
@@ -274,12 +304,11 @@ impl AudioState {
             lfo2_depth: shared(0.0),
             lfo2_shape: Arc::new(AtomicU8::new(0)),
             lfo2_dest: Arc::new(AtomicU8::new(2)), // amp (tremolo)
-            gate_aenv_enabled: Arc::new(AtomicBool::new(false)),
-            gate_aenv_pattern: Arc::new(AtomicU16::new(0)),
-            gate_aenv_length: Arc::new(AtomicU8::new(16)),
-            gate_aenv_division: Arc::new(AtomicU8::new(ClockDivision::Eighth.to_u8())),
-            gate_aenv_rate: shared(4.0), // 1/8 at 120 BPM = 4 Hz
+            // Gate lanes default to disabled with empty pattern; rate matches 1/8 @ 120 BPM.
+            gate_aenv: GatePattern::new_disabled(ClockDivision::Eighth, 4.0),
             gate_aenv_depth: shared(0.0),
+            gate_lfo1: GatePattern::new_disabled(ClockDivision::Eighth, 4.0),
+            gate_lfo2: GatePattern::new_disabled(ClockDivision::Eighth, 4.0),
             voice_freq_targets: (0..VOICE_COUNT).map(|_| shared(440.0)).collect(),
             adsr_attack: shared(0.01),
             adsr_decay: shared(0.15),

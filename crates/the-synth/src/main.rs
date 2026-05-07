@@ -154,6 +154,16 @@ pub(crate) struct SynthApp {
     pub(crate) pulse_division: usize, // ClockDivision::to_u8() value
     pub(crate) pulse_depth: f32,
 
+    // LFO1 / LFO2 retrigger gate lanes — same shape as Pulse, no depth (retrigger is binary).
+    pub(crate) lfo1_gate_enabled: bool,
+    pub(crate) lfo1_gate_pattern: u16,
+    pub(crate) lfo1_gate_length: u8,
+    pub(crate) lfo1_gate_division: usize,
+    pub(crate) lfo2_gate_enabled: bool,
+    pub(crate) lfo2_gate_pattern: u16,
+    pub(crate) lfo2_gate_length: u8,
+    pub(crate) lfo2_gate_division: usize,
+
     pub(crate) filter_enabled: bool,
 
     // Filter — cutoff/q are kept because the UI wants to remember their
@@ -332,6 +342,14 @@ impl SynthApp {
             pulse_length: 16,
             pulse_division: synth_common::ClockDivision::Eighth.to_u8() as usize,
             pulse_depth: 0.0,
+            lfo1_gate_enabled: false,
+            lfo1_gate_pattern: 0,
+            lfo1_gate_length: 16,
+            lfo1_gate_division: synth_common::ClockDivision::Eighth.to_u8() as usize,
+            lfo2_gate_enabled: false,
+            lfo2_gate_pattern: 0,
+            lfo2_gate_length: 16,
+            lfo2_gate_division: synth_common::ClockDivision::Eighth.to_u8() as usize,
             filter_enabled: true,
             filter_cutoff: 3000.0,
             filter_q: 0.3,
@@ -484,10 +502,20 @@ impl SynthApp {
                 self.engine.set_lfo_rate(rate);
             }
         }
-        // Pulse gate-lane is always tempo-synced — recompute step rate from BPM + division.
+        // Gate lanes are always tempo-synced — recompute step rate from BPM + division.
         let pulse_rate = synth_common::ClockDivision::from_u8(self.pulse_division as u8).hz(global);
         if (self.engine.gate_aenv_rate() - pulse_rate).abs() > f32::EPSILON {
             self.engine.set_gate_aenv_rate(pulse_rate);
+        }
+        let lfo1_gate_rate =
+            synth_common::ClockDivision::from_u8(self.lfo1_gate_division as u8).hz(global);
+        if (self.engine.gate_lfo1_rate() - lfo1_gate_rate).abs() > f32::EPSILON {
+            self.engine.set_gate_lfo1_rate(lfo1_gate_rate);
+        }
+        let lfo2_gate_rate =
+            synth_common::ClockDivision::from_u8(self.lfo2_gate_division as u8).hz(global);
+        if (self.engine.gate_lfo2_rate() - lfo2_gate_rate).abs() > f32::EPSILON {
+            self.engine.set_gate_lfo2_rate(lfo2_gate_rate);
         }
     }
 
@@ -781,6 +809,14 @@ impl SynthApp {
         p.gate_aenv_length = self.pulse_length;
         p.gate_aenv_division = self.pulse_division;
         p.gate_aenv_depth = self.pulse_depth;
+        p.gate_lfo1_enabled = self.lfo1_gate_enabled;
+        p.gate_lfo1_pattern = self.lfo1_gate_pattern;
+        p.gate_lfo1_length = self.lfo1_gate_length;
+        p.gate_lfo1_division = self.lfo1_gate_division;
+        p.gate_lfo2_enabled = self.lfo2_gate_enabled;
+        p.gate_lfo2_pattern = self.lfo2_gate_pattern;
+        p.gate_lfo2_length = self.lfo2_gate_length;
+        p.gate_lfo2_division = self.lfo2_gate_division;
         p.filter_enabled = self.filter_enabled;
         p.filter_cutoff = self.filter_cutoff;
         p.filter_q = self.filter_q;
@@ -876,6 +912,14 @@ impl SynthApp {
         self.pulse_length = p.gate_aenv_length;
         self.pulse_division = p.gate_aenv_division;
         self.pulse_depth = p.gate_aenv_depth;
+        self.lfo1_gate_enabled = p.gate_lfo1_enabled;
+        self.lfo1_gate_pattern = p.gate_lfo1_pattern;
+        self.lfo1_gate_length = p.gate_lfo1_length;
+        self.lfo1_gate_division = p.gate_lfo1_division;
+        self.lfo2_gate_enabled = p.gate_lfo2_enabled;
+        self.lfo2_gate_pattern = p.gate_lfo2_pattern;
+        self.lfo2_gate_length = p.gate_lfo2_length;
+        self.lfo2_gate_division = p.gate_lfo2_division;
         self.filter_enabled = p.filter_enabled;
         self.filter_cutoff = p.filter_cutoff;
         self.filter_q = p.filter_q;

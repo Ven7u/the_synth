@@ -140,6 +140,15 @@ where
     let depth_smooth_coeff: f32 = (-1.0_f32 / (0.010 * sr as f32)).exp(); // 10 ms
     let mut depth_smooth: f32 = 0.0;
 
+    // Gate-lane retrigger state for LFO1 and LFO2 — each lane resets its LFO's
+    // phase to 0 on every fired step. Same accumulator pattern as the duck lane.
+    let mut gate_lfo1_acc: f32 = 1.0;
+    let mut gate_lfo1_step: u32 = 0;
+    let mut gate_lfo1_was_enabled: bool = false;
+    let mut gate_lfo2_acc: f32 = 1.0;
+    let mut gate_lfo2_step: u32 = 0;
+    let mut gate_lfo2_was_enabled: bool = false;
+
     // Per-voice smoothed frequencies for glide (callback writes to voice_freqs from these)
     let mut smoothed_freqs: Vec<f32> = vec![440.0; VOICE_COUNT];
 
@@ -202,26 +211,42 @@ where
             let lfo2_dest = state.lfo2_dest.load(std::sync::atomic::Ordering::Relaxed);
             let lfo2_dt = lfo2_rate / sr_f;
 
-            // Gate-lane: read once per buffer.
-            let gate_aenv_enabled = state
-                .gate_aenv_enabled
-                .load(std::sync::atomic::Ordering::Relaxed);
-            let gate_aenv_pattern = state
-                .gate_aenv_pattern
-                .load(std::sync::atomic::Ordering::Relaxed);
-            let gate_aenv_length = {
-                let raw = state
-                    .gate_aenv_length
-                    .load(std::sync::atomic::Ordering::Relaxed);
-                if raw < 1 { 1u32 } else { raw as u32 }
-            };
-            let gate_aenv_dt = state.gate_aenv_rate.value() / sr_f;
-            // Reset the step phase on rising edge so step 0 always fires the moment the user enables Pulse.
-            if gate_aenv_enabled && !gate_aenv_was_enabled {
-                gate_aenv_acc = 1.0;
-                gate_aenv_step = 0;
+            // Gate lanes: read each lane's state once per buffer. Each lane stores
+            // (enabled, pattern, length, rate); per-callback locals carry the phase
+            // accumulator and step counter so all lanes stay phase-coherent within a buffer.
+            // Rising-edge resets ensure step 0 fires the moment a lane is enabled.
+            macro_rules! read_gate_lane {
+                ($lane:ident, $acc:ident, $step:ident, $was:ident) => {{
+                    let enabled = state
+                        .$lane
+                        .enabled
+                        .load(std::sync::atomic::Ordering::Relaxed);
+                    let pattern = state
+                        .$lane
+                        .pattern
+                        .load(std::sync::atomic::Ordering::Relaxed);
+                    let length = {
+                        let raw = state
+                            .$lane
+                            .length
+                            .load(std::sync::atomic::Ordering::Relaxed);
+                        if raw < 1 { 1u32 } else { raw as u32 }
+                    };
+                    let dt = state.$lane.rate.value() / sr_f;
+                    if enabled && !$was {
+                        $acc = 1.0;
+                        $step = 0;
+                    }
+                    $was = enabled;
+                    (enabled, pattern, length, dt)
+                }};
             }
-            gate_aenv_was_enabled = gate_aenv_enabled;
+            let (gate_aenv_enabled, gate_aenv_pattern, gate_aenv_length, gate_aenv_dt) =
+                read_gate_lane!(gate_aenv, gate_aenv_acc, gate_aenv_step, gate_aenv_was_enabled);
+            let (gate_lfo1_enabled, gate_lfo1_pattern, gate_lfo1_length, gate_lfo1_dt) =
+                read_gate_lane!(gate_lfo1, gate_lfo1_acc, gate_lfo1_step, gate_lfo1_was_enabled);
+            let (gate_lfo2_enabled, gate_lfo2_pattern, gate_lfo2_length, gate_lfo2_dt) =
+                read_gate_lane!(gate_lfo2, gate_lfo2_acc, gate_lfo2_step, gate_lfo2_was_enabled);
             let base_cutoff =
                 (state.cutoff.value() + state.mod_wheel_cutoff_add.value()).clamp(80.0, 18000.0);
 
@@ -354,6 +379,31 @@ where
                             duck_attacking = true;
                         }
                         gate_aenv_step = gate_aenv_step.wrapping_add(1);
+                    }
+                }
+                // Gate lanes for LFO1/LFO2: each "on" step resets the LFO's phase to 0.
+                // Phase reset is a discontinuity in the modulator — a small click at high LFO
+                // depth. Documented in click-prevention plan; click-free retrigger is a follow-up.
+                if gate_lfo1_enabled {
+                    gate_lfo1_acc += gate_lfo1_dt;
+                    if gate_lfo1_acc >= 1.0 {
+                        gate_lfo1_acc -= 1.0;
+                        let step_idx = (gate_lfo1_step % gate_lfo1_length) as u8;
+                        if (gate_lfo1_pattern >> step_idx) & 1 != 0 {
+                            lfo_phase = 0.0;
+                        }
+                        gate_lfo1_step = gate_lfo1_step.wrapping_add(1);
+                    }
+                }
+                if gate_lfo2_enabled {
+                    gate_lfo2_acc += gate_lfo2_dt;
+                    if gate_lfo2_acc >= 1.0 {
+                        gate_lfo2_acc -= 1.0;
+                        let step_idx = (gate_lfo2_step % gate_lfo2_length) as u8;
+                        if (gate_lfo2_pattern >> step_idx) & 1 != 0 {
+                            lfo2_phase = 0.0;
+                        }
+                        gate_lfo2_step = gate_lfo2_step.wrapping_add(1);
                     }
                 }
                 // Asymmetric envelope: ramp up to 1.0 with fast attack, then decay slowly.

@@ -73,19 +73,36 @@ pub struct Patch {
     #[serde(default = "default_lfo2_dest")]
     pub lfo2_dest: usize,
 
-    // Gate lane: master ducker ("Pulse"). 16-step tempo-synced gate that fires
-    // a fast exponential duck on the master output. Rate derives from global BPM
-    // and `gate_aenv_division`. All fields default to "off" so legacy scenes load unchanged.
+    // Gate lanes — tempo-synced 16-step gate sequencers per modulation source.
+    //   `gate_aenv_*`: master ducker ("Pulse") — fires a fast duck on the master output.
+    //   `gate_lfo1_*` / `gate_lfo2_*`: retrigger LFO1 / LFO2 phase to 0 on each "on" step.
+    // All fields default to "off" so legacy scenes load unchanged.
     #[serde(default)]
     pub gate_aenv_enabled: bool,
     #[serde(default)]
     pub gate_aenv_pattern: u16,
-    #[serde(default = "default_gate_aenv_length")]
+    #[serde(default = "default_gate_length")]
     pub gate_aenv_length: u8,
-    #[serde(default = "default_gate_aenv_division")]
+    #[serde(default = "default_gate_division")]
     pub gate_aenv_division: usize,
     #[serde(default)]
     pub gate_aenv_depth: f32,
+    #[serde(default)]
+    pub gate_lfo1_enabled: bool,
+    #[serde(default)]
+    pub gate_lfo1_pattern: u16,
+    #[serde(default = "default_gate_length")]
+    pub gate_lfo1_length: u8,
+    #[serde(default = "default_gate_division")]
+    pub gate_lfo1_division: usize,
+    #[serde(default)]
+    pub gate_lfo2_enabled: bool,
+    #[serde(default)]
+    pub gate_lfo2_pattern: u16,
+    #[serde(default = "default_gate_length")]
+    pub gate_lfo2_length: u8,
+    #[serde(default = "default_gate_division")]
+    pub gate_lfo2_division: usize,
 
     // Filter
     pub filter_enabled: bool,
@@ -211,10 +228,10 @@ fn default_stereo_width() -> f32 {
 fn default_lfo_division() -> usize {
     4
 }
-fn default_gate_aenv_length() -> u8 {
+fn default_gate_length() -> u8 {
     16
 }
-fn default_gate_aenv_division() -> usize {
+fn default_gate_division() -> usize {
     // ClockDivision::Eighth = 3
     3
 }

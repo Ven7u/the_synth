@@ -3,6 +3,14 @@ use crate::SynthApp;
 use eframe::egui;
 use egui::{Color32, Pos2, RichText, Stroke};
 
+/// Identifies which LFO panel hosts the gate-lane sub-row. Used by
+/// `ui_lfo_gate_row` to dispatch reads/writes to the right SynthApp fields.
+#[derive(Clone, Copy)]
+enum LfoGate {
+    L1,
+    L2,
+}
+
 /// (label, beats_per_cycle) — beats relative to a quarter note.
 /// rate_hz = bpm / 60.0 / beats_per_cycle
 pub const LFO_SYNC_DIVISIONS: &[(&str, f32)] = &[
@@ -198,6 +206,10 @@ impl SynthApp {
                         }
                     }
                 });
+
+                ui.add_space(sp_xs);
+                ui.separator();
+                self.ui_lfo_gate_row(ui, LfoGate::L1);
             });
         });
     }
@@ -293,6 +305,10 @@ impl SynthApp {
                         }
                     }
                 });
+
+                ui.add_space(sp_xs);
+                ui.separator();
+                self.ui_lfo_gate_row(ui, LfoGate::L2);
             });
         });
     }
@@ -442,6 +458,152 @@ impl SynthApp {
                 });
             });
         });
+    }
+
+    /// Compact RETRIG sub-row appended inside `ui_lfo_panel` / `ui_lfo2_panel`.
+    /// Renders a small enable toggle, a division combobox, and a 16-cell step row.
+    /// Routes reads/writes through `which` so the same code drives both LFOs.
+    fn ui_lfo_gate_row(&mut self, ui: &mut egui::Ui, which: LfoGate) {
+        // Snapshot current state for the requested lane (avoids &mut self field aliasing).
+        let mut enabled = match which {
+            LfoGate::L1 => self.lfo1_gate_enabled,
+            LfoGate::L2 => self.lfo2_gate_enabled,
+        };
+        let mut pattern = match which {
+            LfoGate::L1 => self.lfo1_gate_pattern,
+            LfoGate::L2 => self.lfo2_gate_pattern,
+        };
+        let length = match which {
+            LfoGate::L1 => self.lfo1_gate_length,
+            LfoGate::L2 => self.lfo2_gate_length,
+        };
+        let mut division = match which {
+            LfoGate::L1 => self.lfo1_gate_division,
+            LfoGate::L2 => self.lfo2_gate_division,
+        };
+
+        // Header row: RETRIG enable + division dropdown
+        ui.horizontal(|ui| {
+            let col = if enabled {
+                self.theme.c(&self.theme.accent)
+            } else {
+                self.theme.c(&self.theme.text_disabled)
+            };
+            if ui
+                .add(egui::SelectableLabel::new(
+                    enabled,
+                    RichText::new("RETRIG").size(10.0).strong().color(col),
+                ))
+                .on_hover_text(
+                    "Resets the LFO's phase to 0 on each \"on\" step (tempo-synced).\n\
+                     \n\
+                     The LFO keeps running at its own RATE — retrigger only restarts the cycle.\n\
+                     Set the LFO rate SLOWER than the retrigger rate so each gated step plays\n\
+                     just the start of the LFO shape, like a tempo-locked envelope:\n\
+                       • LFO 0.3–1 Hz + RETRIG 1/4 → rhythmic filter/amp sweeps.\n\
+                       • LFO at the same rate as RETRIG → no audible effect (already aligned).\n\
+                       • LFO faster than RETRIG → barely audible (only tiny phase glitches).",
+                )
+                .clicked()
+            {
+                enabled = !enabled;
+            }
+
+            let div = synth_common::ClockDivision::from_u8(division as u8);
+            egui::ComboBox::from_id_source(("lfo_gate_div", which as u8))
+                .selected_text(div.label())
+                .show_ui(ui, |ui| {
+                    for d in synth_common::ClockDivision::ALL {
+                        if ui
+                            .selectable_label(div == *d, d.label())
+                            .on_hover_text(format!(
+                                "{} → {:.2} Hz @ {} BPM",
+                                d.label(),
+                                d.hz(self.global_bpm as f32),
+                                self.global_bpm
+                            ))
+                            .clicked()
+                        {
+                            division = d.to_u8() as usize;
+                        }
+                    }
+                });
+        });
+
+        // 16-cell step row.
+        let mut pattern_changed = false;
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.horizontal(|ui| {
+                let total_w = ui.available_width();
+                let spacing = ui.spacing().item_spacing.x;
+                let step_w = ((total_w - spacing * 15.0) / 16.0).max(10.0);
+                let cell_h = 18.0;
+                let active_col = self.theme.c(&self.theme.accent);
+                let inactive_col = self.theme.c(&self.theme.bg_sunken);
+                let edge = self.theme.c(&self.theme.text_disabled);
+                for i in 0..16u8 {
+                    let on_step = (pattern >> i) & 1 != 0;
+                    let in_active_len = i < length;
+                    let (rect, resp) = ui.allocate_exact_size(
+                        egui::Vec2::new(step_w, cell_h),
+                        egui::Sense::click(),
+                    );
+                    let painter = ui.painter_at(rect);
+                    let fill = if on_step { active_col } else { inactive_col };
+                    let alpha = if in_active_len { 255 } else { 90 };
+                    let fill = egui::Color32::from_rgba_unmultiplied(
+                        fill.r(),
+                        fill.g(),
+                        fill.b(),
+                        alpha,
+                    );
+                    painter.rect_filled(rect, egui::Rounding::same(2.0), fill);
+                    painter.rect_stroke(rect, egui::Rounding::same(2.0), Stroke::new(1.0, edge));
+                    if resp.clicked() {
+                        pattern ^= 1u16 << i;
+                        pattern_changed = true;
+                    }
+                }
+            });
+        });
+
+        // Push changes back to SynthApp + engine.
+        match which {
+            LfoGate::L1 => {
+                if self.lfo1_gate_enabled != enabled {
+                    self.lfo1_gate_enabled = enabled;
+                    self.engine.set_gate_lfo1_enabled(enabled);
+                }
+                if self.lfo1_gate_division != division {
+                    self.lfo1_gate_division = division;
+                    self.engine.set_gate_lfo1_division(division as u8);
+                    let rate = synth_common::ClockDivision::from_u8(division as u8)
+                        .hz(self.global_bpm as f32);
+                    self.engine.set_gate_lfo1_rate(rate);
+                }
+                if pattern_changed {
+                    self.lfo1_gate_pattern = pattern;
+                    self.engine.set_gate_lfo1_pattern(pattern);
+                }
+            }
+            LfoGate::L2 => {
+                if self.lfo2_gate_enabled != enabled {
+                    self.lfo2_gate_enabled = enabled;
+                    self.engine.set_gate_lfo2_enabled(enabled);
+                }
+                if self.lfo2_gate_division != division {
+                    self.lfo2_gate_division = division;
+                    self.engine.set_gate_lfo2_division(division as u8);
+                    let rate = synth_common::ClockDivision::from_u8(division as u8)
+                        .hz(self.global_bpm as f32);
+                    self.engine.set_gate_lfo2_rate(rate);
+                }
+                if pattern_changed {
+                    self.lfo2_gate_pattern = pattern;
+                    self.engine.set_gate_lfo2_pattern(pattern);
+                }
+            }
+        }
     }
 
     pub fn ui_filter_panel(&mut self, ui: &mut egui::Ui) {
