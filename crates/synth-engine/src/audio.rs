@@ -48,12 +48,12 @@ pub struct AudioState {
     pub noise_vol: Shared, // 0.0..1.0
 
     // Filter
-    pub cutoff: Shared,            // base cutoff Hz (80..18000)
-    pub resonance: Shared,         // Q (0.5..20)
-    pub filter_drive: Shared,      // 1.0..10.0 — input saturation before moog
-    pub filter_key_track: Shared,  // 0.0..1.0 — cutoff follows voice pitch (0=off, 1=full)
+    pub cutoff: Shared,               // base cutoff Hz (80..18000)
+    pub resonance: Shared,            // Q (0.5..20)
+    pub filter_drive: Shared,         // 1.0..10.0 — input saturation before moog
+    pub filter_key_track: Shared,     // 0.0..1.0 — cutoff follows voice pitch (0=off, 1=full)
     pub mod_wheel_cutoff_add: Shared, // 0..8000 Hz — modulation wheel additive filter offset
-    pub filter_env_amount: Shared, // 0.0..1.0
+    pub filter_env_amount: Shared,    // 0.0..1.0
     // Filter ADSR
     pub fenv_attack: Shared,
     pub fenv_decay: Shared,

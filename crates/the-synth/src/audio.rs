@@ -185,8 +185,8 @@ where
             let lfo2_shape = state.lfo2_shape.load(std::sync::atomic::Ordering::Relaxed);
             let lfo2_dest = state.lfo2_dest.load(std::sync::atomic::Ordering::Relaxed);
             let lfo2_dt = lfo2_rate / sr_f;
-            let base_cutoff = (state.cutoff.value() + state.mod_wheel_cutoff_add.value())
-                .clamp(80.0, 18000.0);
+            let base_cutoff =
+                (state.cutoff.value() + state.mod_wheel_cutoff_add.value()).clamp(80.0, 18000.0);
 
             // Key tracking: scale cutoff by the pitch of the highest sounding voice.
             // Uses amp_cursors (non-zero from attack through release) so a fresh

@@ -158,8 +158,8 @@ pub(crate) struct SynthApp {
     // Keyboard
     pub(crate) piano_octave: i32,
     pub(crate) piano_velocity: u8,
-    pub(crate) piano_pitch_bend: i8,  // -2, -1, 0, +1, +2 semitones
-    pub(crate) piano_mod_wheel: u8,   // 0–5: keys 3(off)–8(max); maps to 0–8000 Hz filter offset
+    pub(crate) piano_pitch_bend: i8, // -2, -1, 0, +1, +2 semitones
+    pub(crate) piano_mod_wheel: u8,  // 0–5: keys 3(off)–8(max); maps to 0–8000 Hz filter offset
     pub(crate) piano_held_midi: std::collections::HashSet<u8>,
     pub(crate) piano_mouse_midi: Option<u8>,
     pub(crate) kb_chord_mode: bool, // true = chord pads, false = standard piano

@@ -10,22 +10,22 @@ const WHITE_SEMITONES: &[i32] = &[0, 2, 4, 5, 7, 9, 11];
 const BLACK_SEMITONES: &[Option<i32>] = &[Some(1), Some(3), None, Some(6), Some(8), Some(10), None];
 
 const KEY_MAP: &[(egui::Key, i32)] = &[
-    (egui::Key::A, 0),   // C
-    (egui::Key::W, 1),   // C#
-    (egui::Key::S, 2),   // D
-    (egui::Key::E, 3),   // D#
-    (egui::Key::D, 4),   // E
-    (egui::Key::F, 5),   // F
-    (egui::Key::T, 6),   // F#
-    (egui::Key::G, 7),   // G
-    (egui::Key::Y, 8),   // G#
-    (egui::Key::H, 9),   // A
-    (egui::Key::U, 10),  // A#
-    (egui::Key::J, 11),  // B
-    (egui::Key::K, 12),  // C
-    (egui::Key::O, 13),  // C#
-    (egui::Key::L, 14),  // D
-    (egui::Key::P, 15),  // D#
+    (egui::Key::A, 0),          // C
+    (egui::Key::W, 1),          // C#
+    (egui::Key::S, 2),          // D
+    (egui::Key::E, 3),          // D#
+    (egui::Key::D, 4),          // E
+    (egui::Key::F, 5),          // F
+    (egui::Key::T, 6),          // F#
+    (egui::Key::G, 7),          // G
+    (egui::Key::Y, 8),          // G#
+    (egui::Key::H, 9),          // A
+    (egui::Key::U, 10),         // A#
+    (egui::Key::J, 11),         // B
+    (egui::Key::K, 12),         // C
+    (egui::Key::O, 13),         // C#
+    (egui::Key::L, 14),         // D
+    (egui::Key::P, 15),         // D#
     (egui::Key::Semicolon, 16), // E
     (egui::Key::Quote, 17),     // F
 ];
@@ -209,7 +209,7 @@ impl SynthApp {
                     }
                     // 1 = pitch bend down, 2 = pitch bend up (hold), release = reset
                     let bend_down = inp.key_down(egui::Key::Num1);
-                    let bend_up   = inp.key_down(egui::Key::Num2);
+                    let bend_up = inp.key_down(egui::Key::Num2);
                     self.piano_pitch_bend = if bend_down && !bend_up {
                         -2
                     } else if bend_up && !bend_down {

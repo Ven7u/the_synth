@@ -144,7 +144,9 @@ impl VoiceAllocator {
     fn drain_events(&mut self, state: &AudioState, rx: &ControlReceiver) {
         while let Ok(ev) = rx.try_recv() {
             match ev {
-                ControlEvent::NoteOn { pitch, velocity, .. } => {
+                ControlEvent::NoteOn {
+                    pitch, velocity, ..
+                } => {
                     if state.arp.enabled.load(Ordering::Relaxed) {
                         self.arp.note_on(pitch);
                     } else {
