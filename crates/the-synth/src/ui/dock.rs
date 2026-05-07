@@ -100,9 +100,12 @@ impl<'a> TabViewer for SynthTabViewer<'a> {
                 });
             }
             Tab::Modulation => {
-                ui.columns(2, |cols| {
-                    self.app.ui_lfo_panel(&mut cols[0]);
-                    self.app.ui_lfo2_panel(&mut cols[1]);
+                ui.vertical(|ui| {
+                    ui.columns(2, |cols| {
+                        self.app.ui_lfo_panel(&mut cols[0]);
+                        self.app.ui_lfo2_panel(&mut cols[1]);
+                    });
+                    self.app.ui_pulse_panel(ui);
                 });
             }
             Tab::Filter => {

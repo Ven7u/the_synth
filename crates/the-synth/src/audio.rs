@@ -124,6 +124,22 @@ where
     let mut lfo_phase: f32 = 0.0;
     let mut lfo2_phase: f32 = 0.25; // offset by 90° so LFO1 and LFO2 don't start in sync
 
+    // Gate-lane "Pulse" (master ducker) state.
+    //   acc starts at 1.0 so the first sample after enabling fires step 0.
+    //   step counter wraps modulo `length` from the engine state.
+    //   duck_env follows a one-pole asymmetric envelope: fast attack toward 1.0,
+    //   slow exponential decay back to 0. Bandlimits the modulator → no clicks.
+    let mut gate_aenv_acc: f32 = 1.0;
+    let mut gate_aenv_step: u32 = 0;
+    let mut gate_aenv_was_enabled: bool = false;
+    let mut duck_env: f32 = 0.0;
+    let mut duck_attacking: bool = false;
+    let duck_attack_coeff: f32 = (-1.0_f32 / (0.0015 * sr as f32)).exp(); // 1.5 ms attack
+    let duck_decay_coeff: f32 = (-1.0_f32 / (0.150 * sr as f32)).exp(); // 150 ms decay
+    // Smoothed depth — prevents zipper noise / micro-clicks when the user moves the slider.
+    let depth_smooth_coeff: f32 = (-1.0_f32 / (0.010 * sr as f32)).exp(); // 10 ms
+    let mut depth_smooth: f32 = 0.0;
+
     // Per-voice smoothed frequencies for glide (callback writes to voice_freqs from these)
     let mut smoothed_freqs: Vec<f32> = vec![440.0; VOICE_COUNT];
 
@@ -185,6 +201,27 @@ where
             let lfo2_shape = state.lfo2_shape.load(std::sync::atomic::Ordering::Relaxed);
             let lfo2_dest = state.lfo2_dest.load(std::sync::atomic::Ordering::Relaxed);
             let lfo2_dt = lfo2_rate / sr_f;
+
+            // Gate-lane: read once per buffer.
+            let gate_aenv_enabled = state
+                .gate_aenv_enabled
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let gate_aenv_pattern = state
+                .gate_aenv_pattern
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let gate_aenv_length = {
+                let raw = state
+                    .gate_aenv_length
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                if raw < 1 { 1u32 } else { raw as u32 }
+            };
+            let gate_aenv_dt = state.gate_aenv_rate.value() / sr_f;
+            // Reset the step phase on rising edge so step 0 always fires the moment the user enables Pulse.
+            if gate_aenv_enabled && !gate_aenv_was_enabled {
+                gate_aenv_acc = 1.0;
+                gate_aenv_step = 0;
+            }
+            gate_aenv_was_enabled = gate_aenv_enabled;
             let base_cutoff =
                 (state.cutoff.value() + state.mod_wheel_cutoff_add.value()).clamp(80.0, 18000.0);
 
@@ -306,6 +343,30 @@ where
                     .set((keyed_cutoff + filter_mod * keyed_cutoff * 0.5).clamp(80.0, 18000.0));
                 let lfo_amp = amp_mod;
 
+                // Gate-lane "Pulse": advance step accumulator, fire on each step boundary.
+                // acc wraps from 1.0 — when it crosses 1.0 we've reached the next step.
+                if gate_aenv_enabled {
+                    gate_aenv_acc += gate_aenv_dt;
+                    if gate_aenv_acc >= 1.0 {
+                        gate_aenv_acc -= 1.0;
+                        let step_idx = (gate_aenv_step % gate_aenv_length) as u8;
+                        if (gate_aenv_pattern >> step_idx) & 1 != 0 {
+                            duck_attacking = true;
+                        }
+                        gate_aenv_step = gate_aenv_step.wrapping_add(1);
+                    }
+                }
+                // Asymmetric envelope: ramp up to 1.0 with fast attack, then decay slowly.
+                // Bandlimits the modulator and kills the trigger click.
+                if duck_attacking {
+                    duck_env = 1.0 + duck_attack_coeff * (duck_env - 1.0);
+                    if duck_env > 0.99 {
+                        duck_attacking = false;
+                    }
+                } else {
+                    duck_env *= duck_decay_coeff;
+                }
+
                 // Drive the voice allocator's per-sample retrigger countdown.
                 // Flips any voice's gate back to 1.0 when its countdown
                 // expires, giving the ADSR a real 0→1 transition for a clean
@@ -335,12 +396,18 @@ where
                 let target_global = state.global_vol.value() as f32;
                 global_vol_smooth =
                     target_global + global_vol_coeff * (global_vol_smooth - target_global);
+                let target_depth = state.gate_aenv_depth.value();
+                depth_smooth =
+                    target_depth + depth_smooth_coeff * (depth_smooth - target_depth);
+                let duck_mult = 1.0 - duck_env * depth_smooth;
                 let l = if raw_l.is_finite() { raw_l.tanh() } else { 0.0 }
                     * lfo_amp
-                    * global_vol_smooth;
+                    * global_vol_smooth
+                    * duck_mult;
                 let r_out = if raw_r.is_finite() { raw_r.tanh() } else { 0.0 }
                     * lfo_amp
-                    * global_vol_smooth;
+                    * global_vol_smooth
+                    * duck_mult;
 
                 // Peak metering: track true output level (post-limiter, post-tanh)
                 if l.abs() > peak_l_local {

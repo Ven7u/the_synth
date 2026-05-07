@@ -146,6 +146,14 @@ pub(crate) struct SynthApp {
     pub(crate) lfo2_shape: usize,
     pub(crate) lfo2_dest: usize,
 
+    // Pulse (master ducker gate-lane). Pattern + length + division are UI-side mirrors of
+    // the engine atomics; rate is derived from global_bpm + division and pushed via apply_clock_sync.
+    pub(crate) pulse_enabled: bool,
+    pub(crate) pulse_pattern: u16,
+    pub(crate) pulse_length: u8,
+    pub(crate) pulse_division: usize, // ClockDivision::to_u8() value
+    pub(crate) pulse_depth: f32,
+
     pub(crate) filter_enabled: bool,
 
     // Filter — cutoff/q are kept because the UI wants to remember their
@@ -319,6 +327,11 @@ impl SynthApp {
             lfo2_depth: 0.0,
             lfo2_shape: 0,
             lfo2_dest: 2, // amp (tremolo)
+            pulse_enabled: false,
+            pulse_pattern: 0,
+            pulse_length: 16,
+            pulse_division: synth_common::ClockDivision::Eighth.to_u8() as usize,
+            pulse_depth: 0.0,
             filter_enabled: true,
             filter_cutoff: 3000.0,
             filter_q: 0.3,
@@ -470,6 +483,11 @@ impl SynthApp {
                 self.lfo_rate = rate;
                 self.engine.set_lfo_rate(rate);
             }
+        }
+        // Pulse gate-lane is always tempo-synced — recompute step rate from BPM + division.
+        let pulse_rate = synth_common::ClockDivision::from_u8(self.pulse_division as u8).hz(global);
+        if (self.engine.gate_aenv_rate() - pulse_rate).abs() > f32::EPSILON {
+            self.engine.set_gate_aenv_rate(pulse_rate);
         }
     }
 
@@ -758,6 +776,11 @@ impl SynthApp {
         p.lfo2_depth = self.lfo2_depth;
         p.lfo2_shape = self.lfo2_shape;
         p.lfo2_dest = self.lfo2_dest;
+        p.gate_aenv_enabled = self.pulse_enabled;
+        p.gate_aenv_pattern = self.pulse_pattern;
+        p.gate_aenv_length = self.pulse_length;
+        p.gate_aenv_division = self.pulse_division;
+        p.gate_aenv_depth = self.pulse_depth;
         p.filter_enabled = self.filter_enabled;
         p.filter_cutoff = self.filter_cutoff;
         p.filter_q = self.filter_q;
@@ -848,6 +871,11 @@ impl SynthApp {
         self.lfo2_depth = p.lfo2_depth;
         self.lfo2_shape = p.lfo2_shape;
         self.lfo2_dest = p.lfo2_dest;
+        self.pulse_enabled = p.gate_aenv_enabled;
+        self.pulse_pattern = p.gate_aenv_pattern;
+        self.pulse_length = p.gate_aenv_length;
+        self.pulse_division = p.gate_aenv_division;
+        self.pulse_depth = p.gate_aenv_depth;
         self.filter_enabled = p.filter_enabled;
         self.filter_cutoff = p.filter_cutoff;
         self.filter_q = p.filter_q;

@@ -75,6 +75,15 @@ pub enum ParamId {
     Lfo2Shape,
     Lfo2Dest,
 
+    // --- Gate lane: amp ducker ("Pulse") ---
+    GateAenvEnabled,
+    /// 16-bit step mask, transmitted as f32 (0.0..=65535.0).
+    GateAenvPattern,
+    GateAenvLength,
+    GateAenvDivision,
+    GateAenvRate,
+    GateAenvDepth,
+
     // --- Amp envelope + glide + master ---
     AmpAttack,
     AmpDecay,
@@ -808,6 +817,49 @@ static TABLE: &[ParamDescriptor] = &[
     ),
     d_discrete(ParamId::Lfo2Shape, "LFO 2 Shape", "lfo2/shape", 3, 0.0),
     d_discrete(ParamId::Lfo2Dest, "LFO 2 Dest", "lfo2/dest", 3, 2.0),
+    // -- Gate lane: amp ducker ("Pulse") --
+    d_bool(ParamId::GateAenvEnabled, "Pulse Enable", "pulse/enabled", false),
+    d_linear(
+        ParamId::GateAenvPattern,
+        "Pulse Pattern",
+        "pulse/pattern",
+        0.0,
+        65535.0,
+        0.0,
+        "",
+    ),
+    d_discrete(
+        ParamId::GateAenvLength,
+        "Pulse Length",
+        "pulse/length",
+        16,
+        15.0,
+    ),
+    d_discrete(
+        ParamId::GateAenvDivision,
+        "Pulse Division",
+        "pulse/division",
+        14,
+        3.0,
+    ),
+    d_log(
+        ParamId::GateAenvRate,
+        "Pulse Rate",
+        "pulse/rate",
+        0.1,
+        40.0,
+        4.0,
+        "Hz",
+    ),
+    d_linear(
+        ParamId::GateAenvDepth,
+        "Pulse Depth",
+        "pulse/depth",
+        0.0,
+        1.0,
+        0.0,
+        "",
+    ),
     // -- Amp envelope + glide + master --
     d_log(
         ParamId::AmpAttack,

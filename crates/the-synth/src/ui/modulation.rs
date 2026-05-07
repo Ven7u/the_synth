@@ -297,6 +297,153 @@ impl SynthApp {
         });
     }
 
+    /// "PULSE" — gate-lane sequencer that ducks the master output on each "on" step,
+    /// tempo-synced to the global BPM. Visual style mirrors `ui_lfo_panel` /
+    /// `ui_lfo2_panel`: a `SynthFrame::section` with header, knob row, division row,
+    /// and a 16-cell step row below.
+    pub fn ui_pulse_panel(&mut self, ui: &mut egui::Ui) {
+        let sp_xs = self.theme.sp_xs;
+
+        SynthFrame::section(&self.theme).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+
+            // Header
+            ui.horizontal(|ui| {
+                let on = self.pulse_enabled;
+                let col = if on {
+                    self.theme.c(&self.theme.accent)
+                } else {
+                    self.theme.c(&self.theme.text_disabled)
+                };
+                if ui
+                    .add(egui::SelectableLabel::new(
+                        on,
+                        RichText::new("PULSE").size(12.0).strong().color(col),
+                    ))
+                    .on_hover_text(
+                        "Tempo-synced sidechain ducker — every \"on\" step dips the master output",
+                    )
+                    .clicked()
+                {
+                    self.pulse_enabled = !on;
+                    self.engine.set_gate_aenv_enabled(self.pulse_enabled);
+                }
+            });
+
+            ui.add_space(sp_xs);
+
+            ui.add_enabled_ui(self.pulse_enabled, |ui| {
+                // Depth knob + length stepper
+                ui.horizontal(|ui| {
+                    if super::widgets::knob(
+                        ui,
+                        &mut self.pulse_depth,
+                        0.0..=1.0,
+                        "DEPTH",
+                        &self.theme,
+                        false,
+                    )
+                    .on_hover_text("How hard each step ducks the master output")
+                    .changed()
+                    {
+                        self.engine.set_gate_aenv_depth(self.pulse_depth);
+                    }
+
+                    ui.label(
+                        RichText::new("LEN")
+                            .size(10.0)
+                            .color(self.theme.c(&self.theme.text_secondary)),
+                    );
+                    let mut len = self.pulse_length as i32;
+                    if ui
+                        .add(egui::DragValue::new(&mut len).range(1..=16))
+                        .on_hover_text("Number of active steps before the pattern repeats")
+                        .changed()
+                    {
+                        self.pulse_length = len.clamp(1, 16) as u8;
+                        self.engine.set_gate_aenv_length(self.pulse_length);
+                    }
+                });
+
+                ui.add_space(sp_xs);
+
+                // Division selector — same idiom as LFO sync. Always tempo-synced.
+                ui.horizontal_wrapped(|ui| {
+                    for div in synth_common::ClockDivision::ALL {
+                        let div_u8 = div.to_u8();
+                        let active = self.pulse_division as u8 == div_u8;
+                        let label = div.label();
+                        let rate = div.hz(self.global_bpm as f32);
+                        if ui
+                            .selectable_label(
+                                active,
+                                RichText::new(label).small().color(if active {
+                                    self.theme.c(&self.theme.accent)
+                                } else {
+                                    self.theme.c(&self.theme.text_secondary)
+                                }),
+                            )
+                            .on_hover_text(format!(
+                                "{} → {:.3} Hz @ {} BPM",
+                                label, rate, self.global_bpm
+                            ))
+                            .clicked()
+                        {
+                            self.pulse_division = div_u8 as usize;
+                            self.engine.set_gate_aenv_division(div_u8);
+                            self.engine.set_gate_aenv_rate(rate);
+                        }
+                    }
+                });
+
+                ui.add_space(sp_xs);
+
+                // 16-cell step row.
+                ui.label(
+                    RichText::new("STEPS")
+                        .size(10.0)
+                        .color(self.theme.c(&self.theme.text_secondary)),
+                );
+                ui.horizontal(|ui| {
+                    let total_w = ui.available_width();
+                    let spacing = ui.spacing().item_spacing.x;
+                    let step_w = ((total_w - spacing * 15.0) / 16.0).max(14.0);
+                    let cell_h = 26.0;
+                    let active_col = self.theme.c(&self.theme.accent);
+                    let inactive_col = self.theme.c(&self.theme.bg_sunken);
+                    let edge = self.theme.c(&self.theme.text_disabled);
+                    for i in 0..16u8 {
+                        let on_step = (self.pulse_pattern >> i) & 1 != 0;
+                        let in_active_len = (i as u8) < self.pulse_length;
+                        let (rect, resp) = ui.allocate_exact_size(
+                            egui::Vec2::new(step_w, cell_h),
+                            egui::Sense::click(),
+                        );
+                        let painter = ui.painter_at(rect);
+                        let fill = if on_step { active_col } else { inactive_col };
+                        let alpha = if in_active_len { 255 } else { 90 };
+                        let fill = egui::Color32::from_rgba_unmultiplied(
+                            fill.r(),
+                            fill.g(),
+                            fill.b(),
+                            alpha,
+                        );
+                        painter.rect_filled(rect, egui::Rounding::same(3.0), fill);
+                        painter.rect_stroke(
+                            rect,
+                            egui::Rounding::same(3.0),
+                            Stroke::new(1.0, edge),
+                        );
+                        if resp.clicked() {
+                            self.pulse_pattern ^= 1u16 << i;
+                            self.engine.set_gate_aenv_pattern(self.pulse_pattern);
+                        }
+                    }
+                });
+            });
+        });
+    }
+
     pub fn ui_filter_panel(&mut self, ui: &mut egui::Ui) {
         let sp_xs = self.theme.sp_xs;
 

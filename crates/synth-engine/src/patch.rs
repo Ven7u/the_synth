@@ -73,6 +73,20 @@ pub struct Patch {
     #[serde(default = "default_lfo2_dest")]
     pub lfo2_dest: usize,
 
+    // Gate lane: master ducker ("Pulse"). 16-step tempo-synced gate that fires
+    // a fast exponential duck on the master output. Rate derives from global BPM
+    // and `gate_aenv_division`. All fields default to "off" so legacy scenes load unchanged.
+    #[serde(default)]
+    pub gate_aenv_enabled: bool,
+    #[serde(default)]
+    pub gate_aenv_pattern: u16,
+    #[serde(default = "default_gate_aenv_length")]
+    pub gate_aenv_length: u8,
+    #[serde(default = "default_gate_aenv_division")]
+    pub gate_aenv_division: usize,
+    #[serde(default)]
+    pub gate_aenv_depth: f32,
+
     // Filter
     pub filter_enabled: bool,
     pub filter_cutoff: f32,
@@ -196,6 +210,13 @@ fn default_stereo_width() -> f32 {
 }
 fn default_lfo_division() -> usize {
     4
+}
+fn default_gate_aenv_length() -> u8 {
+    16
+}
+fn default_gate_aenv_division() -> usize {
+    // ClockDivision::Eighth = 3
+    3
 }
 fn default_lfo2_rate() -> f32 {
     0.3

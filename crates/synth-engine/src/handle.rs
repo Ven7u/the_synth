@@ -315,6 +315,69 @@ impl SynthEngineHandle {
         self.state.lfo2_dest.load(Ordering::Relaxed)
     }
 
+    // -- Gate lane: amp ducker ("Pulse") --
+
+    pub fn set_gate_aenv_enabled(&self, on: bool) {
+        self.state.gate_aenv_enabled.store(on, Ordering::Relaxed);
+    }
+    pub fn gate_aenv_enabled(&self) -> bool {
+        self.state.gate_aenv_enabled.load(Ordering::Relaxed)
+    }
+
+    pub fn set_gate_aenv_pattern(&self, mask: u16) {
+        self.state.gate_aenv_pattern.store(mask, Ordering::Relaxed);
+    }
+    pub fn gate_aenv_pattern(&self) -> u16 {
+        self.state.gate_aenv_pattern.load(Ordering::Relaxed)
+    }
+
+    /// Toggle a single step (0..=15). No-op if `step >= 16`.
+    pub fn set_gate_aenv_step(&self, step: u8, on: bool) {
+        if step >= 16 {
+            return;
+        }
+        let bit = 1u16 << step;
+        let prev = self.state.gate_aenv_pattern.load(Ordering::Relaxed);
+        let next = if on { prev | bit } else { prev & !bit };
+        self.state.gate_aenv_pattern.store(next, Ordering::Relaxed);
+    }
+    pub fn gate_aenv_step(&self, step: u8) -> bool {
+        if step >= 16 {
+            return false;
+        }
+        (self.state.gate_aenv_pattern.load(Ordering::Relaxed) >> step) & 1 != 0
+    }
+
+    pub fn set_gate_aenv_length(&self, len: u8) {
+        self.state
+            .gate_aenv_length
+            .store(len.clamp(1, 16), Ordering::Relaxed);
+    }
+    pub fn gate_aenv_length(&self) -> u8 {
+        self.state.gate_aenv_length.load(Ordering::Relaxed)
+    }
+
+    pub fn set_gate_aenv_division(&self, d: u8) {
+        self.state.gate_aenv_division.store(d, Ordering::Relaxed);
+    }
+    pub fn gate_aenv_division(&self) -> u8 {
+        self.state.gate_aenv_division.load(Ordering::Relaxed)
+    }
+
+    pub fn set_gate_aenv_rate(&self, hz: f32) {
+        self.state.gate_aenv_rate.set(hz);
+    }
+    pub fn gate_aenv_rate(&self) -> f32 {
+        self.state.gate_aenv_rate.value()
+    }
+
+    pub fn set_gate_aenv_depth(&self, v: f32) {
+        self.state.gate_aenv_depth.set(v);
+    }
+    pub fn gate_aenv_depth(&self) -> f32 {
+        self.state.gate_aenv_depth.value()
+    }
+
     // -- Amp envelope + glide + master --
 
     pub fn set_amp_attack(&self, s: f32) {
@@ -936,6 +999,17 @@ impl SynthEngineHandle {
             ParamId::Lfo2Shape => self.set_lfo2_shape(u8c(v, 2)),
             ParamId::Lfo2Dest => self.set_lfo2_dest(u8c(v, 2)),
 
+            // -- Gate lane: amp ducker --
+            ParamId::GateAenvEnabled => self.set_gate_aenv_enabled(b(v)),
+            ParamId::GateAenvPattern => {
+                let mask = (v.round().clamp(0.0, 65535.0) as u32 & 0xFFFF) as u16;
+                self.set_gate_aenv_pattern(mask);
+            }
+            ParamId::GateAenvLength => self.set_gate_aenv_length(u8c(v.max(1.0), 16)),
+            ParamId::GateAenvDivision => self.set_gate_aenv_division(u8c(v, 13)),
+            ParamId::GateAenvRate => self.set_gate_aenv_rate(v),
+            ParamId::GateAenvDepth => self.set_gate_aenv_depth(v),
+
             // -- Amp envelope + glide + master --
             ParamId::AmpAttack => self.set_amp_attack(v),
             ParamId::AmpDecay => self.set_amp_decay(v),
@@ -1043,6 +1117,12 @@ impl SynthEngineHandle {
             ParamId::Lfo2Depth => self.lfo2_depth(),
             ParamId::Lfo2Shape => self.lfo2_shape() as f32,
             ParamId::Lfo2Dest => self.lfo2_dest() as f32,
+            ParamId::GateAenvEnabled => bf(self.gate_aenv_enabled()),
+            ParamId::GateAenvPattern => self.gate_aenv_pattern() as f32,
+            ParamId::GateAenvLength => self.gate_aenv_length() as f32,
+            ParamId::GateAenvDivision => self.gate_aenv_division() as f32,
+            ParamId::GateAenvRate => self.gate_aenv_rate(),
+            ParamId::GateAenvDepth => self.gate_aenv_depth(),
             ParamId::AmpAttack => self.amp_attack(),
             ParamId::AmpDecay => self.amp_decay(),
             ParamId::AmpSustain => self.amp_sustain(),
@@ -1163,6 +1243,15 @@ impl SynthEngineHandle {
         self.set_lfo2_depth(if p.lfo2_enabled { p.lfo2_depth } else { 0.0 });
         self.set_lfo2_shape(p.lfo2_shape as u8);
         self.set_lfo2_dest(p.lfo2_dest as u8);
+
+        // -- Gate lane: amp ducker ("Pulse") --
+        // Rate is recomputed UI-side from BPM + division when the patch loads;
+        // here we only restore the user's choice (division) and the pattern state.
+        self.set_gate_aenv_enabled(p.gate_aenv_enabled);
+        self.set_gate_aenv_pattern(p.gate_aenv_pattern);
+        self.set_gate_aenv_length(p.gate_aenv_length);
+        self.set_gate_aenv_division(p.gate_aenv_division as u8);
+        self.set_gate_aenv_depth(p.gate_aenv_depth);
 
         // -- Amp envelope + glide + master --
         self.set_amp_attack(p.amp_adsr[0]);
@@ -1311,6 +1400,12 @@ impl SynthEngineHandle {
             lfo2_depth: self.lfo2_depth(),
             lfo2_shape: self.lfo2_shape() as usize,
             lfo2_dest: self.lfo2_dest() as usize,
+
+            gate_aenv_enabled: self.gate_aenv_enabled(),
+            gate_aenv_pattern: self.gate_aenv_pattern(),
+            gate_aenv_length: self.gate_aenv_length(),
+            gate_aenv_division: self.gate_aenv_division() as usize,
+            gate_aenv_depth: self.gate_aenv_depth(),
 
             filter_enabled: self.filter_cutoff() < 17_999.0 || self.filter_resonance() > 0.0,
             filter_cutoff: self.filter_cutoff(),

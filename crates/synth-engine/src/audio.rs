@@ -6,7 +6,7 @@
 #![allow(clippy::precedence)]
 
 use fundsp::prelude32::*;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU8};
 use std::sync::Arc;
 
 use crate::gated_voice::GatedVoice;
@@ -77,6 +77,17 @@ pub struct AudioState {
     pub lfo2_depth: Shared,        // 0.0..1.0
     pub lfo2_shape: Arc<AtomicU8>, // 0=sin 1=tri 2=saw
     pub lfo2_dest: Arc<AtomicU8>,  // 0=pitch 1=filter 2=amp
+
+    // Gate-lane: amp ducker ("Pulse"). 16-step pattern, tempo-synced. When enabled, every
+    // "on" step fires a fast exponential duck on the master output post-FX, post-tanh.
+    // Rate is computed UI-side from BPM + division (same idiom as lfo_rate when synced),
+    // so the callback only needs to read `gate_aenv_rate` (Hz) and advance an accumulator.
+    pub gate_aenv_enabled: Arc<AtomicBool>,
+    pub gate_aenv_pattern: Arc<AtomicU16>, // 16-bit step mask (LSB = step 0)
+    pub gate_aenv_length: Arc<AtomicU8>,   // 1..=16
+    pub gate_aenv_division: Arc<AtomicU8>, // ClockDivision::to_u8() — source of truth for serialization
+    pub gate_aenv_rate: Shared,            // Hz (cycles per second), derived from bpm + division
+    pub gate_aenv_depth: Shared,           // 0.0..1.0 — ducks master by `depth` at peak
 
     // Voice target frequencies — UI writes here; callback smooths to voice_freqs for glide
     pub voice_freq_targets: Vec<Shared>,
@@ -263,6 +274,12 @@ impl AudioState {
             lfo2_depth: shared(0.0),
             lfo2_shape: Arc::new(AtomicU8::new(0)),
             lfo2_dest: Arc::new(AtomicU8::new(2)), // amp (tremolo)
+            gate_aenv_enabled: Arc::new(AtomicBool::new(false)),
+            gate_aenv_pattern: Arc::new(AtomicU16::new(0)),
+            gate_aenv_length: Arc::new(AtomicU8::new(16)),
+            gate_aenv_division: Arc::new(AtomicU8::new(ClockDivision::Eighth.to_u8())),
+            gate_aenv_rate: shared(4.0), // 1/8 at 120 BPM = 4 Hz
+            gate_aenv_depth: shared(0.0),
             voice_freq_targets: (0..VOICE_COUNT).map(|_| shared(440.0)).collect(),
             adsr_attack: shared(0.01),
             adsr_decay: shared(0.15),
