@@ -3,6 +3,17 @@ name = "the-synth"
 version = "0.1.0"
 edition = "2021"
 
+[package.metadata.bundle]
+name = "The Synth"
+identifier = "com.francescoventura.the-synth"
+version = "0.1.0"
+copyright = "© 2026 Francesco Ventura"
+category = "Music"
+short_description = "Moog-style software synthesizer"
+long_description = "A polyphonic software synthesizer with oscillators, filter, LFO, arpeggiator, effects chain, and sequencer."
+icon = ["assets/icons/icon_512x512@2x.png", "assets/icons/icon_256x256.png", "assets/icons/icon_128x128.png", "assets/icons/icon_32x32.png", "assets/icons/icon_16x16.png"]
+resources = ["assets/patches"]
+
 [dependencies]
 # Dipendenze interne
 synth-dsp     = { path = "../synth-dsp" }

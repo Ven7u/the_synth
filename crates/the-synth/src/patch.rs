@@ -32,9 +32,32 @@ fn collect_patch_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>)
     }
 }
 
+/// Locate the patches directory, trying (in order):
+///   1. `assets/patches` relative to CWD  — works with `cargo run`
+///   2. `../Resources/patches` relative to the executable — works inside a .app bundle
+///      (executable lives at `Contents/MacOS/`, resources at `Contents/Resources/`)
+fn patches_dir() -> std::path::PathBuf {
+    let cwd_path = std::path::Path::new("assets/patches");
+    if cwd_path.is_dir() {
+        return cwd_path.to_path_buf();
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        let bundle_path = exe
+            .parent()                  // Contents/MacOS
+            .and_then(|p| p.parent())  // Contents
+            .map(|p| p.join("Resources").join("assets").join("patches"));
+        if let Some(p) = bundle_path {
+            if p.is_dir() {
+                return p;
+            }
+        }
+    }
+    cwd_path.to_path_buf()
+}
+
 pub fn default_patches() -> Vec<Patch> {
     let mut files = Vec::new();
-    collect_patch_files(std::path::Path::new("assets/patches"), &mut files);
+    collect_patch_files(&patches_dir(), &mut files);
     files.sort();
     files
         .iter()
