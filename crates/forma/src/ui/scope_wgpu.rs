@@ -75,32 +75,32 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     // ── Bloom: two-radius additive pass for a thick phosphor glow ─────────────
     // Inner ring (r=3): tight bright core that gives the line apparent thickness
     let r1: f32 = 3.0;
-    var inner = textureSample(t_scope, s_scope, uv).rgb                        * 0.30;
-    inner    += textureSample(t_scope, s_scope, uv + vec2<f32>( r1,  0.0) * px).rgb * 0.14;
-    inner    += textureSample(t_scope, s_scope, uv + vec2<f32>(-r1,  0.0) * px).rgb * 0.14;
-    inner    += textureSample(t_scope, s_scope, uv + vec2<f32>(0.0,  r1)  * px).rgb * 0.14;
-    inner    += textureSample(t_scope, s_scope, uv + vec2<f32>(0.0, -r1)  * px).rgb * 0.14;
-    inner    += textureSample(t_scope, s_scope, uv + vec2<f32>( r1,  r1)  * px).rgb * 0.06;
-    inner    += textureSample(t_scope, s_scope, uv + vec2<f32>(-r1,  r1)  * px).rgb * 0.06;
-    inner    += textureSample(t_scope, s_scope, uv + vec2<f32>( r1, -r1)  * px).rgb * 0.06;
-    inner    += textureSample(t_scope, s_scope, uv + vec2<f32>(-r1, -r1)  * px).rgb * 0.06;
+    var inner = textureSample(t_scope, s_scope, uv).rgb                        * 0.65;
+    inner    += textureSample(t_scope, s_scope, uv + vec2<f32>( r1,  0.0) * px).rgb * 0.20;
+    inner    += textureSample(t_scope, s_scope, uv + vec2<f32>(-r1,  0.0) * px).rgb * 0.20;
+    inner    += textureSample(t_scope, s_scope, uv + vec2<f32>(0.0,  r1)  * px).rgb * 0.20;
+    inner    += textureSample(t_scope, s_scope, uv + vec2<f32>(0.0, -r1)  * px).rgb * 0.20;
+    inner    += textureSample(t_scope, s_scope, uv + vec2<f32>( r1,  r1)  * px).rgb * 0.10;
+    inner    += textureSample(t_scope, s_scope, uv + vec2<f32>(-r1,  r1)  * px).rgb * 0.10;
+    inner    += textureSample(t_scope, s_scope, uv + vec2<f32>( r1, -r1)  * px).rgb * 0.10;
+    inner    += textureSample(t_scope, s_scope, uv + vec2<f32>(-r1, -r1)  * px).rgb * 0.10;
 
     // Outer ring (r=10): wide soft halo that gives the phosphor bloom
     let r2: f32 = 10.0;
-    var outer = textureSample(t_scope, s_scope, uv + vec2<f32>( r2,  0.0) * px).rgb * 0.12;
-    outer    += textureSample(t_scope, s_scope, uv + vec2<f32>(-r2,  0.0) * px).rgb * 0.12;
-    outer    += textureSample(t_scope, s_scope, uv + vec2<f32>(0.0,  r2)  * px).rgb * 0.12;
-    outer    += textureSample(t_scope, s_scope, uv + vec2<f32>(0.0, -r2)  * px).rgb * 0.12;
-    outer    += textureSample(t_scope, s_scope, uv + vec2<f32>( r2,  r2)  * px).rgb * 0.05;
-    outer    += textureSample(t_scope, s_scope, uv + vec2<f32>(-r2,  r2)  * px).rgb * 0.05;
-    outer    += textureSample(t_scope, s_scope, uv + vec2<f32>( r2, -r2)  * px).rgb * 0.05;
-    outer    += textureSample(t_scope, s_scope, uv + vec2<f32>(-r2, -r2)  * px).rgb * 0.05;
+    var outer = textureSample(t_scope, s_scope, uv + vec2<f32>( r2,  0.0) * px).rgb * 0.18;
+    outer    += textureSample(t_scope, s_scope, uv + vec2<f32>(-r2,  0.0) * px).rgb * 0.18;
+    outer    += textureSample(t_scope, s_scope, uv + vec2<f32>(0.0,  r2)  * px).rgb * 0.18;
+    outer    += textureSample(t_scope, s_scope, uv + vec2<f32>(0.0, -r2)  * px).rgb * 0.18;
+    outer    += textureSample(t_scope, s_scope, uv + vec2<f32>( r2,  r2)  * px).rgb * 0.08;
+    outer    += textureSample(t_scope, s_scope, uv + vec2<f32>(-r2,  r2)  * px).rgb * 0.08;
+    outer    += textureSample(t_scope, s_scope, uv + vec2<f32>( r2, -r2)  * px).rgb * 0.08;
+    outer    += textureSample(t_scope, s_scope, uv + vec2<f32>(-r2, -r2)  * px).rgb * 0.08;
 
-    var col = inner + outer * 0.6;
+    var col = inner + outer * 0.85;
 
     // ── Scanlines: sinusoidal brightness modulation per raster line ───────────
     let scan = sin(uv.y * p.resolution.y * 3.14159265) * 0.5 + 0.5;
-    col *= mix(0.82, 1.0, scan);
+    col *= mix(0.88, 1.0, scan);
 
     // ── Vignette: darken corners to match CRT glass curvature ────────────────
     let d2 = in.uv - vec2<f32>(0.5);
@@ -137,7 +137,7 @@ pub struct ScopeGpuResources {
     sampler: wgpu::Sampler,
 }
 
-const MAX_VERTS: u64 = 8192;
+const MAX_VERTS: u64 = 16384;
 const TEX_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 impl ScopeGpuResources {
@@ -244,7 +244,7 @@ impl ScopeGpuResources {
                 compilation_options: Default::default(),
             },
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineStrip,
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
                 ..Default::default()
             },
             depth_stencil: None,
@@ -388,21 +388,60 @@ pub struct ScopeCallback {
 }
 
 impl ScopeCallback {
-    /// Map samples → clip-space vertices for the waveform pipeline.
+    /// Map samples → triangle-strip ribbon vertices for the waveform pipeline.
+    /// Emits two vertices per sample (top + bottom of the ribbon) so the
+    /// TriangleStrip topology draws a continuous variable-width band.
     fn build_vertices(&self) -> Vec<[f32; 2]> {
         let n = ((self.samples.len() as f32 / self.x_scale) as usize)
             .clamp(2, self.samples.len())
-            .min(MAX_VERTS as usize);
-        let inv = 1.0 / (n - 1).max(1) as f32;
-        self.samples[..n]
+            .min(MAX_VERTS as usize / 2);
+
+        let (w, h) = (self.viewport_size.0 as f32, self.viewport_size.1 as f32);
+
+        // Sample positions in pixel space (y: 0 = top, h = bottom)
+        let pts: Vec<(f32, f32)> = self.samples[..n]
             .iter()
             .enumerate()
             .map(|(i, &s)| {
-                let x = i as f32 * inv * 2.0 - 1.0; // [-1, +1]
-                let y = (s * self.y_scale).clamp(-1.0, 1.0); // NDC: +1 = up
-                [x, y]
+                let x = i as f32 / (n - 1).max(1) as f32 * w;
+                let y = (0.5 - (s * self.y_scale).clamp(-1.0, 1.0) * 0.5) * h;
+                (x, y)
             })
-            .collect()
+            .collect();
+
+        let mut verts = Vec::with_capacity(n * 2);
+        for i in 0..n {
+            // Segment direction averaged over neighbours for smooth miter joins
+            let (dx, dy) = if i == 0 {
+                (pts[1].0 - pts[0].0, pts[1].1 - pts[0].1)
+            } else if i == n - 1 {
+                (pts[n - 1].0 - pts[n - 2].0, pts[n - 1].1 - pts[n - 2].1)
+            } else {
+                (pts[i + 1].0 - pts[i - 1].0, pts[i + 1].1 - pts[i - 1].1)
+            };
+            let len = (dx * dx + dy * dy).sqrt().max(1e-6);
+            let (ndx, ndy) = (dx / len, dy / len);
+            // Perpendicular to direction (rotated 90°)
+            let (px, py) = (-ndy, ndx);
+
+            // Variable half-width: wide on flat segments, narrow on steep ones
+            let steepness = ndy.abs();
+            let half_w = 3.0 - steepness * 1.8; // 3.0px flat → ~1.2px vertical
+
+            // Top vertex (perpendicular +)
+            let top = [
+                (pts[i].0 + px * half_w) / w * 2.0 - 1.0,
+                1.0 - (pts[i].1 + py * half_w) / h * 2.0,
+            ];
+            // Bottom vertex (perpendicular -)
+            let bot = [
+                (pts[i].0 - px * half_w) / w * 2.0 - 1.0,
+                1.0 - (pts[i].1 - py * half_w) / h * 2.0,
+            ];
+            verts.push(top);
+            verts.push(bot);
+        }
+        verts
     }
 }
 
