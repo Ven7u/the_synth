@@ -650,7 +650,7 @@ impl SynthApp {
 
         let num_white = count_white_keys();
         let available_w = ui.available_width();
-        let white_w = (available_w / num_white as f32).max(6.0).min(20.0);
+        let white_w = (available_w / num_white as f32).max(6.0);
         let white_h = 36.0_f32;
         let black_w = white_w * 0.62;
         let black_h = white_h * 0.60;
@@ -728,7 +728,7 @@ impl SynthApp {
     fn draw_piano_88(&mut self, ui: &mut egui::Ui) {
         let num_white = count_white_keys(); // 52
         let available_w = ui.available_width();
-        let white_w = (available_w / num_white as f32).max(6.0).min(20.0);
+        let white_w = (available_w / num_white as f32).max(6.0);
         let white_h = 64.0_f32;
         let black_w = white_w * 0.62;
         let black_h = white_h * 0.60;

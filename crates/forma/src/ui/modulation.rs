@@ -766,7 +766,7 @@ impl SynthApp {
                         "RES",
                         &self.theme,
                         false,
-                    )
+                        )
                     .on_hover_text("Resonance — 0 = flat, 0.9+ = self-oscillation.")
                     .changed()
                     {
@@ -781,7 +781,7 @@ impl SynthApp {
                         "DRIVE",
                         &self.theme,
                         false,
-                    )
+                        )
                     .on_hover_text(
                         "Input drive — saturates the signal before the filter. 1 = clean, 10 = heavy.",
                     )
@@ -798,7 +798,7 @@ impl SynthApp {
                         "KEY",
                         &self.theme,
                         false,
-                    )
+                        )
                     .on_hover_text(
                         "Keyboard tracking — cutoff follows pitch. 0 = off, 1 = full (one octave up doubles the cutoff).",
                     )

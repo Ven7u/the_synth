@@ -38,6 +38,7 @@ impl SynthFrame {
             .corner_radius(CornerRadius::same(theme.rounding_md as u8))
             .stroke(Stroke::new(theme.stroke_ui, theme.c(&theme.border)))
             .inner_margin(Margin::same(theme.sp_sm as i8))
+            .outer_margin(Margin::same(theme.sp_xs as i8))
     }
 
     /// Inset — a darker sub-region inside a section.

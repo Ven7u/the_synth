@@ -1283,7 +1283,7 @@ impl SynthApp {
                     self.theme.c(&self.theme.text_secondary)
                 };
                 if ui
-                    .button(egui::RichText::new("METRO").size(11.0).color(metro_col))
+                    .button(egui::RichText::new("♩").size(11.0).color(metro_col))
                     .on_hover_text(
                         "Metronome — visual beat indicator with configurable time signature.",
                     )

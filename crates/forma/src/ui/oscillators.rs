@@ -5,6 +5,10 @@ use egui::{Color32, CornerRadius, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 
 pub const WAVE_LABELS: &[&str] = &["Sin", "Saw", "Sqr", "Tri"];
 
+/// Shared fixed height for all dock cards (inner content, before section margins).
+/// Raise or lower this to resize all four cards together.
+const CARD_H: f32 = 260.0;
+
 impl SynthApp {
     pub fn ui_osc_panel(&mut self, ui: &mut egui::Ui, i: usize) {
         let sp_xs = self.theme.sp_xs;
@@ -85,6 +89,8 @@ impl SynthApp {
             } else {
                 self.ui_osc_front(ui, i);
             }
+            // Pad to shared fixed card height so all dock cards are the same size.
+            ui.add_space((CARD_H - ui.min_rect().height()).max(0.0));
         });
     }
 
@@ -239,7 +245,7 @@ impl SynthApp {
                 || self.seq.playing.load(std::sync::atomic::Ordering::Relaxed);
             let active = on && notes_held;
 
-            let preview_h = 36.0;
+            let preview_h = 36.0_f32;
             let (rect, _) = ui.allocate_exact_size(
                 Vec2::new(ui.available_width(), preview_h),
                 egui::Sense::hover(),
@@ -270,7 +276,6 @@ impl SynthApp {
     fn ui_osc1_mod_back(&mut self, ui: &mut egui::Ui) {
         let sp_xs = self.theme.sp_xs;
         let sp_sm = self.theme.sp_sm;
-
         // SYNC
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = sp_xs;
@@ -412,12 +417,26 @@ impl SynthApp {
         let sp_xs = self.theme.sp_xs;
 
         SynthFrame::section(&self.theme).show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            let total_h = ui.available_height();
+            let total_h = CARD_H;
+            const FADER_COL_W: f32 = 20.0;
+            const SLIDER_W: f32 = 8.0;
+            const CH_W_CONST: f32 = 5.0;
+            const CH_GAP_CONST: f32 = 1.0;
+            const METER_TOTAL_W_CONST: f32 = CH_W_CONST * 2.0 + CH_GAP_CONST + 4.0;
+
+            // Cap the section's inner width so ui.horizontal() doesn't grab the
+            // full column width (which would leave empty space between controls
+            // and meters and cause overflow on small screens).
+            let sp = ui.spacing().item_spacing.x;
+            let controls_w = FADER_COL_W * 4.0 + sp * 3.0;
+            let meter_w = METER_TOTAL_W_CONST + sp_xs * 2.0; // +frame inner margins
+            ui.set_max_width(controls_w + sp + meter_w);
 
             ui.horizontal(|ui| {
                 // ── Left: all mixer controls ────────────────────────────────
                 ui.vertical(|ui| {
+                    let max_w = controls_w;
+                    ui.set_max_width(max_w);
                     ui.label(
                         RichText::new("MIX")
                             .size(11.0)
@@ -430,7 +449,7 @@ impl SynthApp {
                     ui.horizontal(|ui| {
                         for i in 0..3 {
                             ui.vertical(|ui| {
-                                ui.set_width(26.0);
+                                ui.set_width(FADER_COL_W);
                                 ui.label(RichText::new(format!("O{}", i + 1)).size(10.0).color(
                                     if self.osc_enabled[i] {
                                         self.theme.c(&self.theme.text_primary)
@@ -440,7 +459,7 @@ impl SynthApp {
                                 ));
                                 if ui
                                     .add_sized(
-                                        [12.0, 80.0],
+                                        [SLIDER_W, 80.0],
                                         egui::Slider::new(&mut self.osc_vol[i], 0.0..=1.0)
                                             .vertical()
                                             .fixed_decimals(2),
@@ -455,7 +474,7 @@ impl SynthApp {
                         }
 
                         ui.vertical(|ui| {
-                            ui.set_width(26.0);
+                            ui.set_width(FADER_COL_W);
                             ui.label(
                                 RichText::new("N")
                                     .size(10.0)
@@ -464,7 +483,7 @@ impl SynthApp {
                             let mut noise_vol = self.engine.noise_vol();
                             if ui
                                 .add_sized(
-                                    [12.0, 80.0],
+                                    [SLIDER_W, 80.0],
                                     egui::Slider::new(&mut noise_vol, 0.0..=1.0)
                                         .vertical()
                                         .fixed_decimals(2),
@@ -571,73 +590,78 @@ impl SynthApp {
                     }
                 }
 
-                const CH_W: f32 = 5.0;
-                const CH_GAP: f32 = 1.0;
-                const METER_TOTAL_W: f32 = CH_W * 2.0 + CH_GAP + 4.0;
-                let (resp, painter) =
-                    ui.allocate_painter(Vec2::new(METER_TOTAL_W, total_h), Sense::hover());
-                let mr = resp.rect;
-
-                painter.rect_filled(
-                    mr,
-                    CornerRadius::same(2),
-                    self.theme.c(&self.theme.meter_bg),
-                );
-
-                for (ci, &peak_raw) in [peak_raw_l, peak_raw_r].iter().enumerate() {
-                    let x_left = mr.left() + 2.0 + ci as f32 * (CH_W + CH_GAP);
-                    let ch_rect = Rect::from_min_size(
-                        Pos2::new(x_left, mr.top() + 2.0),
-                        Vec2::new(CH_W, mr.height() - 14.0),
-                    );
-                    let level = peak_raw.clamp(0.0, 1.0);
-                    let bar_h = ch_rect.height() * level;
-                    if bar_h > 0.5 {
-                        let color = if peak_raw < 0.7 {
-                            self.theme.c(&self.theme.meter_green)
-                        } else if peak_raw < 1.0 {
-                            let t = (peak_raw - 0.7) / 0.3;
-                            let g = self.theme.meter_green;
-                            let c = self.theme.meter_clip;
-                            Color32::from_rgb(
-                                (g[0] as f32 + (c[0] as f32 - g[0] as f32) * t) as u8,
-                                (g[1] as f32 + (c[1] as f32 - g[1] as f32) * t) as u8,
-                                (g[2] as f32 + (c[2] as f32 - g[2] as f32) * t) as u8,
-                            )
-                        } else {
-                            self.theme.c(&self.theme.meter_clip)
-                        };
-                        let bar_rect = Rect::from_min_size(
-                            Pos2::new(ch_rect.left(), ch_rect.bottom() - bar_h),
-                            Vec2::new(CH_W, bar_h),
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(sp_xs as i8, 0))
+                    .show(ui, |ui| {
+                        let (resp, painter) = ui.allocate_painter(
+                            Vec2::new(METER_TOTAL_W_CONST, total_h),
+                            Sense::hover(),
                         );
-                        painter.rect_filled(bar_rect, CornerRadius::ZERO, color);
-                    }
+                        let mr = resp.rect;
 
-                    let hold_frac = self.peak_hold.clamp(0.0, 1.0);
-                    let hold_y = ch_rect.bottom() - ch_rect.height() * hold_frac;
-                    let hold_color = if self.peak_hold >= 1.0 {
-                        self.theme.c(&self.theme.meter_clip)
-                    } else {
-                        Color32::WHITE
-                    };
-                    painter.line_segment(
-                        [
-                            Pos2::new(ch_rect.left(), hold_y),
-                            Pos2::new(ch_rect.right(), hold_y),
-                        ],
-                        Stroke::new(1.5, hold_color),
-                    );
+                        painter.rect_filled(
+                            mr,
+                            CornerRadius::same(2),
+                            self.theme.c(&self.theme.meter_bg),
+                        );
 
-                    painter.text(
-                        Pos2::new(ch_rect.center_top().x, mr.bottom() - 2.0),
-                        egui::Align2::CENTER_BOTTOM,
-                        if ci == 0 { "L" } else { "R" },
-                        egui::FontId::proportional(8.0),
-                        Color32::from_rgba_premultiplied(200, 200, 200, 120),
-                    );
-                }
+                        for (ci, &peak_raw) in [peak_raw_l, peak_raw_r].iter().enumerate() {
+                            let x_left = mr.left() + 2.0 + ci as f32 * (CH_W_CONST + CH_GAP_CONST);
+                            let ch_rect = Rect::from_min_size(
+                                Pos2::new(x_left, mr.top() + 2.0),
+                                Vec2::new(CH_W_CONST, mr.height() - 14.0),
+                            );
+                            let level = peak_raw.clamp(0.0, 1.0);
+                            let bar_h = ch_rect.height() * level;
+                            if bar_h > 0.5 {
+                                let color = if peak_raw < 0.7 {
+                                    self.theme.c(&self.theme.meter_green)
+                                } else if peak_raw < 1.0 {
+                                    let t = (peak_raw - 0.7) / 0.3;
+                                    let g = self.theme.meter_green;
+                                    let c = self.theme.meter_clip;
+                                    Color32::from_rgb(
+                                        (g[0] as f32 + (c[0] as f32 - g[0] as f32) * t) as u8,
+                                        (g[1] as f32 + (c[1] as f32 - g[1] as f32) * t) as u8,
+                                        (g[2] as f32 + (c[2] as f32 - g[2] as f32) * t) as u8,
+                                    )
+                                } else {
+                                    self.theme.c(&self.theme.meter_clip)
+                                };
+                                let bar_rect = Rect::from_min_size(
+                                    Pos2::new(ch_rect.left(), ch_rect.bottom() - bar_h),
+                                    Vec2::new(CH_W_CONST, bar_h),
+                                );
+                                painter.rect_filled(bar_rect, CornerRadius::ZERO, color);
+                            }
+
+                            let hold_frac = self.peak_hold.clamp(0.0, 1.0);
+                            let hold_y = ch_rect.bottom() - ch_rect.height() * hold_frac;
+                            let hold_color = if self.peak_hold >= 1.0 {
+                                self.theme.c(&self.theme.meter_clip)
+                            } else {
+                                Color32::WHITE
+                            };
+                            painter.line_segment(
+                                [
+                                    Pos2::new(ch_rect.left(), hold_y),
+                                    Pos2::new(ch_rect.right(), hold_y),
+                                ],
+                                Stroke::new(1.5, hold_color),
+                            );
+
+                            painter.text(
+                                Pos2::new(ch_rect.center_top().x, mr.bottom() - 2.0),
+                                egui::Align2::CENTER_BOTTOM,
+                                if ci == 0 { "L" } else { "R" },
+                                egui::FontId::proportional(8.0),
+                                Color32::from_rgba_premultiplied(200, 200, 200, 120),
+                            );
+                        }
+                    }); // Frame::new inner_margin
             });
+            // Pad to shared fixed card height.
+            ui.add_space((CARD_H - ui.min_rect().height()).max(0.0));
         });
     }
 }
