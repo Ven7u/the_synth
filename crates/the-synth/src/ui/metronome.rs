@@ -184,7 +184,6 @@ impl SynthApp {
                         egui::FontId::proportional(11.0),
                         label_col,
                     );
-
                 }
 
                 // Small info line

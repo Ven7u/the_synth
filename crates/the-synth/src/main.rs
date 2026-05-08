@@ -228,9 +228,9 @@ pub(crate) struct SynthApp {
     // Metronome
     pub(crate) show_metronome: bool,
     pub(crate) metro_enabled: bool,
-    pub(crate) metro_beats: u8,   // beats per bar (numerator): 2–8
-    pub(crate) metro_denom: u8,   // beat unit: 4 = quarter, 8 = eighth
-    pub(crate) metro_phase: f64,  // current position in beats [0, beats)
+    pub(crate) metro_beats: u8,      // beats per bar (numerator): 2–8
+    pub(crate) metro_denom: u8,      // beat unit: 4 = quarter, 8 = eighth
+    pub(crate) metro_phase: f64,     // current position in beats [0, beats)
     pub(crate) metro_last_time: f64, // egui time at last frame, for delta
 
     // FX chain — per-effect enable + saved mix value
@@ -1268,7 +1268,9 @@ impl SynthApp {
                 };
                 if ui
                     .button(egui::RichText::new("METRO").size(11.0).color(metro_col))
-                    .on_hover_text("Metronome — visual beat indicator with configurable time signature.")
+                    .on_hover_text(
+                        "Metronome — visual beat indicator with configurable time signature.",
+                    )
                     .clicked()
                 {
                     self.show_metronome = !self.show_metronome;
