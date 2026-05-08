@@ -1,7 +1,7 @@
 use crate::ui::frame::SynthFrame;
 use crate::SynthApp;
 use eframe::egui;
-use egui::{Color32, Pos2, RichText, Stroke, Vec2};
+use egui::{Color32, CornerRadius, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 
 pub const WAVE_LABELS: &[&str] = &["Sin", "Saw", "Sqr", "Tri"];
 
@@ -413,125 +413,230 @@ impl SynthApp {
 
         SynthFrame::section(&self.theme).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(
-                RichText::new("MIX")
-                    .size(11.0)
-                    .italics()
-                    .color(self.theme.c(&self.theme.text_primary)),
-            );
-            ui.add_space(sp_xs);
+            let total_h = ui.available_height();
 
-            // Vertical faders for OSC 1/2/3 + Noise
             ui.horizontal(|ui| {
-                for i in 0..3 {
-                    ui.vertical(|ui| {
-                        ui.set_width(36.0);
-                        ui.label(RichText::new(format!("O{}", i + 1)).size(10.0).color(
-                            if self.osc_enabled[i] {
-                                self.theme.c(&self.theme.text_primary)
-                            } else {
-                                self.theme.c(&self.theme.text_disabled)
-                            },
-                        ));
-                        if ui
-                            .add_sized(
-                                [20.0, 90.0],
-                                egui::Slider::new(&mut self.osc_vol[i], 0.0..=1.0)
-                                    .vertical()
-                                    .fixed_decimals(2),
-                            )
-                            .on_hover_text(format!("OSC {} volume in the mix", i + 1))
-                            .changed()
-                            && self.osc_enabled[i]
+                // ── Left: all mixer controls ────────────────────────────────
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new("MIX")
+                            .size(11.0)
+                            .italics()
+                            .color(self.theme.c(&self.theme.text_primary)),
+                    );
+                    ui.add_space(sp_xs);
+
+                    // Vertical faders for OSC 1/2/3 + Noise
+                    ui.horizontal(|ui| {
+                        for i in 0..3 {
+                            ui.vertical(|ui| {
+                                ui.set_width(26.0);
+                                ui.label(RichText::new(format!("O{}", i + 1)).size(10.0).color(
+                                    if self.osc_enabled[i] {
+                                        self.theme.c(&self.theme.text_primary)
+                                    } else {
+                                        self.theme.c(&self.theme.text_disabled)
+                                    },
+                                ));
+                                if ui
+                                    .add_sized(
+                                        [12.0, 80.0],
+                                        egui::Slider::new(&mut self.osc_vol[i], 0.0..=1.0)
+                                            .vertical()
+                                            .fixed_decimals(2),
+                                    )
+                                    .on_hover_text(format!("OSC {} volume in the mix", i + 1))
+                                    .changed()
+                                    && self.osc_enabled[i]
+                                {
+                                    self.engine.set_osc_vol(i as u8, self.osc_vol[i]);
+                                }
+                            });
+                        }
+
+                        ui.vertical(|ui| {
+                            ui.set_width(26.0);
+                            ui.label(
+                                RichText::new("N")
+                                    .size(10.0)
+                                    .color(self.theme.c(&self.theme.text_secondary)),
+                            );
+                            let mut noise_vol = self.engine.noise_vol();
+                            if ui
+                                .add_sized(
+                                    [12.0, 80.0],
+                                    egui::Slider::new(&mut noise_vol, 0.0..=1.0)
+                                        .vertical()
+                                        .fixed_decimals(2),
+                                )
+                                .on_hover_text("White noise volume")
+                                .changed()
+                            {
+                                self.engine.set_noise_vol(noise_vol);
+                            }
+                        });
+                    });
+
+                    ui.add_space(sp_xs);
+                    ui.separator();
+                    ui.add_space(sp_xs);
+
+                    ui.horizontal(|ui| {
+                        let mut master = self.engine.master_volume();
+                        if super::widgets::knob(
+                            ui,
+                            &mut master,
+                            0.0..=1.0,
+                            "MAST",
+                            &self.theme,
+                            false,
+                        )
+                        .on_hover_text("Master output volume — applied after all FX")
+                        .changed()
                         {
-                            self.engine.set_osc_vol(i as u8, self.osc_vol[i]);
+                            self.engine.set_master_volume(master);
+                        }
+                        let mut glide = self.engine.glide_time();
+                        if super::widgets::knob(
+                            ui,
+                            &mut glide,
+                            0.0..=0.5,
+                            "GLIDE",
+                            &self.theme,
+                            false,
+                        )
+                        .on_hover_text("Pitch slide time between notes (seconds)")
+                        .changed()
+                        {
+                            self.engine.set_glide_time(glide);
                         }
                     });
-                }
 
-                ui.vertical(|ui| {
-                    ui.set_width(36.0);
-                    ui.label(
-                        RichText::new("N")
-                            .size(10.0)
-                            .color(self.theme.c(&self.theme.text_secondary)),
-                    );
-                    let mut noise_vol = self.engine.noise_vol();
-                    if ui
-                        .add_sized(
-                            [20.0, 90.0],
-                            egui::Slider::new(&mut noise_vol, 0.0..=1.0)
-                                .vertical()
-                                .fixed_decimals(2),
-                        )
-                        .on_hover_text("White noise volume")
-                        .changed()
-                    {
-                        self.engine.set_noise_vol(noise_vol);
-                    }
+                    ui.add_space(sp_xs);
+
+                    ui.horizontal(|ui| {
+                        let lim_on = self.limiter_enabled;
+                        let lim_col = if lim_on {
+                            self.theme.c(&self.theme.accent_limiter)
+                        } else {
+                            self.theme.c(&self.theme.text_disabled)
+                        };
+                        if ui
+                            .add_sized(
+                                [30.0, 22.0],
+                                egui::SelectableLabel::new(
+                                    lim_on,
+                                    RichText::new("LIM").size(10.0).color(lim_col),
+                                ),
+                            )
+                            .on_hover_text("Limiter — prevents output clipping")
+                            .clicked()
+                        {
+                            self.limiter_enabled = !lim_on;
+                            self.engine.set_limiter_enabled(self.limiter_enabled);
+                        }
+                        ui.add_enabled_ui(lim_on, |ui| {
+                            let mut thr = self.engine.limiter_threshold();
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut thr)
+                                        .range(0.5..=1.0)
+                                        .speed(0.005)
+                                        .fixed_decimals(2),
+                                )
+                                .on_hover_text("Threshold — lower = more compression")
+                                .changed()
+                                && lim_on
+                            {
+                                self.engine.set_limiter_threshold(thr);
+                            }
+                        });
+                    });
                 });
-            });
 
-            ui.add_space(sp_xs);
-            ui.separator();
-            ui.add_space(sp_xs);
-
-            ui.horizontal(|ui| {
-                let mut master = self.engine.master_volume();
-                if super::widgets::knob(ui, &mut master, 0.0..=1.0, "MAST", &self.theme, false)
-                    .on_hover_text("Master output volume — applied after all FX")
-                    .changed()
-                {
-                    self.engine.set_master_volume(master);
-                }
-                let mut glide = self.engine.glide_time();
-                if super::widgets::knob(ui, &mut glide, 0.0..=0.5, "GLIDE", &self.theme, false)
-                    .on_hover_text("Pitch slide time between notes (seconds)")
-                    .changed()
-                {
-                    self.engine.set_glide_time(glide);
-                }
-            });
-
-            ui.add_space(sp_xs);
-
-            ui.horizontal(|ui| {
-                let lim_on = self.limiter_enabled;
-                let lim_col = if lim_on {
-                    self.theme.c(&self.theme.accent_limiter)
+                // ── Right: L/R peak meters, full card height ─────────────────
+                let peak_raw_l = self.engine.peak_l();
+                let peak_raw_r = self.engine.peak_r();
+                let dt = 1.0 / 60.0_f32;
+                self.peak_display =
+                    (self.peak_display * 0.85 + peak_raw_l * 0.15).max(peak_raw_l * 0.3);
+                let peak_raw_max = peak_raw_l.max(peak_raw_r);
+                if peak_raw_max > self.peak_hold {
+                    self.peak_hold = peak_raw_max;
+                    self.peak_hold_timer = 0.0;
                 } else {
-                    self.theme.c(&self.theme.text_disabled)
-                };
-                if ui
-                    .add_sized(
-                        [36.0, 22.0],
-                        egui::SelectableLabel::new(
-                            lim_on,
-                            RichText::new("LIM").size(10.0).color(lim_col),
-                        ),
-                    )
-                    .on_hover_text("Limiter — prevents output clipping")
-                    .clicked()
-                {
-                    self.limiter_enabled = !lim_on;
-                    self.engine.set_limiter_enabled(self.limiter_enabled);
-                }
-                ui.add_enabled_ui(lim_on, |ui| {
-                    let mut thr = self.engine.limiter_threshold();
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut thr)
-                                .range(0.5..=1.0)
-                                .speed(0.005)
-                                .fixed_decimals(2),
-                        )
-                        .on_hover_text("Threshold — lower = more compression")
-                        .changed()
-                        && lim_on
-                    {
-                        self.engine.set_limiter_threshold(thr);
+                    self.peak_hold_timer += dt;
+                    if self.peak_hold_timer > 1.5 {
+                        self.peak_hold *= 0.97;
                     }
-                });
+                }
+
+                const CH_W: f32 = 5.0;
+                const CH_GAP: f32 = 1.0;
+                const METER_TOTAL_W: f32 = CH_W * 2.0 + CH_GAP + 4.0;
+                let (resp, painter) =
+                    ui.allocate_painter(Vec2::new(METER_TOTAL_W, total_h), Sense::hover());
+                let mr = resp.rect;
+
+                painter.rect_filled(
+                    mr,
+                    CornerRadius::same(2),
+                    self.theme.c(&self.theme.meter_bg),
+                );
+
+                for (ci, &peak_raw) in [peak_raw_l, peak_raw_r].iter().enumerate() {
+                    let x_left = mr.left() + 2.0 + ci as f32 * (CH_W + CH_GAP);
+                    let ch_rect = Rect::from_min_size(
+                        Pos2::new(x_left, mr.top() + 2.0),
+                        Vec2::new(CH_W, mr.height() - 14.0),
+                    );
+                    let level = peak_raw.clamp(0.0, 1.0);
+                    let bar_h = ch_rect.height() * level;
+                    if bar_h > 0.5 {
+                        let color = if peak_raw < 0.7 {
+                            self.theme.c(&self.theme.meter_green)
+                        } else if peak_raw < 1.0 {
+                            let t = (peak_raw - 0.7) / 0.3;
+                            let g = self.theme.meter_green;
+                            let c = self.theme.meter_clip;
+                            Color32::from_rgb(
+                                (g[0] as f32 + (c[0] as f32 - g[0] as f32) * t) as u8,
+                                (g[1] as f32 + (c[1] as f32 - g[1] as f32) * t) as u8,
+                                (g[2] as f32 + (c[2] as f32 - g[2] as f32) * t) as u8,
+                            )
+                        } else {
+                            self.theme.c(&self.theme.meter_clip)
+                        };
+                        let bar_rect = Rect::from_min_size(
+                            Pos2::new(ch_rect.left(), ch_rect.bottom() - bar_h),
+                            Vec2::new(CH_W, bar_h),
+                        );
+                        painter.rect_filled(bar_rect, CornerRadius::ZERO, color);
+                    }
+
+                    let hold_frac = self.peak_hold.clamp(0.0, 1.0);
+                    let hold_y = ch_rect.bottom() - ch_rect.height() * hold_frac;
+                    let hold_color = if self.peak_hold >= 1.0 {
+                        self.theme.c(&self.theme.meter_clip)
+                    } else {
+                        Color32::WHITE
+                    };
+                    painter.line_segment(
+                        [
+                            Pos2::new(ch_rect.left(), hold_y),
+                            Pos2::new(ch_rect.right(), hold_y),
+                        ],
+                        Stroke::new(1.5, hold_color),
+                    );
+
+                    painter.text(
+                        Pos2::new(ch_rect.center_top().x, mr.bottom() - 2.0),
+                        egui::Align2::CENTER_BOTTOM,
+                        if ci == 0 { "L" } else { "R" },
+                        egui::FontId::proportional(8.0),
+                        Color32::from_rgba_premultiplied(200, 200, 200, 120),
+                    );
+                }
             });
         });
     }
