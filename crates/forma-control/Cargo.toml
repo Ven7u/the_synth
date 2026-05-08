@@ -1,0 +1,14 @@
+[package]
+name = "forma-control"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crossbeam-channel = "0.5"
+midir   = "0.9"
+anyhow  = "1"
+serde   = { version = "1", features = ["derive"], optional = true }
+
+[features]
+default = []
+serde = ["dep:serde"]

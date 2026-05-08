@@ -1,7 +1,7 @@
 # Drum Step Sequencer — Design Document
 
 **Status:** Design phase (pre-implementation)
-**Target crates:** `synth-engine` (track count), `ambient-engine` (sequencer core + API), `ambient-box` (UI)
+**Target crates:** `forma-engine` (track count), `ambient-engine` (sequencer core + API), `forma-ambient` (UI)
 **Depends on:** Phase 8.3 Markov engine, Phase 8.7 Timeline
 
 ---
@@ -30,7 +30,7 @@ The drum sequencer provides:
    compromise.
 
 2. **Library-first architecture.** The drum sequencer lives in `ambient-engine`, not in
-   `ambient-box`. It exposes a clean API that any host (ambient-box, Bevy game, headless
+   `forma-ambient`. It exposes a clean API that any host (forma-ambient, Bevy game, headless
    renderer) can drive. The sequencer produces events; the host routes them to the audio
    engine. No UI coupling in the core logic.
 
@@ -46,7 +46,7 @@ The drum sequencer provides:
 
 5. **Scene-serializable.** Drum patterns are stored in the scene JSON alongside Markov
    config. Loading a scene restores the complete musical state — harmony + rhythm +
-   timeline. This works identically whether loaded from ambient-box UI or via the
+   timeline. This works identically whether loaded from forma-ambient UI or via the
    Bevy `SynthEvent` API.
 
 ---
@@ -100,7 +100,7 @@ when the scene has a `"drums"` config. Ambient scenes leave track 4 silent.
 
 ## 4. TRACK_COUNT Change
 
-`TRACK_COUNT` in `synth-engine/src/multi.rs` changes from 4 to 5.
+`TRACK_COUNT` in `forma-engine/src/multi.rs` changes from 4 to 5.
 
 ### Impact
 
@@ -109,7 +109,7 @@ All `[T; TRACK_COUNT]` arrays grow by one element automatically. Key locations:
 - `MultiTrackEngine` — track graph array, shimmer/crystal sends
 - `AmbientEngine` — per-track configs (euclidean, prob_table, generative_mode, arp, walker)
 - `Scene` — `tracks: [SceneTrack; TRACK_COUNT]`
-- `ambient-box` — UI state arrays, voice_notes, steal_idx, lfo_phases
+- `forma-ambient` — UI state arrays, voice_notes, steal_idx, lfo_phases
 
 ### Backwards compatibility (scene JSON)
 
@@ -423,7 +423,7 @@ without disrupting the groove.
 
 ## 11. Library API (for Bevy integration)
 
-The drum sequencer is fully usable from `ambient-engine` without ambient-box:
+The drum sequencer is fully usable from `ambient-engine` without forma-ambient:
 
 ```rust
 use ambient_engine::{
@@ -445,7 +445,7 @@ drums.active_pattern.store(1, Ordering::Relaxed); // switch to pattern "Sparse"
 // Edit a step at runtime
 drums.set_step(/*pattern*/0, /*lane*/2, /*step*/5, true, 0.7, 1.0);
 
-// The audio callback (in Bevy or ambient-box) calls:
+// The audio callback (in Bevy or forma-ambient) calls:
 // drum_sequencer.on_subdivision(&engine.drum_shared)
 // and routes DrumEvents to track 4
 ```
@@ -469,7 +469,7 @@ Markov parameters.
 
 ## 12. UI Design
 
-### Step sequencer grid (ambient-box)
+### Step sequencer grid (forma-ambient)
 
 ```
 [Drums ON/OFF] [Vol: ====] [Pattern: Four on Floor ▼]
@@ -499,12 +499,12 @@ Perc [ ][ ][ ][ ][ ][ ][○][ ][ ][ ][ ][ ][ ][ ][○][ ]
 
 | File | Change | Description |
 |---|---|---|
-| `crates/synth-engine/src/multi.rs` | **Modify** | `TRACK_COUNT = 5` |
+| `crates/forma-engine/src/multi.rs` | **Modify** | `TRACK_COUNT = 5` |
 | `crates/ambient-engine/src/drums.rs` | **New** | All drum types, DrumSequencerShared, DrumSequencer |
 | `crates/ambient-engine/src/lib.rs` | **Modify** | `pub mod drums;` + re-exports |
 | `crates/ambient-engine/src/engine.rs` | **Modify** | `drum_shared` in AmbientEngine, `drums: Option<DrumScene>` in Scene, `tracks` to Vec for compat, capture/apply |
 | `crates/ambient-engine/src/markov.rs` | **Modify** | `drum_pattern: Option<u8>` in TimelineSection |
-| `crates/ambient-box/src/main.rs` | **Modify** | Audio callback drum handler, drum UI grid, app state |
+| `crates/forma-ambient/src/main.rs` | **Modify** | Audio callback drum handler, drum UI grid, app state |
 | `assets/patches/Pulse/*.json` | Existing | Percussive patches for the drum track |
 | `scenes/*.json` | **Modify** | Add `drums` config to techno scenes |
 
@@ -513,7 +513,7 @@ Perc [ ][ ][ ][ ][ ][ ][○][ ][ ][ ][ ][ ][ ][ ][○][ ]
 ## 14. Implementation Phases
 
 ### Phase 1: Track count expansion
-- Change `TRACK_COUNT` to 5 in `synth-engine`
+- Change `TRACK_COUNT` to 5 in `forma-engine`
 - Change `Scene.tracks` from fixed array to `Vec<SceneTrack>` with pad/truncate on load
 - Fix all compilation errors from the array size change
 - Verify existing scenes still load

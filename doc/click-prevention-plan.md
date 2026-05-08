@@ -4,7 +4,7 @@
 
 Several places in the engine multiply control-rate values into the audio path without bandlimiting them. When the user moves a slider, toggles a destination, or a trigger fires, the control value steps to a new value within one sample. Multiplied with audio, that step becomes broadband energy — perceived as a click, pop, or zipper.
 
-The fix is well-known DSP hygiene: **anything multiplied with audio must change smoothly** (≥ ~1 ms transition). The codebase already applies this to FX-chain mix/drive params (via `SmoothedParam` in [crates/synth-engine/src/audio.rs](../crates/synth-engine/src/audio.rs)) and to voice retrigger (via `retrigger_countdown` in [crates/synth-engine/src/voice.rs](../crates/synth-engine/src/voice.rs)). It is **not** applied uniformly across the rest of the modulation graph.
+The fix is well-known DSP hygiene: **anything multiplied with audio must change smoothly** (≥ ~1 ms transition). The codebase already applies this to FX-chain mix/drive params (via `SmoothedParam` in [crates/forma-engine/src/audio.rs](../crates/forma-engine/src/audio.rs)) and to voice retrigger (via `retrigger_countdown` in [crates/forma-engine/src/voice.rs](../crates/forma-engine/src/voice.rs)). It is **not** applied uniformly across the rest of the modulation graph.
 
 This plan is a phased audit + fix + prevention pass to bring the whole engine up to that bar.
 
@@ -16,7 +16,7 @@ Reference: see also [doc/dsp-guidelines.md](dsp-guidelines.md) for general DSP r
 
 Without a measurement tool, every fix is a listening test, every regression is invisible, and progress is unprovable. Build the detector before doing anything else.
 
-- [ ] **Offline click-detector test** in `synth-bench` or a new `synth-tests/clicks` crate.
+- [ ] **Offline click-detector test** in `forma-bench` or a new `synth-tests/clicks` crate.
   - Renders the engine for N seconds with a sustained voice playing.
   - Sweeps each `Shared` / atomic from min → max in 10-sample steps.
   - Records output, asserts `max(|sample[n] - sample[n-1]|) < THRESHOLD`.

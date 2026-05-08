@@ -1,0 +1,7 @@
+[package]
+name = "forma-common"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fundsp = { version = "0.23", features = ["files", "fft"] }

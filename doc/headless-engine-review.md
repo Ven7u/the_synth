@@ -17,30 +17,30 @@ flowchart TB
     %% Layer 1 — binaries and integration crates
     subgraph L1["Binaries & integration crates"]
         direction LR
-        TSYN["the-synth<br/>main synth binary<br/>(egui + cpal)"]
-        ABOX["ambient-box<br/>ambient binary<br/>(egui + cpal)"]
-        BEV["synth-bevy<br/>Bevy integration"]
-        BEN["synth-bench<br/>DSP benchmarks"]
+        TSYN["forma<br/>main synth binary<br/>(egui + cpal)"]
+        ABOX["forma-ambient<br/>ambient binary<br/>(egui + cpal)"]
+        BEV["forma-bevy<br/>Bevy integration"]
+        BEN["forma-bench<br/>DSP benchmarks"]
     end
 
     %% Layer 2 — derived engine and UI widget lib
     subgraph L2["Derived engines & UI lib"]
         direction LR
         AENG["ambient-engine<br/>Markov / generative"]
-        UI["synth-ui<br/>egui widgets"]
+        UI["forma-ui<br/>egui widgets"]
     end
 
     %% Layer 3 — core engine
-    ENG["synth-engine<br/>AudioState, DSP graph builder,<br/>MultiTrackEngine, arp, walker<br/>future: SynthEngineHandle"]
+    ENG["forma-engine<br/>AudioState, DSP graph builder,<br/>MultiTrackEngine, arp, walker<br/>future: SynthEngineHandle"]
 
     %% Layer 4 — protocol / control surface
-    CTRL["synth-control<br/>ControlEvent, crossbeam channel,<br/>MIDI input (midir)<br/>future: Command / ParamId / ParamDescriptor"]
+    CTRL["forma-control<br/>ControlEvent, crossbeam channel,<br/>MIDI input (midir)<br/>future: Command / ParamId / ParamDescriptor"]
 
     %% Layer 5 — foundations
     subgraph L5["Foundations"]
         direction LR
-        DSP["synth-dsp<br/>envelope, osc, filter, FX, limiter"]
-        COMMON["synth-common<br/>ClockDivision, small utils"]
+        DSP["forma-dsp<br/>envelope, osc, filter, FX, limiter"]
+        COMMON["forma-common<br/>ClockDivision, small utils"]
     end
 
     %% Binary deps
@@ -91,35 +91,35 @@ engine. Green = binaries / integration targets. Pink = utility crates.
 
 **Observations that matter for the refactor:**
 
-1. **`synth-control` is already a workspace leaf** (no internal Rust deps).
+1. **`forma-control` is already a workspace leaf** (no internal Rust deps).
    Exactly what you want in a protocol crate — anyone can depend on it
    cheaply. Ready to grow into `Command` / `ParamId` / `ParamDescriptor`
    without rippling changes.
 
-2. **`synth-engine` does *not* depend on `synth-control` today.** Control-event
-   handling lives in the consumers (the-synth, ambient-engine). Post-refactor
+2. **`forma-engine` does *not* depend on `forma-control` today.** Control-event
+   handling lives in the consumers (forma, ambient-engine). Post-refactor
    Stage 1, this edge gets added (`SynthEngineHandle` needs a `ControlSender`).
    Low-risk.
 
-3. **`synth-ui` is used only by `ambient-box`**, not by `the-synth`. The
+3. **`forma-ui` is used only by `forma-ambient`**, not by `forma`. The
    widget crate exists but the main binary isn't actually drawing from it.
    Worth a look when touching UI code.
 
-4. **`the-synth` ↔ `ambient-engine` are cleanly separated.** Neither depends
+4. **`forma` ↔ `ambient-engine` are cleanly separated.** Neither depends
    on the other.
 
-5. **`synth-bevy` is the non-egui-host proof.** It skips `synth-ui`, skips
-   `the-synth` entirely, and uses only `ambient-engine + synth-engine +
-   synth-control`. Exactly the pattern we want to generalize with the handle.
+5. **`forma-bevy` is the non-egui-host proof.** It skips `forma-ui`, skips
+   `forma` entirely, and uses only `ambient-engine + forma-engine +
+   forma-control`. Exactly the pattern we want to generalize with the handle.
 
-6. **`ambient-engine` is a derived engine** that wraps `synth-engine` with
+6. **`ambient-engine` is a derived engine** that wraps `forma-engine` with
    generative logic. When we add `SynthEngineHandle`, ambient-engine is one
    of its first consumers — a useful stress test for the API.
 
-7. **`synth-bench` is isolated** (only `synth-dsp`). Easy to forget during
+7. **`forma-bench` is isolated** (only `forma-dsp`). Easy to forget during
    refactors that change DSP internals.
 
-`synth-engine`, `synth-dsp`, `synth-common`, `synth-control` have **no UI
+`forma-engine`, `forma-dsp`, `forma-common`, `forma-control` have **no UI
 dependencies**. The crate layout already enforces the boundary we want.
 The problem is not the crate graph — it's what the UI actually *does* with
 the engine crates it depends on.
@@ -130,7 +130,7 @@ the engine crates it depends on.
 
 ### 2.1 `ControlEvent` is a stub, not a contract
 
-[`synth-control/src/event.rs`](../crates/synth-control/src/event.rs) defines
+[`forma-control/src/event.rs`](../crates/forma-control/src/event.rs) defines
 `ControlEvent::SetParam` with a `ParamId` enum of **5 values**:
 
 - `FilterCutoff`
@@ -148,7 +148,7 @@ note-related MIDI mapping; everything else bypasses the channel.
 
 ### 2.2 UI owns `Arc<AudioState>` and writes directly
 
-[`the-synth/src/main.rs`](../crates/the-synth/src/main.rs) `SynthApp` holds
+[`forma/src/main.rs`](../crates/forma/src/main.rs) `SynthApp` holds
 `state: Arc<AudioState>` and `control: ControlSender`, and hands `state` to
 every panel.
 
@@ -177,7 +177,7 @@ This mirror is what the patch system serializes.
 
 ### 2.4 The patch system is UI-coupled
 
-[`the-synth/src/patch.rs`](../crates/the-synth/src/patch.rs):
+[`forma/src/patch.rs`](../crates/forma/src/patch.rs):
 
 - `Patch::from_app(app)` captures `SynthApp` fields (the UI mirror).
 - `patch.apply(app)` writes back to `SynthApp` fields *and* pokes `Shared`
@@ -190,7 +190,7 @@ event stream.
 
 ### 2.5 `AudioEngine` is not a reusable handle
 
-[`the-synth/src/audio.rs`](../crates/the-synth/src/audio.rs) stuffs voice
+[`forma/src/audio.rs`](../crates/forma/src/audio.rs) stuffs voice
 allocation into the cpal callback closure:
 
 - `voice_notes: [Option<u8>; 6]`
@@ -203,20 +203,20 @@ A headless host can't call `engine.tick()`. The `AudioEngine` struct is a
 struct by name only — it owns the `cpal::Stream` and nothing else. The real
 logic is captured in the callback closure and can't be reused.
 
-Note: `synth-engine::multi::MultiTrackEngine` *does* expose a clean
+Note: `forma-engine::multi::MultiTrackEngine` *does* expose a clean
 `tick_glide` / `tick_lfo_sample` / `get_stereo` surface. The single-track path
-in `the-synth` hasn't been lifted to the same level.
+in `forma` hasn't been lifted to the same level.
 
 ### 2.6 Sequencer is the cleanest component
 
-[`the-synth/src/sequencer.rs`](../crates/the-synth/src/sequencer.rs)
+[`forma/src/sequencer.rs`](../crates/forma/src/sequencer.rs)
 `SequencerHandle` exposes only atomics + pattern state, and the thread
 produces `ControlEvent`s. That's the model to generalize to the rest of the
 app.
 
-### 2.7 `synth-bevy` confirms the leak is host-agnostic
+### 2.7 `forma-bevy` confirms the leak is host-agnostic
 
-[`synth-bevy/src/plugin.rs`](../crates/synth-bevy/src/plugin.rs) uses
+[`forma-bevy/src/plugin.rs`](../crates/forma-bevy/src/plugin.rs) uses
 `ControlEvent::SetParam` where it can (5 params) and falls back to `Shared`
 writes for everything else. Same leak, different host.
 
@@ -296,9 +296,9 @@ possible later without another rewrite.
 
 ## 5. Concrete cleanup items (worth doing under any direction)
 
-1. **Extract a `VoiceAllocator` struct** in `synth-engine` from the cpal
+1. **Extract a `VoiceAllocator` struct** in `forma-engine` from the cpal
    callback closure in
-   [`the-synth/src/audio.rs`](../crates/the-synth/src/audio.rs). Move
+   [`forma/src/audio.rs`](../crates/forma/src/audio.rs). Move
    `voice_notes`, `pitch_hold_count`, `retrigger_countdown`, `arp`, `walker`,
    `trigger_note`, `release_note` into it. Any host can then drive the engine
    via one method call per buffer.
@@ -317,7 +317,7 @@ possible later without another rewrite.
    guards the decoupling from regressing once achieved.
 
 5. **Lift `MultiTrackEngine`'s tick surface to be the canonical engine
-   API.** The single-track path in `the-synth` should use the same pattern
+   API.** The single-track path in `forma` should use the same pattern
    (or be deleted in favour of a 1-track configuration of
    `MultiTrackEngine`).
 
@@ -325,10 +325,10 @@ possible later without another rewrite.
 
 ## 6. What stays untouched
 
-- `synth-dsp`: already pure DSP, no UI, good as-is.
-- `synth-common`: already pure.
-- `synth-ui`: egui widgets, scoped correctly.
-- `synth-control`: the types are fine; the `ParamId` enum may or may not grow
+- `forma-dsp`: already pure DSP, no UI, good as-is.
+- `forma-common`: already pure.
+- `forma-ui`: egui widgets, scoped correctly.
+- `forma-control`: the types are fine; the `ParamId` enum may or may not grow
   depending on chosen direction.
 - Sequencer thread model: the handle + channel pattern should be the
   template for other subsystems.
@@ -339,9 +339,9 @@ possible later without another rewrite.
 
 Headless is achieved when **all four** of these hold:
 
-1. `the-synth` builds and runs using only an `EngineHandle` / event channel —
-   no `state.<field>.set(...)` calls anywhere under `the-synth/src/ui/` or
-   `the-synth/src/patch.rs`.
+1. `forma` builds and runs using only an `EngineHandle` / event channel —
+   no `state.<field>.set(...)` calls anywhere under `forma/src/ui/` or
+   `forma/src/patch.rs`.
 2. A second, minimal non-egui host (CLI or TUI) can drive the engine using
    the same handle, producing identical audio.
 3. Loading a patch is observable on the event stream.

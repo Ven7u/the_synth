@@ -1,6 +1,6 @@
 # Performance Roadmap
 
-Reference document for the-synth's DSP CPU budget: what we found when we
+Reference document for forma's DSP CPU budget: what we found when we
 profiled the engine, what's been shipped, and what's left to do — ordered
 by ROI.
 
@@ -34,8 +34,8 @@ Secondary cost centres (in order):
 |---|---|---|
 | Denormal floats in reverb tails | 10–100× CPU spike on Intel | no FTZ/DAZ setup anywhere |
 | Default release profile | 5–15% perf left on the table | no `[profile.release]` overrides |
-| Shimmer runs full algorithm at `amt=0` | 400–600 ns/sample wasted | [crates/synth-dsp/src/shimmer.rs](../crates/synth-dsp/src/shimmer.rs) |
-| Crystallizer grain scheduler runs at low mix | 200–400 ns/sample | [crates/synth-dsp/src/crystallizer.rs](../crates/synth-dsp/src/crystallizer.rs) |
+| Shimmer runs full algorithm at `amt=0` | 400–600 ns/sample wasted | [crates/forma-dsp/src/shimmer.rs](../crates/forma-dsp/src/shimmer.rs) |
+| Crystallizer grain scheduler runs at low mix | 200–400 ns/sample | [crates/forma-dsp/src/crystallizer.rs](../crates/forma-dsp/src/crystallizer.rs) |
 | Per-sample `sin`, `powf`, `tanh` | ~20–60 ns each | LFO phase, FX tone LPs, output soft-clip |
 | No voice-activity tracking | idle cost = fully-active cost | the dominant problem |
 
@@ -54,7 +54,7 @@ codegen-units = 1           # best code layout / inlining decisions
 Costs more compile time. No runtime cost. 5–15% perf on Intel; within
 measurement noise on Apple Silicon.
 
-### 2. FTZ/DAZ denormal protection — [crates/synth-engine/src/denormals.rs](../crates/synth-engine/src/denormals.rs)
+### 2. FTZ/DAZ denormal protection — [crates/forma-engine/src/denormals.rs](../crates/forma-engine/src/denormals.rs)
 
 `enable_ftz_on_current_thread()` sets flush-to-zero + denormals-are-zero on
 x86/x86_64 (MXCSR) and aarch64 (FPCR bit 24). Called from the cpal callback's
@@ -63,14 +63,14 @@ subnormal cliff during reverb tails. No audible effect; silent insurance.
 
 ### 3. Voice activation gating — Stage 7
 
-- **New** [crates/synth-engine/src/gated_voice.rs](../crates/synth-engine/src/gated_voice.rs) — `GatedVoice<X>` AudioNode wraps each voice's sub-graph. Reads a per-voice `AtomicBool` flag per tick; returns zeros and skips the inner graph when the flag is `false`. On false→true transition calls `inner.reset()` for a clean wake-up.
-- **Edit** [crates/synth-engine/src/voice.rs](../crates/synth-engine/src/voice.rs) — new `VoiceAllocator::update_audibility(state)` method publishes the flag per voice: audible iff `gate > 0.5 OR amp_cursor > 0.5 OR retrigger_countdown > 0`. Runs once per audio buffer after event drain.
-- **Edit** [crates/synth-engine/src/audio.rs](../crates/synth-engine/src/audio.rs) — each voice wrapped with `An(GatedVoice::new(make_voice(vi).0, Arc::clone(&state.voice_audible[vi])))`.
+- **New** [crates/forma-engine/src/gated_voice.rs](../crates/forma-engine/src/gated_voice.rs) — `GatedVoice<X>` AudioNode wraps each voice's sub-graph. Reads a per-voice `AtomicBool` flag per tick; returns zeros and skips the inner graph when the flag is `false`. On false→true transition calls `inner.reset()` for a clean wake-up.
+- **Edit** [crates/forma-engine/src/voice.rs](../crates/forma-engine/src/voice.rs) — new `VoiceAllocator::update_audibility(state)` method publishes the flag per voice: audible iff `gate > 0.5 OR amp_cursor > 0.5 OR retrigger_countdown > 0`. Runs once per audio buffer after event drain.
+- **Edit** [crates/forma-engine/src/audio.rs](../crates/forma-engine/src/audio.rs) — each voice wrapped with `An(GatedVoice::new(make_voice(vi).0, Arc::clone(&state.voice_audible[vi])))`.
 
-### 4. Benchmark harness — [crates/synth-bench/src/bin/synth-perf.rs](../crates/synth-bench/src/bin/synth-perf.rs)
+### 4. Benchmark harness — [crates/forma-bench/src/bin/synth-perf.rs](../crates/forma-bench/src/bin/synth-perf.rs)
 
 ```text
-cargo run --release -p synth-bench --bin synth-perf
+cargo run --release -p forma-bench --bin synth-perf
 ```
 
 Renders 10 seconds of audio per scenario and reports realtime factor (RTF),
@@ -109,7 +109,7 @@ common case.
 mix with `if mix > 0.0001` but still run comb filters / grain scheduler
 internally when `shimmer_amt = 0` or equivalent Crystal parameters are zero.
 - Expected: **5–15% on heavy-FX scenarios**
-- Files: [crates/synth-dsp/src/shimmer.rs](../crates/synth-dsp/src/shimmer.rs), [crates/synth-dsp/src/crystallizer.rs](../crates/synth-dsp/src/crystallizer.rs)
+- Files: [crates/forma-dsp/src/shimmer.rs](../crates/forma-dsp/src/shimmer.rs), [crates/forma-dsp/src/crystallizer.rs](../crates/forma-dsp/src/crystallizer.rs)
 - Effort: small
 - Risk: low
 
@@ -124,7 +124,7 @@ one read per buffer is sufficient; a thin cache wrapper preserves semantics.
 with a 256-entry table + linear interpolation. Same audible result, ~30 ns
 saved × 2 LFOs × 48k.
 - Expected: **3–7% overall**
-- Location: the inner sample loop in [crates/the-synth/src/audio.rs](../crates/the-synth/src/audio.rs)
+- Location: the inner sample loop in [crates/forma/src/audio.rs](../crates/forma/src/audio.rs)
 - Effort: small
 - Risk: low
 
@@ -198,7 +198,7 @@ simultaneous instances.
 Any future DSP-related change should be measured with the harness:
 
 ```
-cargo run --release -p synth-bench --bin synth-perf
+cargo run --release -p forma-bench --bin synth-perf
 ```
 
 Targets:

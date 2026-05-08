@@ -1,7 +1,7 @@
 # Markov Music System — Design Document
 
 **Status:** Phase 8.3 implemented, Phase 8.7 (Timeline) in design
-**Target crates:** `ambient-engine` (core), `synth-bevy` (integration), `ambient-box` (UI)
+**Target crates:** `ambient-engine` (core), `forma-bevy` (integration), `forma-ambient` (UI)
 
 ---
 
@@ -1128,7 +1128,7 @@ classDiagram
 | 8.4.5 Laplace smoothing | Prevent zero-probability transitions |
 | 8.4.6 JSON export | Serialize trained mood to file |
 
-### Phase 8.5 — Bevy integration (`synth-bevy`)
+### Phase 8.5 — Bevy integration (`forma-bevy`)
 
 | Task | Description |
 |---|---|
@@ -1138,7 +1138,7 @@ classDiagram
 | 8.5.4 `SynthEvent::SetPhraseLength` | Update phrase boundary config |
 | 8.5.5 `MarkovState` Resource | Exposes current harmonic state, phrase position to Bevy systems |
 
-### Phase 8.6 — Launchpad UI (`ambient-box`)
+### Phase 8.6 — Launchpad UI (`forma-ambient`)
 
 | Task | Description |
 |---|---|
@@ -1148,7 +1148,7 @@ classDiagram
 | 8.6.4 Mood editor | Load/save mood JSON, blend sliders |
 | 8.6.5 Training UI | Load MIDI, run training, preview matrix, export mood |
 
-### Phase 8.7 — Timeline (`ambient-engine` + `ambient-box`)
+### Phase 8.7 — Timeline (`ambient-engine` + `forma-ambient`)
 
 | Task | Description |
 |---|---|

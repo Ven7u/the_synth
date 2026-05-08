@@ -1,6 +1,6 @@
 # Ambient Synth — Architecture Proposal
 
-This document proposes the architectural evolution of `the_synth` from a single mono-timbral
+This document proposes the architectural evolution of `forma` from a single mono-timbral
 synthesizer into a modular, multi-layer ambient music engine. It is a design document — no code
 changes are implied yet.
 
@@ -33,17 +33,17 @@ synthesis voice, arpeggiator, and local effects, feeding into shared spatial bus
 
 This platform intentionally serves **two different products** with different UX goals:
 
-- **`the_synth` = instrument**  
+- **`forma` = instrument**  
   Real-time virtual synth for direct playing (single timbral lane / mono-track workflow),
   with deep voice editing and patch authoring.
-- **`ambient-box` = performance + generation tool**  
+- **`forma-ambient` = performance + generation tool**  
   Multi-track ambient/electronic composition environment with high-level controls:
   mood/macros, harmony/rhythm patterns, scene transitions, and generative behavior.
 - **`ambient-engine` = generative/composition core**  
   Shared runtime for multi-track behavior: macro system, scene system, harmonic/rhythmic
   generators, and effect orchestration.
 
-Future direction: `ambient-box` should support **MIDI timeline interoperability** (import,
+Future direction: `forma-ambient` should support **MIDI timeline interoperability** (import,
 playback, and export), while generation quality remains a core `ambient-engine` R&D effort.
 
 ---
@@ -51,7 +51,7 @@ playback, and export), while generation quality remains a core `ambient-engine` 
 ## 2. Design Principles
 
 ### Library-first
-The synthesis engine must be usable as a Rust library (`synth-engine`) independently of the
+The synthesis engine must be usable as a Rust library (`forma-engine`) independently of the
 egui UI or the cpal audio backend. This enables embedding in other applications, headless
 testing, and future integration with DAW plugin formats (VST3/CLAP via `nih-plug`).
 
@@ -96,19 +96,19 @@ Bevy game, or a CLI generative tool can each pull in exactly what they need.
 ```mermaid
 graph TD
     subgraph PLATFORM["Platform crates  ·  no app logic"]
-        DSP["synth-dsp  ·  lib\n──────────────────\nDSP primitives\nMultiWaveOsc · LiveAdsr\nMoog filter · FxChain\nShimmer · Crystallizer"]
-        CTRL["synth-control  ·  lib\n──────────────────\nControlEvent bus\nControlSource trait\nMidiEngine\nCC → param mapping"]
-        UI["synth-ui  ·  lib\n──────────────────\nShared egui widgets\nADSR visualizer\nOscilloscope\nKeyboard widget\nPatch browser\nPeak meter · Knobs"]
+        DSP["forma-dsp  ·  lib\n──────────────────\nDSP primitives\nMultiWaveOsc · LiveAdsr\nMoog filter · FxChain\nShimmer · Crystallizer"]
+        CTRL["forma-control  ·  lib\n──────────────────\nControlEvent bus\nControlSource trait\nMidiEngine\nCC → param mapping"]
+        UI["forma-ui  ·  lib\n──────────────────\nShared egui widgets\nADSR visualizer\nOscilloscope\nKeyboard widget\nPatch browser\nPeak meter · Knobs"]
     end
 
     subgraph ENGINES["Engine crates  ·  instrument assembly"]
-        SE["synth-engine  ·  lib\n──────────────────\nSingle-voice engine\nAudioState\nbuild_synth_graph\nFxChain\nprocess_block API"]
+        SE["forma-engine  ·  lib\n──────────────────\nSingle-voice engine\nAudioState\nbuild_synth_graph\nFxChain\nprocess_block API"]
         AE["ambient-engine  ·  lib\n──────────────────\nMulti-track engine\n4 × Track\nGlobal buses\nArpeggiator\nMacro · Scene system\nGenerative patterns\nAutomation"]
     end
 
     subgraph APPS["Application binaries"]
-        TS["the_synth  ·  bin\n──────────────────\nMono-timbral synth\ncpal + egui\nExisting UX, unchanged"]
-        AB["ambient-box  ·  bin\n──────────────────\nMulti-track ambient\nelectronic music maker\ncpal + egui\nLayer mixer · Macros\nScene browser"]
+        TS["forma  ·  bin\n──────────────────\nMono-timbral synth\ncpal + egui\nExisting UX, unchanged"]
+        AB["forma-ambient  ·  bin\n──────────────────\nMulti-track ambient\nelectronic music maker\ncpal + egui\nLayer mixer · Macros\nScene browser"]
         FUT["[future apps]\n──────────────────\nBevy game\nVST3/CLAP plugin\nDrum machine\nGenerative installation"]
     end
 
@@ -131,38 +131,38 @@ graph TD
 
 ### Platform crates
 
-**`synth-dsp`** (exists) — Pure signal processing. No I/O, no UI, no serialization.
+**`forma-dsp`** (exists) — Pure signal processing. No I/O, no UI, no serialization.
 Depends only on `fundsp` and `std`. Contains every `AudioNode` implementation:
 `MultiWaveOsc`, `LiveAdsr`, `FxChain`, and future `ShimmerReverb`, `Crystallizer`.
 
-**`synth-control`** (exists) — Event bus and input abstraction. `ControlEvent` enum,
+**`forma-control`** (exists) — Event bus and input abstraction. `ControlEvent` enum,
 `ControlSender`/`ControlReceiver` (lock-free channel), `ControlSource` trait, `MidiEngine`.
 Depends on `crossbeam-channel`, `midir`, `anyhow`.
 
-**`synth-ui`** (planned) — Shared egui widgets. No audio dependencies — pure UI.
+**`forma-ui`** (planned) — Shared egui widgets. No audio dependencies — pure UI.
 ADSR visualizer, oscilloscope, on-screen keyboard, patch browser panel, VU meter, knobs.
-Both `the_synth` and `ambient-box` use this crate for their common UI components.
+Both `forma` and `forma-ambient` use this crate for their common UI components.
 
 ### Engine crates
 
-**`synth-engine`** (exists) — Single-voice engine powering `the_synth`. `AudioState`,
+**`forma-engine`** (exists) — Single-voice engine powering `forma`. `AudioState`,
 `build_synth_graph`, `FxChain`. Exposes `process_block()` and `AudioState` parameter Shareds.
 
-**`ambient-engine`** (planned) — Multi-track engine powering `ambient-box`. Four independent
+**`ambient-engine`** (planned) — Multi-track engine powering `forma-ambient`. Four independent
 `Track` instances each with their own voice bank, arpeggiator, and effect sends. Global shimmer
 and crystal buses. Macro and scene system. Generative pattern engine. Automation.
 
 ### Application binaries
 
-**`the_synth`** (exists) — Real-time virtual instrument focused on direct playability and deep
+**`forma`** (exists) — Real-time virtual instrument focused on direct playability and deep
 voice editing. Primary patch design environment.
 
-**`ambient-box`** (planned) — The multi-track ambient/electronic music maker. Layer mixer,
+**`forma-ambient`** (planned) — The multi-track ambient/electronic music maker. Layer mixer,
 macro performance surface, scene browser, BPM-sync, and per-track patch *selection*.
-Built entirely on `ambient-engine` and `synth-ui`. Deep patch editing is intentionally
-kept in `the_synth` to avoid duplicating the full sound-design UI.
+Built entirely on `ambient-engine` and `forma-ui`. Deep patch editing is intentionally
+kept in `forma` to avoid duplicating the full sound-design UI.
 
-**Future apps** depend on the same platform crates. A Bevy game adds `synth-bevy` as a shell
+**Future apps** depend on the same platform crates. A Bevy game adds `forma-bevy` as a shell
 over `ambient-engine`. A VST plugin wraps any engine with a `nih-plug` shell.
 
 ---
@@ -314,7 +314,7 @@ Circular buffer (e.g. 4096 samples)
 At +1 octave, `pitch_ratio = 2.0`, so the read heads advance at half speed — playback speed
 halves, pitch doubles. The crossfade eliminates the click at the wrap point.
 
-This implementation belongs in `synth-dsp::shimmer`.
+This implementation belongs in `forma-dsp::shimmer`.
 
 ---
 
@@ -443,10 +443,10 @@ MacroTarget {
 
 ### Phase 6 macro strategy (macro-set first)
 
-To keep `ambient-box` fast and musical, Phase 6 prioritizes curated **Macro Sets** instead of
+To keep `forma-ambient` fast and musical, Phase 6 prioritizes curated **Macro Sets** instead of
 a free-form macro editor UI.
 
-1. Expose exactly **6 fixed knobs** in `ambient-box`.
+1. Expose exactly **6 fixed knobs** in `forma-ambient`.
 2. A **Macro Set** defines knob names, targets, ranges, and curves.
 3. Ship one default set that covers most ambient/soundtrack performance needs without requiring
 set switching in normal use.
@@ -587,14 +587,14 @@ The "few knobs" UX maps naturally to this architecture:
 | **Arp controls** | Per-layer: mode, division, octave range, gate, hold |
 | **Global BPM** | Drives all arp clocks and delay BPM-sync |
 
-The macro panel is the primary performance surface. Deep sound design stays in `the_synth`;
-`ambient-box` focuses on performance and arrangement-level control.
+The macro panel is the primary performance surface. Deep sound design stays in `forma`;
+`forma-ambient` focuses on performance and arrangement-level control.
 
 ### Patch authoring flow
 
-1. Design and tune a patch in `the_synth` (full voice editor).
+1. Design and tune a patch in `forma` (full voice editor).
 2. Save patch to the shared patch library format.
-3. In `ambient-box`, assign that patch to one track slot.
+3. In `forma-ambient`, assign that patch to one track slot.
 4. Shape the full piece with macros, sends, arp/walker, and scene transitions.
 
 ---
@@ -611,8 +611,8 @@ gantt
 
     section Phase 1 · Workspace split
     Create Cargo workspace                   :p1a, 2025-01-01, 7d
-    Move DSP nodes to synth-dsp              :p1b, after p1a, 7d
-    Move engine logic to synth-engine        :p1c, after p1b, 7d
+    Move DSP nodes to forma-dsp              :p1b, after p1a, 7d
+    Move engine logic to forma-engine        :p1c, after p1b, 7d
     Verify app builds and audio works        :p1d, after p1c, 3d
 
     section Phase 2 · Shimmer + Crystallizer
@@ -683,9 +683,9 @@ Each use case is an independent application (or library shell) that assembles pl
 
 | Use case | Binary / crate | Engine | Audio thread owner | Control source |
 |---|---|---|---|---|
-| **Mono-timbral synth** | `the_synth` | `synth-engine` | cpal | MIDI + keyboard + mouse + UI |
-| **Ambient / electronic maker** | `ambient-box` | `ambient-engine` | cpal | MIDI + keyboard + macro knobs + UI |
-| **Bevy game** | `synth-bevy` plugin | `ambient-engine` | Bevy audio | Bevy ECS events + game state |
+| **Mono-timbral synth** | `forma` | `forma-engine` | cpal | MIDI + keyboard + mouse + UI |
+| **Ambient / electronic maker** | `forma-ambient` | `ambient-engine` | cpal | MIDI + keyboard + macro knobs + UI |
+| **Bevy game** | `forma-bevy` plugin | `ambient-engine` | Bevy audio | Bevy ECS events + game state |
 | **DAW plugin** (future) | `synth-vst` | any engine | DAW host | MIDI + automation |
 
 No engine crate knows which application is hosting it. The host is always a thin shell that
@@ -696,20 +696,20 @@ owns the audio thread and calls `process_block()`.
 ```mermaid
 graph TD
     subgraph PLATFORM["Platform crates  (no app logic, no engine assembly)"]
-        DSP["synth-dsp\nDSP nodes · AudioNode impls"]
-        CTRL["synth-control\nControlEvent · MidiEngine\nControlSource trait"]
-        UI["synth-ui\nShared egui widgets"]
+        DSP["forma-dsp\nDSP nodes · AudioNode impls"]
+        CTRL["forma-control\nControlEvent · MidiEngine\nControlSource trait"]
+        UI["forma-ui\nShared egui widgets"]
     end
 
     subgraph ENGINES["Engine crates  (instrument assembly, no I/O)"]
-        SE["synth-engine\nSingle-voice · AudioState\nbuild_synth_graph"]
+        SE["forma-engine\nSingle-voice · AudioState\nbuild_synth_graph"]
         AE["ambient-engine\n4-track · buses · arp\nmacros · scenes · generative"]
     end
 
     subgraph APPS["Applications  (I/O shells)"]
-        TS["the_synth  bin"]
-        AB["ambient-box  bin"]
-        BEVY["synth-bevy  lib"]
+        TS["forma  bin"]
+        AB["forma-ambient  bin"]
+        BEVY["forma-bevy  lib"]
         VST["synth-vst  lib  (future)"]
     end
 
@@ -731,11 +731,11 @@ graph TD
 ```
 
 **Hard rules:**
-- Platform crates (`synth-dsp`, `synth-control`, `synth-ui`) never depend on each other upward
+- Platform crates (`forma-dsp`, `forma-control`, `forma-ui`) never depend on each other upward
   and never depend on engine or app crates
 - Engine crates depend only on platform crates — never on cpal, egui, or bevy
 - Apps are the only crates that may import I/O libraries (cpal, egui, bevy)
-- `synth-ui` depends on egui only — no audio, no engine dependency
+- `forma-ui` depends on egui only — no audio, no engine dependency
 
 ### 13.3 The Four Architectural Layers
 
@@ -744,7 +744,7 @@ responsibility and a defined interface to the layers above and below it.
 
 ```mermaid
 flowchart TD
-    subgraph CTRL["CONTROL LAYER  — synth-control"]
+    subgraph CTRL["CONTROL LAYER  — forma-control"]
         MIDI_SRC["MIDI device\n(midir)"]
         KEY_SRC["Keyboard / Mouse"]
         GAME_SRC["Bevy ECS\ngame systems"]
@@ -752,7 +752,7 @@ flowchart TD
         MIDI_SRC & KEY_SRC & GAME_SRC & GEN_SRC -->|ControlEvent| BUS["ControlEvent bus\n(lock-free SPSC/MPSC)"]
     end
 
-    subgraph MUS["MUSIC LAYER  — synth-engine"]
+    subgraph MUS["MUSIC LAYER  — forma-engine"]
         TRACKS["Track 1..N\n(Instrument + Arp + sends)"]
         ARP["Arpeggiator\n(chord-responsive)"]
         GEN_PAT["Generative pattern\n(scale walks · euclidean · probability)"]
@@ -772,7 +772,7 @@ flowchart TD
         INST_TRAIT --> POLY --> PATCH
     end
 
-    subgraph DSP_L["DSP LAYER  — synth-dsp"]
+    subgraph DSP_L["DSP LAYER  — forma-dsp"]
         OSC_NODE["Oscillator nodes\n(MultiWaveOsc)"]
         FILT_NODE["Filter nodes\n(Moog ladder)"]
         ENV_NODE["Envelope nodes\n(LiveAdsr)"]
@@ -826,7 +826,7 @@ try-push that drops on overflow — the audio thread must never block.
 
 ### 13.5 Bevy Integration Design
 
-The Bevy integration is a thin shell over `synth-engine`. It has three responsibilities:
+The Bevy integration is a thin shell over `forma-engine`. It has three responsibilities:
 
 **1. Audio source registration.**
 `SynthPlugin` registers the engine as a Bevy `AudioSource`. Bevy's audio system calls
@@ -866,7 +866,7 @@ flowchart LR
         INSP["Dev Inspector\n(bevy-egui)"]
     end
 
-    subgraph ENGINE["synth-engine"]
+    subgraph ENGINE["forma-engine"]
         QUEUE2["lock-free\nControlEvent queue"]
         PB2["process_block()"]
         PARAMS["Shared params\n(Arc atomics)"]
@@ -883,7 +883,7 @@ flowchart LR
 ### 13.6 Generative Music Engine
 
 For ambient and game use, the engine needs to generate music autonomously, without a human
-pressing keys. The generative engine sits inside `synth-engine` as a `ControlSource` that
+pressing keys. The generative engine sits inside `forma-engine` as a `ControlSource` that
 produces note events from rules rather than from human input.
 
 Three generative primitives cover the ambient / synthwave / game audio range:
@@ -969,28 +969,28 @@ the **platform + two-app architecture** described in §3 and §13.
 | FX chain (overdrive, distortion, chorus, delay, reverb) | ✅ Complete |
 | Step sequencer + chord keyboard | ✅ Complete |
 | MIDI input (`MidiEngine`) | ✅ Complete |
-| Workspace split (`synth-dsp`, `synth-engine`, root app) | ✅ Phase 1 done |
-| `synth-control` crate, `ControlEvent` bus | ✅ Phase 2 done |
+| Workspace split (`forma-dsp`, `forma-engine`, root app) | ✅ Phase 1 done |
+| `forma-control` crate, `ControlEvent` bus | ✅ Phase 2 done |
 | Voice allocation on audio thread | ✅ Phase 2 done |
-| `the_synth` standalone app | ✅ Working, frozen going forward |
-| `synth-ui` shared widget library | ✅ Phase 3 done (skeleton) |
+| `forma` standalone app | ✅ Working, frozen going forward |
+| `forma-ui` shared widget library | ✅ Phase 3 done (skeleton) |
 | `ambient-engine` multi-track engine | ✅ Phase 3 done (skeleton) |
-| `ambient-box` app binary | ✅ Phase 3 done (skeleton — minimal UX, intentional) |
+| `forma-ambient` app binary | ✅ Phase 3 done (skeleton — minimal UX, intentional) |
 | Arpeggiator + Scale walker | ✅ Phase 4 done |
 | Shimmer reverb + Crystallizer | 🔲 Phase 5 |
 | Advanced core DSP effects (modern "wow" set) | 🔲 Phase 9 |
-| `ambient-box` UX refinement | 🔲 Evolves naturally through Phases 4–6 |
+| `forma-ambient` UX refinement | 🔲 Evolves naturally through Phases 4–6 |
 | Macro + Scene system | 🔲 Phase 6 |
 | Generative patterns + Automation | 🔲 Phase 8 |
-| `synth-bevy` Bevy integration | 🔲 Phase 7 |
+| `forma-bevy` Bevy integration | 🔲 Phase 7 |
 | MIDI import/playback/export (ambient workflow) | 🔲 Future phase |
 
 ---
 
 ### ✅ Phase 4 — Arpeggiator + Scale walker (done)
 
-**Goal:** Each track in `ambient-box` and `the_synth` has a chord-responsive arpeggiator and a
-scale walker. All logic lives in `synth-engine::arp`; apps provide callback wiring only.
+**Goal:** Each track in `forma-ambient` and `forma` has a chord-responsive arpeggiator and a
+scale walker. All logic lives in `forma-engine::arp`; apps provide callback wiring only.
 
 | Task | Status | Notes |
 |---|---|---|
@@ -999,29 +999,29 @@ scale walker. All logic lives in `synth-engine::arp`; apps provide callback wiri
 | 4.3 BPM-sync clock | ✅ | Per-arp BPM + ClockDiv; phase-based gate model |
 | 4.4 `ChordHold` event | ✅ | `ControlEvent::ChordHold`; allocation on sender thread only |
 | 4.5 Octave range + gate length | ✅ | Per-arp `ArpShared` atomics |
-| 4.6 Arp UI panel | ✅ | In both `the_synth` and `ambient-box` |
+| 4.6 Arp UI panel | ✅ | In both `forma` and `forma-ambient` |
 | 4.7 Scale walker | ✅ | `ScaleWalker` + `ScaleWalkerShared`; 11 scales, random walk ±1/±2 steps |
 
 ---
 
-### ✅ Phase 3 — `ambient-box` skeleton + `ambient-engine` foundation (done)
+### ✅ Phase 3 — `forma-ambient` skeleton + `ambient-engine` foundation (done)
 
-**Goal:** Create the two new crates (`ambient-engine`, `ambient-box`) and the shared widget
-library (`synth-ui`). The `ambient-box` app launches, produces audio from four independent
-tracks, and the keyboard/MIDI can play each track. The existing `the_synth` is untouched.
+**Goal:** Create the two new crates (`ambient-engine`, `forma-ambient`) and the shared widget
+library (`forma-ui`). The `forma-ambient` app launches, produces audio from four independent
+tracks, and the keyboard/MIDI can play each track. The existing `forma` is untouched.
 
 | Task | Status | Notes |
 |---|---|---|
-| 3.1 Create `synth-ui` | ✅ | `knob()` widget; boundary established |
-| 3.2 Update `the_synth` to use `synth-ui` | 🔲 deferred | Not blocking; `the_synth` is frozen |
+| 3.1 Create `forma-ui` | ✅ | `knob()` widget; boundary established |
+| 3.2 Update `forma` to use `forma-ui` | 🔲 deferred | Not blocking; `forma` is frozen |
 | 3.3 Create `ambient-engine` | ✅ | `TrackState` × 4, per-track DSP graph, `AmbientEngine` |
 | 3.4 Per-track volume + `TrackMixer` | ✅ | `track_vol` Shared, normalized sum |
 | 3.5 Placeholder global buses | ✅ | `shimmer_send` / `crystal_send` Shared per track |
-| 3.6 Create `ambient-box` binary | ✅ | cpal stream, egui window, MIDI |
+| 3.6 Create `forma-ambient` binary | ✅ | cpal stream, egui window, MIDI |
 | 3.7 Track selector UI | ✅ | 4-button row, active track routes input |
 | 3.8 Per-track send knobs | ✅ | Volume, cutoff, resonance, shimmer, crystal |
 
-**Run:** `cargo run -p ambient-box`
+**Run:** `cargo run -p forma-ambient`
 
 The UX is intentionally minimal at this stage. The full layer mixer, patch editor, and
 performance surface will emerge naturally as Phases 4–6 add the features that define what
@@ -1030,9 +1030,9 @@ would mean designing blind.
 
 ---
 
-### Phase 5 — Shimmer reverb and Crystallizer (in `synth-dsp`)
+### Phase 5 — Shimmer reverb and Crystallizer (in `forma-dsp`)
 
-**Goal:** Both signature spatial effects implemented as `AudioNode`s in `synth-dsp`, wired
+**Goal:** Both signature spatial effects implemented as `AudioNode`s in `forma-dsp`, wired
 into `ambient-engine`'s global buses. Testable in isolation without any app.
 
 | Task | Description |
@@ -1041,7 +1041,7 @@ into `ambient-engine`'s global buses. Testable in isolation without any app.
 | 5.2 Granular pitch shifter | Circular buffer + moving read head + overlap-add smoothing |
 | 5.3 `Crystallizer` AudioNode | Granular pitch-shift delay: grain size, scatter, pitch ratio, feedback |
 | 5.4 Wire into `ambient-engine` global buses | Replace dry placeholders with the new nodes |
-| 5.5 Shimmer + Crystal UI in `ambient-box` | Global bus controls: room size, pitch interval, grain size, scatter, wet/dry |
+| 5.5 Shimmer + Crystal UI in `forma-ambient` | Global bus controls: room size, pitch interval, grain size, scatter, wet/dry |
 
 ---
 
@@ -1056,22 +1056,22 @@ multiple parameters. Scenes are serializable and load/save from disk.
 | 6.2 Macro evaluation in audio callback | Read macro `Shared`; iterate targets; write param `Shared`s |
 | 6.3 `Scene` struct | 4 track patches + macro definitions + BPM + key + scale |
 | 6.4 Scene serialization | `serde` + JSON; migration utility wraps a single `Patch` into a Scene |
-| 6.5 Macro panel UI in `ambient-box` | 4–8 large labelled knobs — the primary performance surface |
+| 6.5 Macro panel UI in `forma-ambient` | 4–8 large labelled knobs — the primary performance surface |
 | 6.6 Scene browser UI | Load / save / name scenes; preview patch names per slot |
-| 6.7 Per-track patch slot UI in `ambient-box` | Select/load patch assets per track; no deep patch editing in this app |
+| 6.7 Per-track patch slot UI in `forma-ambient` | Select/load patch assets per track; no deep patch editing in this app |
 | 6.8 Macro set library (curated presets) | Ship `Ambient Core` first; optional additional sets for pulse/cinematic/dark styles |
 | 6.9 Macro set selector UI | Same 6 knobs, different mapping set selected per scene/performance context |
 
 ---
 
-### Phase 7 — Bevy integration (`synth-bevy`)
+### Phase 7 — Bevy integration (`forma-bevy`)
 
 **Goal:** A Bevy game can embed `ambient-engine` and drive it through ECS events. See §15
 for the full integration design.
 
 | Task | Description |
 |---|---|
-| 7.1 Create `synth-bevy` crate | Bevy plugin skeleton; feature-gated `bevy` dependency |
+| 7.1 Create `forma-bevy` crate | Bevy plugin skeleton; feature-gated `bevy` dependency |
 | 7.2 `AmbientPlugin` | Registers `ambient-engine` as Bevy `AudioSource`; initializes event channel |
 | 7.3 `SynthEvent` Bevy event | Mirror of `ControlEvent` as a regular Bevy event (heap-ok) |
 | 7.4 `BevyBridge` system | Reads `SynthEvent`s; translates; pushes into engine lock-free queue |
@@ -1108,7 +1108,7 @@ for the full integration design.
 | 8.2.4 `GenerativeMode` enum | `Off / Euclidean / ProbTable / ScaleWalk`; switchable per track at runtime |
 | 8.2.5 Seed / determinism | Generators accept a u64 seed for reproducible sequences (useful for dev + replays) |
 
-#### 8.3 — Game-controlled note events (`synth-bevy`)
+#### 8.3 — Game-controlled note events (`forma-bevy`)
 
 | Task | Description |
 |---|---|
@@ -1133,7 +1133,7 @@ for the full integration design.
 | 8.5.1 `AutomationClip` | Breakpoint curve; evaluated from beat position |
 | 8.5.2 Automation engine | Manages active clips; interpolates and writes `Shared` params |
 
-#### 8.6 — UI (`ambient-box`)
+#### 8.6 — UI (`forma-ambient`)
 
 | Task | Description |
 |---|---|
@@ -1143,10 +1143,10 @@ for the full integration design.
 
 ---
 
-### Phase 9 — Advanced core DSP effects (in `synth-dsp`)
+### Phase 9 — Advanced core DSP effects (in `forma-dsp`)
 
 **Goal:** Add modern, reusable high-impact effects at the platform DSP level, so all hosts
-(`the_synth`, `ambient-box`, future plugin/game integrations) can share the same signature
+(`forma`, `forma-ambient`, future plugin/game integrations) can share the same signature
 sound design primitives.
 
 | Category | Task | Description |
@@ -1168,9 +1168,9 @@ sound design primitives.
 
 ---
 
-### Future MIDI timeline interoperability (`ambient-box` + `ambient-engine`)
+### Future MIDI timeline interoperability (`forma-ambient` + `ambient-engine`)
 
-**Goal:** Allow `ambient-box` to interoperate with DAW timelines without turning the app into a
+**Goal:** Allow `forma-ambient` to interoperate with DAW timelines without turning the app into a
 full DAW. MIDI should be a bridge for composition handoff and hybrid workflows.
 
 | Area | Scope |
@@ -1196,7 +1196,7 @@ full DAW. MIDI should be a bridge for composition handoff and hybrid workflows.
 3. Export per-track lanes or merged lane.
 4. Embed scene markers as MIDI markers/text events where supported.
 
-**Non-goal:** full piano-roll editing inside `ambient-box`.
+**Non-goal:** full piano-roll editing inside `forma-ambient`.
 
 ---
 
@@ -1207,7 +1207,7 @@ graph LR
     P0["✅ Phase 0\nSingle-voice\ncomplete"]
     P1["✅ Phase 1\nWorkspace\nsplit"]
     P2["✅ Phase 2\nControl layer"]
-    P3["✅ Phase 3\nambient-box\nskeleton"]
+    P3["✅ Phase 3\nforma-ambient\nskeleton"]
     P4["✅ Phase 4\nArpeggiator"]
     P5["Phase 5\nShimmer +\nCrystallizer"]
     P6["Phase 6\nMacro +\nScene"]
@@ -1237,7 +1237,7 @@ graph LR
 ```
 
 Phase 7 (Bevy) only requires Phase 2 and can proceed in parallel with ambient music work.
-`the_synth` is never modified after Phase 2.
+`forma` is never modified after Phase 2.
 
 ### Non-goals
 
@@ -1250,12 +1250,12 @@ Phase 7 (Bevy) only requires Phase 2 and can proceed in parallel with ambient mu
 ## 15. Bevy Integration — Developer Guide
 
 This section describes the integration from the perspective of a game developer embedding
-`synth-bevy` into a Bevy project. It covers the full picture: plugin setup, the pieces of
+`forma-bevy` into a Bevy project. It covers the full picture: plugin setup, the pieces of
 architecture involved, how game systems talk to the audio engine, and the thread model.
 
 ### 15.1 What the game developer gets
 
-After adding `synth-bevy` as a dependency, a game developer can:
+After adding `forma-bevy` as a dependency, a game developer can:
 
 - Play musical notes from any Bevy system with a single event
 - Drive continuous audio parameters (filter cutoff, macro levels, layer volumes) directly from
@@ -1270,7 +1270,7 @@ The integration entry point is `SynthPlugin`. A game adds it to the Bevy `App` o
 
 ```rust
 // main.rs (game)
-use synth_bevy::SynthPlugin;
+use forma_bevy::SynthPlugin;
 
 App::new()
     .add_plugins(DefaultPlugins)
@@ -1280,7 +1280,7 @@ App::new()
 
 `SynthPlugin` performs the following at startup, in order:
 
-1. Creates a `synth-engine` `Engine` instance (allocates DSP graph, voice pools)
+1. Creates a `forma-engine` `Engine` instance (allocates DSP graph, voice pools)
 2. Wraps the engine in a Bevy `Resource` so any system can borrow it
 3. Registers the engine as a Bevy `AudioSource` — Bevy's audio backend calls `process_block()`
    from its audio thread automatically, forever, for the lifetime of the app
@@ -1302,14 +1302,14 @@ flowchart TD
         GS3["CombatSystem\nwrites SynthEvent::NoteOn"]
     end
 
-    subgraph BEVY_INTERNAL["synth-bevy internals"]
+    subgraph BEVY_INTERNAL["forma-bevy internals"]
         EVT["SynthEvent\nBevy event queue\n(heap-ok, deferred)"]
         BRIDGE["BevyBridge system\n(PostUpdate schedule)\ntranslates events"]
         RES["SynthEngineRes\nBevy Resource\nwraps Arc Engine"]
         INSP["SynthInspector\n(bevy-egui panel)\nfeature = inspector"]
     end
 
-    subgraph ENGINE["synth-engine  (runs on audio thread)"]
+    subgraph ENGINE["forma-engine  (runs on audio thread)"]
         QUEUE["lock-free\nControlEvent queue\n(ringbuf SPSC)"]
         PARAMS["Shared params\nArc AtomicF32 per param"]
         PB["process_block()\ncalled by Bevy audio thread"]
@@ -1465,11 +1465,11 @@ window to design sounds and map macros without leaving Bevy. Enable it with a Ca
 ```toml
 # Cargo.toml (game)
 [dependencies]
-synth-bevy = { path = "../synth-bevy", features = ["inspector"] }
+forma-bevy = { path = "../forma-bevy", features = ["inspector"] }
 ```
 
 The panel is a `bevy-egui` window. It exposes:
-- Track-level controls plus per-track patch assignment (same high-level model as `ambient-box`)
+- Track-level controls plus per-track patch assignment (same high-level model as `forma-ambient`)
 - Macro editor: drag-connect parameters to macro knobs; set min/max/curve per target
 - Scene save/load from disk
 - Live oscilloscope and peak meter
@@ -1511,7 +1511,7 @@ A complete Bevy app that plays a generative ambient loop, driven by a single ten
 
 ```rust
 use bevy::prelude::*;
-use synth_bevy::{SynthPlugin, SynthEvent};
+use forma_bevy::{SynthPlugin, SynthEvent};
 
 #[derive(Resource)]
 struct GameTension(f32);

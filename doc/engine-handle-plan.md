@@ -24,7 +24,7 @@ After this refactor:
 
 - The UI (any UI) depends only on `SynthEngineHandle`, not on `Arc<AudioState>`,
   not on fundsp, not on the DSP graph shape.
-- Voice allocation lives in `synth-engine`, not in the cpal callback closure.
+- Voice allocation lives in `forma-engine`, not in the cpal callback closure.
 - `Patch` round-trips through the handle, not through UI mirror fields.
 - A headless integration test can instantiate the engine without eframe/cpal
   and drive it via the handle only.
@@ -70,7 +70,7 @@ shell) targets layer (2) via a transport adapter — never layer (3).
 
 ### 3.1 Layer 2 — the protocol
 
-Lives in `synth-control`. Serializable, transport-neutral.
+Lives in `forma-control`. Serializable, transport-neutral.
 
 ```rust
 /// Stable identifier for every live engine parameter.
@@ -136,7 +136,7 @@ call `handle.apply(cmd)`.
 
 ### 3.2 Layer 1 — the typed handle
 
-Lives in `synth-engine::handle`. Wraps internals, offers two equivalent
+Lives in `forma-engine::handle`. Wraps internals, offers two equivalent
 projections:
 
 ```rust
@@ -198,10 +198,10 @@ by design — sample-accurate internal state, not UI params):
 
 | Layer | File(s) | LoC |
 |---|---|---|
-| Layer 2 — `ParamId`, `ParamKind`, `ParamDescriptor`, `all_params()`, `Command` | `synth-control/src/protocol.rs` | ~300 |
-| Layer 1 — typed sugar + `apply(Command)` | `synth-engine/src/handle.rs` | ~500 |
-| Glue / re-exports | `synth-control/src/lib.rs`, `synth-engine/src/lib.rs` | ~20 |
-| Smoke test (headless, no cpal/eframe) | `synth-engine/tests/handle_smoke.rs` | ~60 |
+| Layer 2 — `ParamId`, `ParamKind`, `ParamDescriptor`, `all_params()`, `Command` | `forma-control/src/protocol.rs` | ~300 |
+| Layer 1 — typed sugar + `apply(Command)` | `forma-engine/src/handle.rs` | ~500 |
+| Glue / re-exports | `forma-control/src/lib.rs`, `forma-engine/src/lib.rs` | ~20 |
+| Smoke test (headless, no cpal/eframe) | `forma-engine/tests/handle_smoke.rs` | ~60 |
 
 **Stage 1 total:** ~880 lines, almost entirely mechanical. The `all_params()`
 descriptor table is the largest single chunk (~150 entries × ~1 line each).
@@ -238,13 +238,13 @@ flowchart TB
         PLUG["CLAP / VST3 / AU<br/>plugin shim"]
     end
 
-    subgraph PROTO["Protocol layer — synth-control"]
+    subgraph PROTO["Protocol layer — forma-control"]
         CMD["Command enum<br/>(serializable)"]
         PID["ParamId enum<br/>(~150 variants)"]
         DESC["ParamDescriptor<br/>registry"]
     end
 
-    subgraph HAND["Handle layer — synth-engine::handle"]
+    subgraph HAND["Handle layer — forma-engine::handle"]
         TYPED["Typed setters /<br/>getters / events"]
         APPLY["apply(Command)<br/>generic dispatch"]
     end
@@ -302,7 +302,7 @@ flowchart TB
 
 Where each piece lives. The handle and protocol are in separate crates so
 they can be depended on independently — e.g., a CLAP shim only needs
-`synth-control` + `synth-engine`, never `the-synth`.
+`forma-control` + `forma-engine`, never `forma`.
 
 ```mermaid
 flowchart LR
@@ -310,13 +310,13 @@ flowchart LR
     SERDE([serde])
     CROSS([crossbeam])
 
-    COMMON[synth-common<br/>ClockDivision]
-    DSP[synth-dsp<br/>envelope, osc, filter, fx]
-    CTRL[synth-control<br/>Command, ParamId, Descriptor]
-    ENG[synth-engine<br/>SynthEngineHandle<br/>VoiceAllocator<br/>DSP graph builder]
-    UI[synth-ui<br/>egui widgets]
-    TSYN[the-synth<br/>SynthApp, cpal]
-    BEV[synth-bevy<br/>Bevy plugin]
+    COMMON[forma-common<br/>ClockDivision]
+    DSP[forma-dsp<br/>envelope, osc, filter, fx]
+    CTRL[forma-control<br/>Command, ParamId, Descriptor]
+    ENG[forma-engine<br/>SynthEngineHandle<br/>VoiceAllocator<br/>DSP graph builder]
+    UI[forma-ui<br/>egui widgets]
+    TSYN[forma<br/>SynthApp, cpal]
+    BEV[forma-bevy<br/>Bevy plugin]
 
     FUNDSP --> DSP
     FUNDSP --> COMMON
@@ -686,7 +686,7 @@ about threading.
 ### 5.5 What changes from today's threading
 
 - **MIDI CC handling moves off the UI thread.** Today it happens inline in
-  the egui main loop ([`main.rs:566–597`](../crates/the-synth/src/main.rs#L566-L597)).
+  the egui main loop ([`main.rs:566–597`](../crates/forma/src/main.rs#L566-L597)).
   Post-refactor it lives on the MIDI input thread that already exists for
   note handling, calling `engine.set_*()`. Pure decoupling; no regression.
 - **Sequencer thread upgrades from `ControlSender` to `SynthEngineHandle`
@@ -705,10 +705,10 @@ identically; after Stage 2 the handle is the only write path from UI code.
 
 | # | Stage | Breakage risk | Net LoC |
 |---|---|---|---|
-| 1 | **Facade + protocol.** Add `Command` / `ParamId` / `ParamDescriptor` in `synth-control`. Add `SynthEngineHandle` (typed sugar + `apply(Command)`) in `synth-engine`. Expose from `AudioEngine::new()`. UI still has direct `Arc<AudioState>` access. Nothing else changes. Headless smoke test lands with it. | zero — purely additive | +880 |
+| 1 | **Facade + protocol.** Add `Command` / `ParamId` / `ParamDescriptor` in `forma-control`. Add `SynthEngineHandle` (typed sugar + `apply(Command)`) in `forma-engine`. Expose from `AudioEngine::new()`. UI still has direct `Arc<AudioState>` access. Nothing else changes. Headless smoke test lands with it. | zero — purely additive | +880 |
 | 2 | **Panel migration.** Convert each UI panel's direct `state.*.set(...)` to `handle.set_*(...)`. Per-panel counts: oscillators 22, modulation 26, fx_chain 40+, arp_walker 14, sequencer_ui 9, main.rs MIDI CC 3. | per-panel, contained | ±120 |
-| 3 | **Patch migration.** `Patch::apply(&handle)` and `Patch::from_handle(&handle)`. Route the 79 patch fields through the handle. Consider moving `Patch` into `synth-engine` so it's not UI-scoped. | medium — `patch.rs` rewrite | ±300 |
-| 4 | **`VoiceAllocator` extraction.** Move `trigger_note`, `release_note`, `voice_notes`, `pitch_hold_count`, `retrigger_countdown`, `arp`, `walker` out of the cpal closure into `synth-engine::voice::VoiceAllocator`. Callback shrinks to ~40 lines of orchestration. | medium — audio thread logic moves | ±250 |
+| 3 | **Patch migration.** `Patch::apply(&handle)` and `Patch::from_handle(&handle)`. Route the 79 patch fields through the handle. Consider moving `Patch` into `forma-engine` so it's not UI-scoped. | medium — `patch.rs` rewrite | ±300 |
+| 4 | **`VoiceAllocator` extraction.** Move `trigger_note`, `release_note`, `voice_notes`, `pitch_hold_count`, `retrigger_countdown`, `arp`, `walker` out of the cpal closure into `forma-engine::voice::VoiceAllocator`. Callback shrinks to ~40 lines of orchestration. | medium — audio thread logic moves | ±250 |
 | 5 | **Drop `Arc<AudioState>` from `SynthApp`.** Mechanical: make `state` private to `AudioEngine`. Compile-driven cleanup catches the stragglers. | low | –50 |
 | 6 | **Delete the mirror.** Remove ~59 `SynthApp` parameter-mirror fields. Sliders use the standard egui pattern: read from handle, pass `&mut local` to the widget, write back on `.changed()`. | low but touches every panel once | –200 |
 
@@ -754,7 +754,7 @@ Consequences:
 - MIDI CC → param: the MIDI thread calls `handle.set_lfo_depth(v)` etc.
   Same lockless atomic underneath, just via typed setter. Replaces the
   current direct `state.lfo_depth.set(...)` calls at
-  [`main.rs:566-597`](../crates/the-synth/src/main.rs#L566-L597).
+  [`main.rs:566-597`](../crates/forma/src/main.rs#L566-L597).
 - **MIDI learn falls out for free:** a learn table maps
   `(channel, cc) → Box<dyn Fn(&SynthEngineHandle, f32)>`. Engine doesn't know
   MIDI exists; MIDI doesn't know the param graph. Pure decoupling.
@@ -766,16 +766,16 @@ Consequences:
 Read the live atomic every call. No cache, no invalidation. egui at 60 Hz
 × ~150 atomic loads/frame = sub-microsecond. Cost is not measurable.
 
-### 5.4 `Patch` moves into `synth-engine` ✅
+### 5.4 `Patch` moves into `forma-engine` ✅
 
-Currently in `the-synth`, which re-couples the UI to the parameter graph.
+Currently in `forma`, which re-couples the UI to the parameter graph.
 After Stage 3 it lives next to `SynthEngineHandle` so any future UI can
 round-trip patches without re-implementing them. Patch load goes through
 `handle.apply_patch(&patch)` / `handle.snapshot() -> Patch`.
 
 ### 5.5 Naming: `SynthEngineHandle` ✅
 
-Self-describing, no collision with the `the-synth` binary or any `Synth`
+Self-describing, no collision with the `forma` binary or any `Synth`
 module name. Verbose at call sites but unambiguous. Aliasing (e.g.
 `type Engine = SynthEngineHandle;`) can be added later if it becomes tedious.
 
@@ -807,24 +807,24 @@ Minimum viable facade + protocol. Nothing else in the app changes.
 
 ### Files touched
 
-- **New:** `crates/synth-control/src/protocol.rs` — `ParamId`, `ParamKind`,
+- **New:** `crates/forma-control/src/protocol.rs` — `ParamId`, `ParamKind`,
   `ParamDescriptor`, `all_params()`, `Command`. serde derives behind a
-  feature flag (`serde`) so `synth-control` stays lean for consumers that
+  feature flag (`serde`) so `forma-control` stays lean for consumers that
   don't need the wire format.
-- **Edit:** `crates/synth-control/src/lib.rs` — `pub mod protocol;` plus
+- **Edit:** `crates/forma-control/src/lib.rs` — `pub mod protocol;` plus
   re-exports.
-- **Edit:** `crates/synth-control/Cargo.toml` — add `serde` (optional) +
+- **Edit:** `crates/forma-control/Cargo.toml` — add `serde` (optional) +
   `serde_derive`.
-- **New:** `crates/synth-engine/src/handle.rs` — `SynthEngineHandle` struct:
+- **New:** `crates/forma-engine/src/handle.rs` — `SynthEngineHandle` struct:
   typed sugar (setters/getters/readback/events) + `apply(Command)`.
-- **Edit:** `crates/synth-engine/src/lib.rs` — `pub mod handle;` plus
-  re-export of `synth_control::protocol` items.
-- **Edit:** `crates/the-synth/src/audio.rs` — `AudioEngine` gains
+- **Edit:** `crates/forma-engine/src/lib.rs` — `pub mod handle;` plus
+  re-export of `forma_control::protocol` items.
+- **Edit:** `crates/forma/src/audio.rs` — `AudioEngine` gains
   `pub handle: SynthEngineHandle` (cloned and returned alongside `state`).
-- **Edit:** `crates/the-synth/src/main.rs` — `SynthApp` gains
+- **Edit:** `crates/forma/src/main.rs` — `SynthApp` gains
   `engine: SynthEngineHandle` alongside the existing `state: Arc<AudioState>`.
   Old state is **not** removed.
-- **New:** `crates/synth-engine/tests/handle_smoke.rs` — headless test,
+- **New:** `crates/forma-engine/tests/handle_smoke.rs` — headless test,
   no cpal/eframe. Exercises: param set/get roundtrip, `Command` dispatch,
   `apply(SetParam) ≡ typed setter` equivalence check, serde round-trip for
   `Command`, `ParamDescriptor` table invariants (min ≤ default ≤ max, no
@@ -832,10 +832,10 @@ Minimum viable facade + protocol. Nothing else in the app changes.
 
 ### Acceptance
 
-1. `cargo build -p synth-control`, `-p synth-engine`, `-p the-synth`
+1. `cargo build -p forma-control`, `-p forma-engine`, `-p forma`
    all succeed.
 2. `cargo test --workspace` stays green.
-3. `the-synth` runs; UI behaves identically (direct `state.*.set(...)`
+3. `forma` runs; UI behaves identically (direct `state.*.set(...)`
    writes still work — migration is Stage 2).
 4. Headless smoke test passes.
 5. `all_params()` covers every field of `AudioState` that is reachable from
@@ -1007,9 +1007,9 @@ targets this layer and inherits its stability guarantees
 
 Same as §7 of the review, repeated here for convenience:
 
-1. `the-synth` builds and runs using only `SynthEngineHandle` — no
-   `state.<field>.set(...)` anywhere under `the-synth/src/ui/` or
-   `the-synth/src/patch.rs`.
+1. `forma` builds and runs using only `SynthEngineHandle` — no
+   `state.<field>.set(...)` anywhere under `forma/src/ui/` or
+   `forma/src/patch.rs`.
 2. A minimal non-egui host (e.g., CLI test harness) can drive the engine via
    the same handle and produce identical audio.
 3. Loading a patch is observable via engine getters.

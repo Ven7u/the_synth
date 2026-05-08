@@ -1,0 +1,39 @@
+[package]
+name = "forma-bevy"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["bevy"]
+bevy = ["dep:bevy"]
+inspector = ["bevy", "dep:bevy_egui"]
+
+[dependencies]
+forma-engine   = { path = "../forma-engine" }
+forma-control  = { path = "../forma-control" }
+fundsp = { version = "0.23", features = ["files", "fft"] }
+cpal = "0.15"
+anyhow = "1"
+hound = "3"
+bevy = { version = "0.18", optional = true, default-features = true }
+bevy_egui = { version = "0.31", optional = true }
+
+[[example]]
+name = "bevy_bubbles_ambient"
+path = "examples/bevy_bubbles_ambient.rs"
+required-features = ["bevy"]
+
+[[example]]
+name = "bevy_mono_playground"
+path = "examples/bevy_mono_playground.rs"
+required-features = ["bevy"]
+
+[[example]]
+name = "bevy_space_tunnel"
+path = "examples/bevy_space_tunnel.rs"
+required-features = ["bevy"]
+
+[[example]]
+name = "bevy_wipeout_track"
+path = "examples/bevy_wipeout_track.rs"
+required-features = ["bevy"]

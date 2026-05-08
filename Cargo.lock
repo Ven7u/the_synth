@@ -294,25 +294,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ambient-box"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cpal",
- "eframe",
- "egui",
- "fundsp",
- "hound",
- "midir",
- "midly",
- "rfd",
- "synth-common",
- "synth-control",
- "synth-engine",
- "synth-ui",
-]
-
-[[package]]
 name = "android-activity"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3964,6 +3945,114 @@ dependencies = [
 ]
 
 [[package]]
+name = "forma"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cpal",
+ "eframe",
+ "egui",
+ "egui_dock",
+ "forma-common",
+ "forma-control",
+ "forma-dsp",
+ "forma-engine",
+ "fundsp",
+ "hound",
+ "midir",
+ "rfd",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "forma-ambient"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cpal",
+ "eframe",
+ "egui",
+ "forma-common",
+ "forma-control",
+ "forma-engine",
+ "forma-ui",
+ "fundsp",
+ "hound",
+ "midir",
+ "midly",
+ "rfd",
+]
+
+[[package]]
+name = "forma-bench"
+version = "0.1.0"
+dependencies = [
+ "forma-control",
+ "forma-dsp",
+ "forma-engine",
+ "fundsp",
+]
+
+[[package]]
+name = "forma-bevy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bevy",
+ "bevy_egui",
+ "cpal",
+ "forma-control",
+ "forma-engine",
+ "fundsp",
+ "hound",
+]
+
+[[package]]
+name = "forma-common"
+version = "0.1.0"
+dependencies = [
+ "fundsp",
+]
+
+[[package]]
+name = "forma-control"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossbeam-channel",
+ "midir",
+ "serde",
+]
+
+[[package]]
+name = "forma-dsp"
+version = "0.1.0"
+dependencies = [
+ "fundsp",
+]
+
+[[package]]
+name = "forma-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "forma-common",
+ "forma-control",
+ "forma-dsp",
+ "fundsp",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "forma-ui"
+version = "0.1.0"
+dependencies = [
+ "egui",
+]
+
+[[package]]
 name = "fundsp"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7155,74 +7244,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "synth-bench"
-version = "0.1.0"
-dependencies = [
- "fundsp",
- "synth-control",
- "synth-dsp",
- "synth-engine",
-]
-
-[[package]]
-name = "synth-bevy"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bevy",
- "bevy_egui",
- "cpal",
- "fundsp",
- "hound",
- "synth-control",
- "synth-engine",
-]
-
-[[package]]
-name = "synth-common"
-version = "0.1.0"
-dependencies = [
- "fundsp",
-]
-
-[[package]]
-name = "synth-control"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "crossbeam-channel",
- "midir",
- "serde",
-]
-
-[[package]]
-name = "synth-dsp"
-version = "0.1.0"
-dependencies = [
- "fundsp",
-]
-
-[[package]]
-name = "synth-engine"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "fundsp",
- "serde",
- "serde_json",
- "synth-common",
- "synth-control",
- "synth-dsp",
-]
-
-[[package]]
-name = "synth-ui"
-version = "0.1.0"
-dependencies = [
- "egui",
-]
-
-[[package]]
 name = "sys-locale"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7277,27 +7298,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
 dependencies = [
  "winapi-util",
-]
-
-[[package]]
-name = "the-synth"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cpal",
- "eframe",
- "egui",
- "egui_dock",
- "fundsp",
- "hound",
- "midir",
- "rfd",
- "serde",
- "serde_json",
- "synth-common",
- "synth-control",
- "synth-dsp",
- "synth-engine",
 ]
 
 [[package]]

@@ -3,15 +3,15 @@
 # Usage:  ./bundle.sh [--skip-build]
 set -euo pipefail
 
-CRATE_DIR="crates/the-synth"
-APP_NAME="The Synth"
-DMG_NAME="TheSynth"
+CRATE_DIR="crates/forma"
+APP_NAME="Forma"
+DMG_NAME="Forma"
 OUT_DIR="$(pwd)/dist"
 
 # ── 1. Build release .app ────────────────────────────────────────────────────
 if [[ "${1:-}" != "--skip-build" ]]; then
     echo "▶ Building release bundle…"
-    cargo bundle --release -p the-synth
+    cargo bundle --release -p forma
 fi
 
 APP_PATH="target/release/bundle/osx/${APP_NAME}.app"
