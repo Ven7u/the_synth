@@ -14,7 +14,6 @@ use eframe::egui;
 use fundsp::prelude::midi_hz;
 use std::sync::Arc;
 
-use std::sync::atomic::Ordering;
 use forma_common::{ClockDivision, RestartBatch, SyncTransport};
 use forma_control::midi::{MidiEngine, MidiEvent};
 use forma_control::{make_control_channel, ControlEvent, ControlSender};
@@ -27,6 +26,7 @@ use forma_engine::generative::{
     MOOD_GRAVITY, MOOD_TENSE, N_MOODS, RHYTHMIC_STATES, TRACK_COUNT, VOICE_COUNT,
 };
 use forma_engine::{DRUM_LANES, DRUM_LANE_NAMES, DRUM_PATTERNS, DRUM_STEPS};
+use std::sync::atomic::Ordering;
 
 #[derive(Clone)]
 struct PatchEntry {

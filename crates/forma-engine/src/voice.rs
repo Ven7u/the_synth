@@ -27,8 +27,8 @@
 
 use std::sync::atomic::Ordering;
 
-use fundsp::prelude::midi_hz;
 use forma_control::{ControlEvent, ControlReceiver, ParamId};
+use fundsp::prelude::midi_hz;
 
 use crate::arp::{ArpState, ScaleWalker};
 use crate::audio::{AudioState, VOICE_COUNT};
@@ -303,8 +303,8 @@ impl VoiceAllocator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use forma_control::{make_control_channel, ControlEvent};
+    use std::sync::Arc;
 
     fn setup() -> (
         VoiceAllocator,

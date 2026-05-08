@@ -27,9 +27,9 @@ pub use drum::{
 };
 
 pub mod multi;
-pub use multi::{MultiTrackEngine, TrackState, TRACK_COUNT};
 pub use forma_dsp::crystallizer::{Crystallizer, CrystallizerShared};
 pub use forma_dsp::shimmer::{ShimmerReverb, ShimmerShared};
+pub use multi::{MultiTrackEngine, TrackState, TRACK_COUNT};
 
 /// Generative music layer (Markov, scenes, macros, timeline).
 /// Lived in a separate `ambient-engine` crate pre-consolidation.

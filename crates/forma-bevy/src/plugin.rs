@@ -1,11 +1,6 @@
 use bevy::prelude::*;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample, Stream};
-use fundsp::audiounit::AudioUnit;
-use fundsp::prelude::midi_hz;
-use fundsp::prelude32::{shared, BlockRateAdapter, Shared};
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
 use forma_control::{make_control_channel, ControlEvent, ControlReceiver, ControlSender, ParamId};
 use forma_engine::arp::{ArpState, ScaleWalker};
 use forma_engine::audio::{build_synth_graph, AudioState, VOICE_COUNT as SYNTH_VOICE_COUNT};
@@ -13,6 +8,11 @@ use forma_engine::generative::{
     load_scene_json, AmbientEngine, BeatClock, BeatClockShared, EuclideanGen, GenerativeMode,
     MarkovEngine, ProbTableGen, Scene, SceneGlobal, MACRO_COUNT, TRACK_COUNT,
 };
+use fundsp::audiounit::AudioUnit;
+use fundsp::prelude::midi_hz;
+use fundsp::prelude32::{shared, BlockRateAdapter, Shared};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
 /// Shared recorder sink: `Some(Recorder)` while recording, `None` otherwise.
 /// The audio callback holds an `Arc` clone and calls `try_lock` each sample.

@@ -34,6 +34,7 @@ pub use engine::{
 // consumers of `forma_engine::generative::*` don't need a separate import
 // from the parent crate for `TRACK_COUNT` / `VOICE_COUNT` / `TrackState`.
 pub use crate::{TrackState, TRACK_COUNT, VOICE_COUNT};
+pub use forma_common::{BeatClock, BeatClockShared, BeatEvents, BeatPosition};
 pub use generators::{
     EuclideanGen, EuclideanShared, GenEvent, GenerativeMode, ProbTableGen, ProbTableShared,
     EUCLIDEAN_MAX_STEPS, PROB_TABLE_MAX_STEPS,
@@ -85,4 +86,3 @@ pub use markov::{
     RHYTHMIC_STATES,
 };
 pub use patch::AmbientPatch;
-pub use forma_common::{BeatClock, BeatClockShared, BeatEvents, BeatPosition};

@@ -11,11 +11,11 @@ mod ui;
 
 use audio::AudioEngine;
 use eframe::egui;
+use forma_control::midi::{MidiEngine, MidiEvent};
 use patch::{default_patches, Patch};
 use sequencer::{spawn_sequencer, ChordKbState, SequencerHandle};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use forma_control::midi::{MidiEngine, MidiEvent};
 use ui::frame::SynthFrame;
 use ui::layout::{AppMode, StudioTab};
 

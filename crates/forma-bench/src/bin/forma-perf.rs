@@ -24,11 +24,11 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Instant;
 
-use fundsp::prelude32::*;
 use forma_control::{make_control_channel, ControlReceiver};
 use forma_dsp::LookaheadLimiter;
 use forma_engine::audio::{build_synth_graph, AudioState, VOICE_COUNT};
 use forma_engine::{enable_ftz_on_current_thread, SynthEngineHandle, VoiceAllocator};
+use fundsp::prelude32::*;
 
 const SR: f64 = 48_000.0;
 const SR_F: f32 = 48_000.0;
