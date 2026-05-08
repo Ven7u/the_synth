@@ -1,5 +1,6 @@
 pub mod arp_walker;
 pub mod dock;
+pub mod metronome;
 pub mod frame;
 pub mod fx_chain;
 pub mod keyboard;

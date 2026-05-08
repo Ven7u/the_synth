@@ -225,6 +225,14 @@ pub(crate) struct SynthApp {
     pub(crate) patch_browser_model: String,
     pub(crate) patch_load_fx: bool, // if false, loading a patch leaves the FX chain untouched
 
+    // Metronome
+    pub(crate) show_metronome: bool,
+    pub(crate) metro_enabled: bool,
+    pub(crate) metro_beats: u8,   // beats per bar (numerator): 2–8
+    pub(crate) metro_denom: u8,   // beat unit: 4 = quarter, 8 = eighth
+    pub(crate) metro_phase: f64,  // current position in beats [0, beats)
+    pub(crate) metro_last_time: f64, // egui time at last frame, for delta
+
     // FX chain — per-effect enable + saved mix value
     pub(crate) fx_overdrive_on: bool,
     pub(crate) fx_overdrive_drive: f32,
@@ -385,6 +393,12 @@ impl SynthApp {
             patch_browser_category: "All".into(),
             patch_browser_model: "All".into(),
             patch_load_fx: false,
+            show_metronome: false,
+            metro_enabled: false,
+            metro_beats: 4,
+            metro_denom: 4,
+            metro_phase: 0.0,
+            metro_last_time: 0.0,
             fx_overdrive_on: false,
             fx_overdrive_drive: 3.0,
             fx_overdrive_mix: 0.5,
@@ -444,6 +458,7 @@ impl SynthApp {
         self.seq.walker_restart.store(false, Ordering::Relaxed);
         self.engine.arp_restart();
         self.engine.walker_restart();
+        self.metro_reset();
     }
 
     pub(crate) fn arp_sync_active(&self) -> bool {
@@ -648,8 +663,12 @@ impl eframe::App for SynthApp {
         self.apply_clock_sync();
         self.tick_keyboard_input(ctx);
 
-        // Patch browser is a floating window — must be shown before panels.
+        // Advance metronome phase each frame.
+        self.tick_metronome(ctx);
+
+        // Floating windows — must be shown before panels.
         self.ui_patch_browser(ctx);
+        self.ui_metronome_window(ctx);
 
         // ── Zone 1: global bar (top, always visible) ──────────────────────────
         egui::TopBottomPanel::top("global_bar")
@@ -1155,80 +1174,81 @@ impl SynthApp {
 
             // ── Right-aligned items ───────────────────────────────────────
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Settings menu (File + Theme)
+                // Settings menu — flat single-level list to avoid submenu overlap issues.
                 ui.menu_button(egui::RichText::new("⚙").size(14.0), |ui| {
-                    ui.menu_button("File", |ui| {
-                        if ui.button("New Patch").clicked() {
-                            self.patch_name = "Init".into();
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button("Save Patch…").clicked() {
-                            let p = self.capture_patch();
-                            if let Some(path) = rfd::FileDialog::new()
-                                .set_file_name(&format!("{}.json", p.name))
-                                .add_filter("Patch", &["json"])
-                                .save_file()
-                            {
-                                if let Ok(json) = serde_json::to_string_pretty(&p) {
-                                    let _ = std::fs::write(path, json);
-                                }
-                            }
-                            ui.close_menu();
-                        }
-                        if ui.button("Load Patch…").clicked() {
-                            if let Some(path) = rfd::FileDialog::new()
-                                .add_filter("Patch", &["json"])
-                                .pick_file()
-                            {
-                                if let Ok(json) = std::fs::read_to_string(path) {
-                                    if let Ok(p) = serde_json::from_str::<patch::Patch>(&json) {
-                                        self.apply_patch(p);
-                                    }
-                                }
-                            }
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button("Browse Library…").clicked() {
-                            self.patch_browser_open = !self.patch_browser_open;
-                            ui.close_menu();
-                        }
-                    });
+                    ui.set_min_width(160.0);
 
-                    ui.menu_button("Theme", |ui| {
-                        for t in ui::theme::builtin_themes() {
-                            if ui
-                                .selectable_label(self.theme.name == t.name, &t.name)
-                                .clicked()
-                            {
-                                self.theme = t;
-                                ui.close_menu();
+                    // ── Patch ──────────────────────────────────────────────
+                    ui.label(egui::RichText::new("PATCH").small().weak());
+                    if ui.button("New Patch").clicked() {
+                        self.patch_name = "Init".into();
+                        ui.close_menu();
+                    }
+                    if ui.button("Save Patch…").clicked() {
+                        let p = self.capture_patch();
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_file_name(&format!("{}.json", p.name))
+                            .add_filter("Patch", &["json"])
+                            .save_file()
+                        {
+                            if let Ok(json) = serde_json::to_string_pretty(&p) {
+                                let _ = std::fs::write(path, json);
                             }
                         }
-                    });
-
-                    ui.menu_button("View", |ui| {
-                        for &tab in ui::dock::Tab::ALL {
-                            let open = self.dock_state.find_tab(&tab).is_some();
-                            if ui.selectable_label(open, tab.title()).clicked() {
-                                if open {
-                                    self.dock_state
-                                        .remove_tab(self.dock_state.find_tab(&tab).unwrap());
-                                } else {
-                                    self.dock_state.push_to_focused_leaf(tab);
+                        ui.close_menu();
+                    }
+                    if ui.button("Load Patch…").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("Patch", &["json"])
+                            .pick_file()
+                        {
+                            if let Ok(json) = std::fs::read_to_string(path) {
+                                if let Ok(p) = serde_json::from_str::<patch::Patch>(&json) {
+                                    self.apply_patch(p);
                                 }
-                                ui.close_menu();
                             }
                         }
-                        ui.separator();
-                        if ui.button("Reset Layout").clicked() {
-                            self.reset_layout_pending = true;
-                            ui.close_menu();
-                        }
-                    });
+                        ui.close_menu();
+                    }
 
                     ui.separator();
+
+                    // ── Theme ──────────────────────────────────────────────
+                    ui.label(egui::RichText::new("THEME").small().weak());
+                    for t in ui::theme::builtin_themes() {
+                        if ui
+                            .selectable_label(self.theme.name == t.name, &t.name)
+                            .clicked()
+                        {
+                            self.theme = t;
+                            ui.close_menu();
+                        }
+                    }
+
+                    ui.separator();
+
+                    // ── View ───────────────────────────────────────────────
+                    ui.label(egui::RichText::new("VIEW").small().weak());
+                    for &tab in ui::dock::Tab::ALL {
+                        let open = self.dock_state.find_tab(&tab).is_some();
+                        if ui.selectable_label(open, tab.title()).clicked() {
+                            if open {
+                                self.dock_state
+                                    .remove_tab(self.dock_state.find_tab(&tab).unwrap());
+                            } else {
+                                self.dock_state.push_to_focused_leaf(tab);
+                            }
+                            ui.close_menu();
+                        }
+                    }
+                    if ui.button("Reset Layout").clicked() {
+                        self.reset_layout_pending = true;
+                        ui.close_menu();
+                    }
+
+                    ui.separator();
+
+                    // ── Transport ──────────────────────────────────────────
                     if ui
                         .button("Sync Now")
                         .on_hover_text("Reset phases for sequencer, arpeggiator, and walker.")
@@ -1239,6 +1259,34 @@ impl SynthApp {
                         ui.close_menu();
                     }
                 });
+
+                // Metronome toggle button
+                let metro_col = if self.show_metronome {
+                    self.theme.c(&self.theme.accent)
+                } else {
+                    self.theme.c(&self.theme.text_secondary)
+                };
+                if ui
+                    .button(egui::RichText::new("METRO").size(11.0).color(metro_col))
+                    .on_hover_text("Metronome — visual beat indicator with configurable time signature.")
+                    .clicked()
+                {
+                    self.show_metronome = !self.show_metronome;
+                }
+
+                // Patch library button — direct access, no submenu navigation needed
+                let lib_col = if self.patch_browser_open {
+                    self.theme.c(&self.theme.accent)
+                } else {
+                    self.theme.c(&self.theme.text_secondary)
+                };
+                if ui
+                    .button(egui::RichText::new("LIB").size(11.0).color(lib_col))
+                    .on_hover_text("Patch Library — browse and load factory patches.")
+                    .clicked()
+                {
+                    self.patch_browser_open = !self.patch_browser_open;
+                }
 
                 ui.separator();
 
@@ -1278,8 +1326,8 @@ impl SynthApp {
                         }
                     }
                 } else {
-                    let rec_label = egui::RichText::new("⏺")
-                        .size(13.0)
+                    let rec_label = egui::RichText::new("⏺ REC")
+                        .size(11.0)
                         .color(self.theme.c(&self.theme.text_secondary));
                     if ui
                         .button(rec_label)

@@ -358,7 +358,7 @@ impl SynthApp {
                     self.chord_kb.editing_pad = None;
                 }
                 let preview_label = egui::RichText::new(
-                    if self.chord_kb.show_piano_preview { "🎹 ▾" } else { "🎹 ▸" }
+                    if self.chord_kb.show_piano_preview { "KEYS ▾" } else { "KEYS ▸" }
                 ).small();
                 if ui.button(preview_label).on_hover_text("Toggle piano preview").clicked() {
                     self.chord_kb.show_piano_preview = !self.chord_kb.show_piano_preview;

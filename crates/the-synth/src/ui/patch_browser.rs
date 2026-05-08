@@ -13,7 +13,7 @@ impl SynthApp {
 
         // Save to file
         if ui
-            .button("💾 Save")
+            .button("SAVE")
             .on_hover_text("Save current patch to a JSON file.")
             .clicked()
         {
@@ -31,7 +31,7 @@ impl SynthApp {
 
         // Load from file
         if ui
-            .button("📂 Load")
+            .button("LOAD")
             .on_hover_text("Load a patch from a JSON file.")
             .clicked()
         {
@@ -48,7 +48,7 @@ impl SynthApp {
         }
 
         // Library browser toggle
-        let browser_label = egui::RichText::new("📚 Library").color(if self.patch_browser_open {
+        let browser_label = egui::RichText::new("LIBRARY").color(if self.patch_browser_open {
             self.theme.c(&self.theme.accent)
         } else {
             Color32::WHITE

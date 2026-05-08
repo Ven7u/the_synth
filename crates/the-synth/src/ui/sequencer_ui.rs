@@ -45,7 +45,7 @@ impl SynthApp {
 
             // Play/Stop
             {
-                let btn = if seq_playing { "⏹ Stop" } else { "▶ Play" };
+                let btn = if seq_playing { "■ Stop" } else { "▶ Play" };
                 if ui
                     .button(btn)
                     .on_hover_text("Start or stop the sequencer.")
@@ -138,7 +138,7 @@ impl SynthApp {
 
                 // Random fill
                 if ui
-                    .button("🎲")
+                    .button("RND")
                     .on_hover_text("Randomly fill all steps with notes.")
                     .clicked()
                 {
