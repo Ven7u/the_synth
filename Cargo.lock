@@ -4142,6 +4142,7 @@ name = "forma"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytemuck",
  "cpal",
  "eframe 0.34.2",
  "egui 0.34.2",

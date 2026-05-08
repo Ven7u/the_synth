@@ -33,7 +33,20 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "The Synth",
         options,
-        Box::new(move |_cc| Ok(Box::new(SynthApp::new(audio, recorder_sink)))),
+        Box::new(move |cc| {
+            if let Some(wgpu_state) = cc.wgpu_render_state.as_ref() {
+                let resources = ui::scope_wgpu::ScopeGpuResources::new(
+                    &wgpu_state.device,
+                    wgpu_state.target_format,
+                );
+                wgpu_state
+                    .renderer
+                    .write()
+                    .callback_resources
+                    .insert(resources);
+            }
+            Ok(Box::new(SynthApp::new(audio, recorder_sink)))
+        }),
     )
 }
 
@@ -216,8 +229,6 @@ pub(crate) struct SynthApp {
     pub(crate) scope_x_scale: f32,
     pub(crate) scope_y_scale: f32,
     pub(crate) show_voice_debug: bool,
-    pub(crate) scope_trail: std::collections::VecDeque<Vec<f32>>,
-    pub(crate) scope_trail_tick: u32, // frame counter for trail push rate
 
     // Patch system
     pub(crate) patch_name: String,
@@ -389,8 +400,6 @@ impl SynthApp {
             scope_x_scale: 1.0,
             scope_y_scale: 2.5,
             show_voice_debug: false,
-            scope_trail: std::collections::VecDeque::new(),
-            scope_trail_tick: 0,
             patch_name: "Init".into(),
             patch_library: default_patches(),
             patch_browser_open: false,

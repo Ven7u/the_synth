@@ -1,6 +1,9 @@
 use crate::SynthApp;
 use eframe::egui;
-use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, Vec2};
+use eframe::egui_wgpu;
+use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, Vec2};
+
+use super::scope_wgpu::ScopeCallback;
 
 impl SynthApp {
     pub fn ui_oscilloscope(&mut self, ui: &mut egui::Ui) {
@@ -19,7 +22,7 @@ impl SynthApp {
             .collapsible(false)
             .fixed_pos(screen.min)
             .fixed_size(screen.size())
-            .frame(egui::Frame::none().fill(self.theme.c(&self.theme.bg_app)))
+            .frame(egui::Frame::new().fill(self.theme.c(&self.theme.bg_app)))
             .show(ctx, |ui| {
                 self.draw_scope_panel(ui);
             });
@@ -57,7 +60,6 @@ impl SynthApp {
             .on_hover_text("Vertical zoom (0.25–8×). Drag left/right to adjust.");
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Fullscreen toggle
                 let fs_col = if self.scope_fullscreen {
                     accent
                 } else {
@@ -79,7 +81,6 @@ impl SynthApp {
                     self.scope_fullscreen = !self.scope_fullscreen;
                 }
 
-                // Voice debug toggle
                 let v_col = if self.show_voice_debug {
                     accent
                 } else {
@@ -95,7 +96,7 @@ impl SynthApp {
             });
         });
 
-        // ── Voice inspector (below toolbar, only when shown) ───────────────────
+        // ── Voice inspector ────────────────────────────────────────────────────
         if self.show_voice_debug {
             let gates = self.engine.voice_gates();
             let cursors = self.engine.amp_cursors();
@@ -127,9 +128,8 @@ impl SynthApp {
                     ui.vertical(|ui| {
                         ui.set_min_width(48.0);
                         ui.horizontal(|ui| {
-                            let (rect, _) =
-                                ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
-                            ui.painter().circle_filled(rect.center(), 4.0, dot_color);
+                            let (r, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
+                            ui.painter().circle_filled(r.center(), 4.0, dot_color);
                             ui.label(
                                 egui::RichText::new(format!("V{}", vi + 1))
                                     .small()
@@ -147,11 +147,40 @@ impl SynthApp {
             });
         }
 
-        // ── Canvas — fills all remaining dock space ────────────────────────────
-        let buf = self.engine.scope_buffer_snapshot();
+        // ── Canvas area — split into waveform (GPU) + peak meter (CPU) ─────────
         let avail = ui.available_size();
+        const METER_W: f32 = 18.0;
+        const METER_GAP: f32 = 4.0;
 
-        // Peak meter state
+        let (row_resp, cpu_painter) = ui.allocate_painter(avail, Sense::hover());
+        let row = row_resp.rect;
+
+        let meter_rect = Rect::from_min_size(
+            Pos2::new(row.right() - METER_W, row.top()),
+            Vec2::new(METER_W, row.height()),
+        );
+        let scope_rect = Rect::from_min_max(
+            row.min,
+            Pos2::new(row.right() - METER_W - METER_GAP, row.max.y),
+        );
+
+        // ── GPU waveform via wgpu callback ─────────────────────────────────────
+        let buf = self.engine.scope_buffer_snapshot();
+        let ppp = ui.ctx().pixels_per_point();
+        let vp_w = (scope_rect.width() * ppp).round() as u32;
+        let vp_h = (scope_rect.height() * ppp).round() as u32;
+
+        cpu_painter.add(egui_wgpu::Callback::new_paint_callback(
+            scope_rect,
+            ScopeCallback {
+                samples: buf,
+                x_scale: self.scope_x_scale,
+                y_scale: self.scope_y_scale,
+                viewport_size: (vp_w.max(1), vp_h.max(1)),
+            },
+        ));
+
+        // ── Peak meter (CPU painter, right strip) ──────────────────────────────
         let peak_raw_l = self.engine.peak_l();
         let peak_raw_r = self.engine.peak_r();
         let dt = 1.0 / 60.0_f32;
@@ -167,200 +196,68 @@ impl SynthApp {
             }
         }
 
-        const METER_W: f32 = 18.0;
-        const METER_GAP: f32 = 4.0;
-        let (row_resp, painter) = ui.allocate_painter(avail, Sense::hover());
-        let row = row_resp.rect;
-        let meter_rect = Rect::from_min_size(
-            Pos2::new(row.right() - METER_W, row.top()),
-            Vec2::new(METER_W, row.height()),
-        );
-        let rect = Rect::from_min_max(
-            row.min,
-            Pos2::new(row.right() - METER_W - METER_GAP, row.max.y),
+        let ch_w = (METER_W - 1.0) / 2.0;
+        cpu_painter.rect_filled(
+            meter_rect,
+            CornerRadius::same(2),
+            self.theme.c(&self.theme.meter_bg),
         );
 
-        // CRT background
-        painter.rect_filled(
-            rect,
-            CornerRadius::same(4),
-            self.theme.c(&self.theme.scope_bg),
-        );
-
-        if !buf.is_empty() {
-            // Scanlines
-            let mut sy = rect.top() + 2.0;
-            while sy < rect.bottom() {
-                painter.line_segment(
-                    [Pos2::new(rect.left(), sy), Pos2::new(rect.right(), sy)],
-                    Stroke::new(1.0, Color32::from_rgba_premultiplied(0, 0, 0, 22)),
-                );
-                sy += 3.0;
-            }
-
-            let mid_y = rect.center().y;
-            let half_h = rect.height() * 0.45;
-
-            // Zero line
-            painter.line_segment(
-                [
-                    Pos2::new(rect.left(), mid_y),
-                    Pos2::new(rect.right(), mid_y),
-                ],
-                Stroke::new(1.0, self.theme.c(&self.theme.scope_zero)),
+        for (ci, peak_raw) in [peak_raw_l, peak_raw_r].iter().enumerate() {
+            let x_left = meter_rect.left() + ci as f32 * (ch_w + 1.0);
+            let ch_rect = Rect::from_min_size(
+                Pos2::new(x_left, meter_rect.top()),
+                Vec2::new(ch_w, meter_rect.height()),
             );
-
-            let samples_to_show =
-                ((buf.len() as f32 / self.scope_x_scale) as usize).clamp(16, buf.len());
-            let buf_slice = &buf[..samples_to_show];
-            let step = rect.width() / buf_slice.len() as f32;
-            let y_scale = self.scope_y_scale;
-            let n = buf_slice.len();
-
-            // ── Phosphor trail — draw ghost frames before current ──────────────
-            const TRAIL_FRAMES: usize = 5;
-            const TRAIL_BASE_ALPHA: f32 = 0.18; // oldest ghost opacity
-            for (ti, ghost) in self.scope_trail.iter().enumerate() {
-                let ghost_samples = ghost.len().min(n);
-                if ghost_samples < 2 { continue; }
-                let ghost_step = rect.width() / ghost_samples as f32;
-                // age: 0 = oldest, TRAIL_FRAMES-1 = most recent ghost
-                let age = ti as f32 / TRAIL_FRAMES as f32;
-                let alpha = (TRAIL_BASE_ALPHA * age * 180.0) as u8;
-                let core = self.theme.scope_glow_core;
-                let ghost_color = Color32::from_rgba_premultiplied(
-                    (core[0] as f32 * 0.6) as u8,
-                    (core[1] as f32 * 0.6) as u8,
-                    (core[2] as f32 * 0.6) as u8,
-                    alpha,
+            let level = peak_raw.clamp(0.0, 1.0);
+            let bar_h = ch_rect.height() * level;
+            if bar_h > 0.5 {
+                let color = if *peak_raw < 0.7 {
+                    self.theme.c(&self.theme.meter_green)
+                } else if *peak_raw < 1.0 {
+                    let t = (*peak_raw - 0.7) / 0.3;
+                    let g = self.theme.meter_green;
+                    let c = self.theme.meter_clip;
+                    Color32::from_rgb(
+                        (g[0] as f32 + (c[0] as f32 - g[0] as f32) * t) as u8,
+                        (g[1] as f32 + (c[1] as f32 - g[1] as f32) * t) as u8,
+                        (g[2] as f32 + (c[2] as f32 - g[2] as f32) * t) as u8,
+                    )
+                } else {
+                    self.theme.c(&self.theme.meter_clip)
+                };
+                let bar_rect = Rect::from_min_size(
+                    Pos2::new(ch_rect.left(), ch_rect.bottom() - bar_h),
+                    Vec2::new(ch_w, bar_h),
                 );
-                let ghost_pts: Vec<Pos2> = ghost[..ghost_samples]
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &s)| {
-                        let amp = (s * half_h * y_scale).clamp(-half_h, half_h);
-                        Pos2::new(rect.left() + i as f32 * ghost_step, mid_y - amp)
-                    })
-                    .collect();
-                painter.add(Shape::line(ghost_pts, Stroke::new(1.0, ghost_color)));
-            }
-            // Advance trail: push every 8 frames so ghosts are visibly separated in time
-            self.scope_trail_tick = self.scope_trail_tick.wrapping_add(1);
-            if self.scope_trail_tick % 8 == 0 {
-                self.scope_trail.push_back(buf_slice.to_vec());
-                if self.scope_trail.len() > TRAIL_FRAMES {
-                    self.scope_trail.pop_front();
-                }
+                cpu_painter.rect_filled(bar_rect, CornerRadius::ZERO, color);
             }
 
-            // ── Build current-frame points with per-point fade ─────────────────
-            // Points fade from full opacity at the left (newest) to ~30% at right (oldest).
-            // Variable width: segments steeper than threshold draw thin, shallow draw thick.
-            let points: Vec<Pos2> = buf_slice
-                .iter()
-                .enumerate()
-                .map(|(i, &s)| {
-                    let amp = (s * half_h * y_scale).clamp(-half_h, half_h);
-                    Pos2::new(rect.left() + i as f32 * step, mid_y - amp)
-                })
-                .collect();
-
-            // Glow layers — outer/mid use Shape::line for continuity; inner uses
-            // variable-width segments for the brush feel.
-            let [go, gm, gc] = [
-                self.theme.ca(&self.theme.scope_glow_outer),
-                self.theme.ca(&self.theme.scope_glow_mid),
-                self.theme.ca(&self.theme.scope_glow_core),
-            ];
-
-            // Outer and mid: single connected polyline per layer
-            painter.add(Shape::line(points.clone(), Stroke::new(5.0, go)));
-            painter.add(Shape::line(points.clone(), Stroke::new(3.0, gm)));
-
-            // Core: variable-width segments + right-to-left opacity fade
-            for w in points.windows(2) {
-                let t = (w[0].x - rect.left()) / rect.width(); // 0=left, 1=right
-                let fade = 1.0 - t * 0.7; // 1.0 → 0.3 across width
-                let dy = (w[1].y - w[0].y).abs();
-                // Fast movement (steep) → thin; slow movement (flat) → thick
-                let width = if dy > 4.0 { 1.0 } else { 1.0 + (1.0 - dy / 4.0) * 1.8 };
-                let a = (gc.a() as f32 * fade) as u8;
-                let col = Color32::from_rgba_premultiplied(
-                    (gc.r() as f32 * fade) as u8,
-                    (gc.g() as f32 * fade) as u8,
-                    (gc.b() as f32 * fade) as u8,
-                    a,
-                );
-                painter.line_segment([w[0], w[1]], Stroke::new(width, col));
-            }
+            let hold_frac = self.peak_hold.clamp(0.0, 1.0);
+            let hold_y = ch_rect.bottom() - ch_rect.height() * hold_frac;
+            let hold_color = if self.peak_hold >= 1.0 {
+                self.theme.c(&self.theme.meter_clip)
+            } else {
+                Color32::WHITE
+            };
+            cpu_painter.line_segment(
+                [
+                    Pos2::new(ch_rect.left(), hold_y),
+                    Pos2::new(ch_rect.right(), hold_y),
+                ],
+                Stroke::new(1.5, hold_color),
+            );
         }
 
-        // Stereo peak meter
-        {
-            let ch_w = (METER_W - 1.0) / 2.0;
-            painter.rect_filled(
-                meter_rect,
-                CornerRadius::same(2),
-                self.theme.c(&self.theme.meter_bg),
+        for (ci, label) in ["L", "R"].iter().enumerate() {
+            let lx = meter_rect.left() + ci as f32 * (ch_w + 1.0) + ch_w * 0.5;
+            cpu_painter.text(
+                Pos2::new(lx, meter_rect.bottom() - 2.0),
+                egui::Align2::CENTER_BOTTOM,
+                label,
+                egui::FontId::proportional(8.0),
+                Color32::from_rgba_premultiplied(200, 200, 200, 120),
             );
-
-            for (ci, peak_raw) in [peak_raw_l, peak_raw_r].iter().enumerate() {
-                let x_left = meter_rect.left() + ci as f32 * (ch_w + 1.0);
-                let ch_rect = Rect::from_min_size(
-                    Pos2::new(x_left, meter_rect.top()),
-                    Vec2::new(ch_w, meter_rect.height()),
-                );
-                let level = peak_raw.clamp(0.0, 1.0);
-                let bar_h = ch_rect.height() * level;
-                if bar_h > 0.5 {
-                    let color = if *peak_raw < 0.7 {
-                        self.theme.c(&self.theme.meter_green)
-                    } else if *peak_raw < 1.0 {
-                        let t = (*peak_raw - 0.7) / 0.3;
-                        let g = self.theme.meter_green;
-                        let c = self.theme.meter_clip;
-                        Color32::from_rgb(
-                            (g[0] as f32 + (c[0] as f32 - g[0] as f32) * t) as u8,
-                            (g[1] as f32 + (c[1] as f32 - g[1] as f32) * t) as u8,
-                            (g[2] as f32 + (c[2] as f32 - g[2] as f32) * t) as u8,
-                        )
-                    } else {
-                        self.theme.c(&self.theme.meter_clip)
-                    };
-                    let bar_rect = Rect::from_min_size(
-                        Pos2::new(ch_rect.left(), ch_rect.bottom() - bar_h),
-                        Vec2::new(ch_w, bar_h),
-                    );
-                    painter.rect_filled(bar_rect, CornerRadius::ZERO, color);
-                }
-
-                let hold_frac = self.peak_hold.clamp(0.0, 1.0);
-                let hold_y = ch_rect.bottom() - ch_rect.height() * hold_frac;
-                let hold_color = if self.peak_hold >= 1.0 {
-                    self.theme.c(&self.theme.meter_clip)
-                } else {
-                    Color32::WHITE
-                };
-                painter.line_segment(
-                    [
-                        Pos2::new(ch_rect.left(), hold_y),
-                        Pos2::new(ch_rect.right(), hold_y),
-                    ],
-                    Stroke::new(1.5, hold_color),
-                );
-            }
-
-            let ch_w = (METER_W - 1.0) / 2.0;
-            for (ci, label) in ["L", "R"].iter().enumerate() {
-                let lx = meter_rect.left() + ci as f32 * (ch_w + 1.0) + ch_w * 0.5;
-                painter.text(
-                    Pos2::new(lx, meter_rect.bottom() - 2.0),
-                    egui::Align2::CENTER_BOTTOM,
-                    label,
-                    egui::FontId::proportional(8.0),
-                    Color32::from_rgba_premultiplied(200, 200, 200, 120),
-                );
-            }
         }
     }
 }

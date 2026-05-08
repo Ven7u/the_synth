@@ -10,6 +10,7 @@ pub mod modulation;
 pub mod oscillators;
 pub mod patch_browser;
 pub mod scope;
+pub mod scope_wgpu;
 pub mod sequencer_ui;
 pub mod snap;
 pub mod theme;

@@ -183,7 +183,7 @@ impl BeatClock {
             // total beat duration constant.
             //   even threshold = base × (1 + swing)
             //   odd  threshold = base × (1 − swing)
-            let is_even_subdiv = self.position.subdivision % 2 == 0;
+            let is_even_subdiv = self.position.subdivision.is_multiple_of(2);
             let sps = if is_even_subdiv {
                 (base_sps * (1.0 + swing)) as u64
             } else {
