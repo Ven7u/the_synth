@@ -1,22 +1,42 @@
 use crate::SynthApp;
 use eframe::egui;
-use egui::{Color32, Pos2, Rect, Rounding, Sense, Stroke, Vec2};
+use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, Vec2};
 
 impl SynthApp {
     pub fn ui_oscilloscope(&mut self, ui: &mut egui::Ui) {
-        // Controls row
+        self.draw_scope_panel(ui);
+    }
+
+    /// Fullscreen overlay — call once per frame from update() before panels.
+    pub fn ui_scope_fullscreen(&mut self, ctx: &egui::Context) {
+        if !self.scope_fullscreen {
+            return;
+        }
+        let screen = ctx.screen_rect();
+        egui::Window::new("scope_fs_window")
+            .title_bar(false)
+            .resizable(false)
+            .collapsible(false)
+            .fixed_pos(screen.min)
+            .fixed_size(screen.size())
+            .frame(egui::Frame::none().fill(self.theme.c(&self.theme.bg_app)))
+            .show(ctx, |ui| {
+                self.draw_scope_panel(ui);
+            });
+    }
+
+    fn draw_scope_panel(&mut self, ui: &mut egui::Ui) {
+        let accent = self.theme.c(&self.theme.accent);
+        let scope_ctrl = self.theme.c(&self.theme.scope_label);
+        let text_sec = self.theme.c(&self.theme.text_secondary);
+
+        // ── Toolbar ────────────────────────────────────────────────────────────
         ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("SCOPE")
-                    .small()
-                    .color(self.theme.c(&self.theme.scope_label)),
-            );
-            ui.add_space(8.0);
-            let scope_ctrl = self.theme.c(&self.theme.scope_label);
+            ui.label(egui::RichText::new("SCOPE").small().color(scope_ctrl));
+            ui.add_space(4.0);
+
             ui.label(egui::RichText::new("X").small().color(scope_ctrl))
-                .on_hover_text(
-                    "Horizontal zoom — drag to stretch or compress the waveform in time.",
-                );
+                .on_hover_text("Horizontal zoom — stretch or compress the waveform in time.");
             ui.add(
                 egui::DragValue::new(&mut self.scope_x_scale)
                     .speed(0.02)
@@ -24,9 +44,10 @@ impl SynthApp {
                     .suffix("×"),
             )
             .on_hover_text("Horizontal zoom (0.25–8×). Drag left/right to adjust.");
-            ui.add_space(8.0);
+
+            ui.add_space(4.0);
             ui.label(egui::RichText::new("Y").small().color(scope_ctrl))
-                .on_hover_text("Vertical zoom — drag to scale the waveform amplitude.");
+                .on_hover_text("Vertical zoom — scale the waveform amplitude.");
             ui.add(
                 egui::DragValue::new(&mut self.scope_y_scale)
                     .speed(0.02)
@@ -34,12 +55,76 @@ impl SynthApp {
                     .suffix("×"),
             )
             .on_hover_text("Vertical zoom (0.25–8×). Drag left/right to adjust.");
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Fullscreen toggle
+                let fs_col = if self.scope_fullscreen { accent } else { text_sec };
+                if ui
+                    .button(egui::RichText::new(if self.scope_fullscreen { "EXIT FULL" } else { "FULL" }).small().color(fs_col))
+                    .on_hover_text("Toggle fullscreen scope view.")
+                    .clicked()
+                {
+                    self.scope_fullscreen = !self.scope_fullscreen;
+                }
+
+                // Voice debug toggle
+                let v_col = if self.show_voice_debug { accent } else { Color32::from_gray(80) };
+                if ui
+                    .button(egui::RichText::new("VOICES").small().color(v_col))
+                    .on_hover_text("Per-voice gate and envelope stage inspector.")
+                    .clicked()
+                {
+                    self.show_voice_debug = !self.show_voice_debug;
+                }
+            });
         });
 
-        let buf = self.engine.scope_buffer_snapshot();
-        let width = ui.available_width();
+        // ── Voice inspector (below toolbar, only when shown) ───────────────────
+        if self.show_voice_debug {
+            let gates = self.engine.voice_gates();
+            let cursors = self.engine.amp_cursors();
+            ui.horizontal(|ui| {
+                for vi in 0..gates.len() {
+                    let gate = gates[vi];
+                    let cursor = cursors[vi];
+                    let stage = match cursor as u8 {
+                        0 => "idle",
+                        1 => "A",
+                        2 => "D",
+                        3 => "S",
+                        4 => "R",
+                        _ => "?",
+                    };
+                    let (dot_color, label_color) = if gate > 0.5 {
+                        (Color32::from_rgb(220, 60, 60), Color32::from_rgb(255, 120, 120))
+                    } else if cursor > 0.5 {
+                        (Color32::from_rgb(200, 140, 40), Color32::from_rgb(220, 180, 80))
+                    } else {
+                        (Color32::from_gray(50), Color32::from_gray(100))
+                    };
+                    ui.vertical(|ui| {
+                        ui.set_min_width(48.0);
+                        ui.horizontal(|ui| {
+                            let (rect, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
+                            ui.painter().circle_filled(rect.center(), 4.0, dot_color);
+                            ui.label(egui::RichText::new(format!("V{}", vi + 1)).small().color(label_color));
+                        });
+                        ui.label(
+                            egui::RichText::new(format!("g:{:.0} {}", gate, stage))
+                                .monospace()
+                                .size(9.0)
+                                .color(label_color),
+                        );
+                    });
+                }
+            });
+        }
 
-        // Update peak meter state (L channel drives display; R tracked separately)
+        // ── Canvas — fills all remaining dock space ────────────────────────────
+        let buf = self.engine.scope_buffer_snapshot();
+        let avail = ui.available_size();
+
+        // Peak meter state
         let peak_raw_l = self.engine.peak_l();
         let peak_raw_r = self.engine.peak_r();
         let dt = 1.0 / 60.0_f32;
@@ -55,11 +140,9 @@ impl SynthApp {
             }
         }
 
-        // Allocate the full row (scope + meter side by side) as one rect, then split.
         const METER_W: f32 = 18.0;
         const METER_GAP: f32 = 4.0;
-        let (row_resp, painter) =
-            ui.allocate_painter(Vec2::new(width, self.scope_height), Sense::hover());
+        let (row_resp, painter) = ui.allocate_painter(avail, Sense::hover());
         let row = row_resp.rect;
         let meter_rect = Rect::from_min_size(
             Pos2::new(row.right() - METER_W, row.top()),
@@ -70,12 +153,8 @@ impl SynthApp {
             Pos2::new(row.right() - METER_W - METER_GAP, row.max.y),
         );
 
-        // CRT background (scope only)
-        painter.rect_filled(
-            rect,
-            Rounding::same(4.0),
-            self.theme.c(&self.theme.scope_bg),
-        );
+        // CRT background
+        painter.rect_filled(rect, CornerRadius::same(4), self.theme.c(&self.theme.scope_bg));
 
         if !buf.is_empty() {
             // Scanlines
@@ -93,10 +172,7 @@ impl SynthApp {
 
             // Zero line
             painter.line_segment(
-                [
-                    Pos2::new(rect.left(), mid_y),
-                    Pos2::new(rect.right(), mid_y),
-                ],
+                [Pos2::new(rect.left(), mid_y), Pos2::new(rect.right(), mid_y)],
                 Stroke::new(1.0, self.theme.c(&self.theme.scope_zero)),
             );
 
@@ -115,7 +191,6 @@ impl SynthApp {
                 })
                 .collect();
 
-            // CRT phosphor glow: outer → inner → core
             for &(stroke_w, color) in &[
                 (5.0_f32, self.theme.ca(&self.theme.scope_glow_outer)),
                 (3.0_f32, self.theme.ca(&self.theme.scope_glow_mid)),
@@ -127,14 +202,10 @@ impl SynthApp {
             }
         }
 
-        // Vertical stereo peak meter — drawn into the right strip using the same painter
+        // Stereo peak meter
         {
             let ch_w = (METER_W - 1.0) / 2.0;
-            painter.rect_filled(
-                meter_rect,
-                Rounding::same(2.0),
-                self.theme.c(&self.theme.meter_bg),
-            );
+            painter.rect_filled(meter_rect, CornerRadius::same(2), self.theme.c(&self.theme.meter_bg));
 
             for (ci, peak_raw) in [peak_raw_l, peak_raw_r].iter().enumerate() {
                 let x_left = meter_rect.left() + ci as f32 * (ch_w + 1.0);
@@ -142,7 +213,6 @@ impl SynthApp {
                     Pos2::new(x_left, meter_rect.top()),
                     Vec2::new(ch_w, meter_rect.height()),
                 );
-
                 let level = peak_raw.clamp(0.0, 1.0);
                 let bar_h = ch_rect.height() * level;
                 if bar_h > 0.5 {
@@ -164,10 +234,9 @@ impl SynthApp {
                         Pos2::new(ch_rect.left(), ch_rect.bottom() - bar_h),
                         Vec2::new(ch_w, bar_h),
                     );
-                    painter.rect_filled(bar_rect, Rounding::ZERO, color);
+                    painter.rect_filled(bar_rect, CornerRadius::ZERO, color);
                 }
 
-                // Peak hold tick
                 let hold_frac = self.peak_hold.clamp(0.0, 1.0);
                 let hold_y = ch_rect.bottom() - ch_rect.height() * hold_frac;
                 let hold_color = if self.peak_hold >= 1.0 {
@@ -176,15 +245,11 @@ impl SynthApp {
                     Color32::WHITE
                 };
                 painter.line_segment(
-                    [
-                        Pos2::new(ch_rect.left(), hold_y),
-                        Pos2::new(ch_rect.right(), hold_y),
-                    ],
+                    [Pos2::new(ch_rect.left(), hold_y), Pos2::new(ch_rect.right(), hold_y)],
                     Stroke::new(1.5, hold_color),
                 );
             }
 
-            // L / R labels at the bottom
             let ch_w = (METER_W - 1.0) / 2.0;
             for (ci, label) in ["L", "R"].iter().enumerate() {
                 let lx = meter_rect.left() + ci as f32 * (ch_w + 1.0) + ch_w * 0.5;
@@ -196,95 +261,6 @@ impl SynthApp {
                     Color32::from_rgba_premultiplied(200, 200, 200, 120),
                 );
             }
-        }
-
-        // ── Voice inspector (debug) ─────────────────────────────────────────
-        ui.horizontal(|ui| {
-            let label = egui::RichText::new("VOICES")
-                .small()
-                .color(if self.show_voice_debug {
-                    self.theme.c(&self.theme.accent)
-                } else {
-                    Color32::from_gray(80)
-                });
-            if ui.button(label).on_hover_text("Toggle per-voice state inspector (gate, envelope stage). Useful for diagnosing stuck notes.").clicked() {
-                self.show_voice_debug = !self.show_voice_debug;
-            }
-        });
-        if self.show_voice_debug {
-            let gates = self.engine.voice_gates();
-            let cursors = self.engine.amp_cursors();
-            ui.horizontal(|ui| {
-                for vi in 0..gates.len() {
-                    let gate = gates[vi];
-                    let cursor = cursors[vi];
-                    let stage = match cursor as u8 {
-                        0 => "idle",
-                        1 => "A",
-                        2 => "D",
-                        3 => "S",
-                        4 => "R",
-                        _ => "?",
-                    };
-                    // Red = gate held (should be releasing), amber = in envelope, gray = idle
-                    let (dot_color, label_color) = if gate > 0.5 {
-                        (
-                            Color32::from_rgb(220, 60, 60),
-                            Color32::from_rgb(255, 120, 120),
-                        )
-                    } else if cursor > 0.5 {
-                        (
-                            Color32::from_rgb(200, 140, 40),
-                            Color32::from_rgb(220, 180, 80),
-                        )
-                    } else {
-                        (Color32::from_gray(50), Color32::from_gray(100))
-                    };
-                    ui.vertical(|ui| {
-                        ui.set_min_width(48.0);
-                        ui.horizontal(|ui| {
-                            let (rect, _) =
-                                ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
-                            ui.painter().circle_filled(rect.center(), 4.0, dot_color);
-                            ui.label(
-                                egui::RichText::new(format!("V{}", vi + 1))
-                                    .small()
-                                    .color(label_color),
-                            );
-                        });
-                        ui.label(
-                            egui::RichText::new(format!("g:{:.0} {}", gate, stage,))
-                                .monospace()
-                                .size(9.0)
-                                .color(label_color),
-                        );
-                    });
-                }
-            });
-        }
-
-        // Drag-to-resize handle
-        let (handle_resp, handle_painter) =
-            ui.allocate_painter(Vec2::new(width, 7.0), Sense::drag());
-        if handle_resp.dragged() {
-            self.scope_height = (self.scope_height + handle_resp.drag_delta().y).max(40.0);
-        }
-        if handle_resp.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
-        }
-        let ac = self.theme.c(&self.theme.accent);
-        let grip_color = if handle_resp.hovered() || handle_resp.dragged() {
-            Color32::from_rgba_premultiplied(ac.r(), ac.g(), ac.b(), 140)
-        } else {
-            Color32::from_rgba_premultiplied(ac.r() / 3, ac.g() / 3, ac.b() / 3, 100)
-        };
-        let cx = handle_resp.rect.center();
-        for dx in [-12.0_f32, -6.0, 0.0, 6.0, 12.0] {
-            let x = cx.x + dx;
-            handle_painter.line_segment(
-                [Pos2::new(x, cx.y - 1.5), Pos2::new(x, cx.y + 1.5)],
-                Stroke::new(2.0, grip_color),
-            );
         }
     }
 }
@@ -356,7 +332,7 @@ pub fn draw_peak_meter(
     let (resp, painter) =
         ui.allocate_painter(Vec2::new(ui.available_width(), 14.0), Sense::hover());
     let rect = resp.rect;
-    painter.rect_filled(rect, Rounding::same(2.0), theme.c(&theme.meter_bg));
+    painter.rect_filled(rect, CornerRadius::same(2), theme.c(&theme.meter_bg));
 
     let max_display = 1.5_f32;
     let bar_frac = (level / max_display).clamp(0.0, 1.0);
@@ -378,15 +354,12 @@ pub fn draw_peak_meter(
             theme.c(&theme.meter_clip)
         };
         let bar_rect = Rect::from_min_size(rect.min, Vec2::new(bar_w, rect.height()));
-        painter.rect_filled(bar_rect, Rounding::same(2.0), color);
+        painter.rect_filled(bar_rect, CornerRadius::same(2), color);
     }
 
     let unity_x = rect.left() + rect.width() * (1.0 / max_display);
     painter.line_segment(
-        [
-            Pos2::new(unity_x, rect.top()),
-            Pos2::new(unity_x, rect.bottom()),
-        ],
+        [Pos2::new(unity_x, rect.top()), Pos2::new(unity_x, rect.bottom())],
         Stroke::new(1.0, Color32::from_rgba_premultiplied(255, 255, 255, 100)),
     );
 

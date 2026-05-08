@@ -25,11 +25,11 @@ forma-common  = { path = "../forma-common" }
 fundsp      = { version = "0.23", features = ["files", "fft"] }
 cpal        = "0.15"
 anyhow      = "1"
-eframe      = "0.29"
-egui        = "0.29"
+eframe      = { version = "0.34", features = ["wgpu"], default-features = false }
+egui        = "0.34"
 midir       = "0.9"
 serde       = { version = "1", features = ["derive"] }
 serde_json  = "1"
 rfd         = "0.15"
-egui_dock = "0.14.0"
+egui_dock   = "0.19"
 hound       = "3"

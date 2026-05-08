@@ -444,11 +444,12 @@ impl SynthApp {
                             fill.b(),
                             alpha,
                         );
-                        painter.rect_filled(rect, egui::Rounding::same(3.0), fill);
+                        painter.rect_filled(rect, egui::CornerRadius::same(3), fill);
                         painter.rect_stroke(
                             rect,
-                            egui::Rounding::same(3.0),
+                            egui::CornerRadius::same(3),
                             Stroke::new(1.0, edge),
+                            egui::StrokeKind::Middle,
                         );
                         if resp.clicked() {
                             self.pulse_pattern ^= 1u16 << i;
@@ -510,7 +511,7 @@ impl SynthApp {
             }
 
             let div = forma_common::ClockDivision::from_u8(division as u8);
-            egui::ComboBox::from_id_source(("lfo_gate_div", which as u8))
+            egui::ComboBox::from_id_salt(("lfo_gate_div", which as u8))
                 .selected_text(div.label())
                 .show_ui(ui, |ui| {
                     for d in forma_common::ClockDivision::ALL {
@@ -551,8 +552,8 @@ impl SynthApp {
                     let alpha = if in_active_len { 255 } else { 90 };
                     let fill =
                         egui::Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), alpha);
-                    painter.rect_filled(rect, egui::Rounding::same(2.0), fill);
-                    painter.rect_stroke(rect, egui::Rounding::same(2.0), Stroke::new(1.0, edge));
+                    painter.rect_filled(rect, egui::CornerRadius::same(2), fill);
+                    painter.rect_stroke(rect, egui::CornerRadius::same(2), Stroke::new(1.0, edge), egui::StrokeKind::Middle);
                     if resp.clicked() {
                         pattern ^= 1u16 << i;
                         pattern_changed = true;
@@ -952,7 +953,7 @@ fn draw_lp_response_curve(
 
     // ── Background ────────────────────────────────────────────────────────
     let bg = Color32::from_rgba_premultiplied(accent.r() / 6, accent.g() / 6, accent.b() / 6, 140);
-    painter.rect_filled(rect, egui::Rounding::same(5.0), bg);
+    painter.rect_filled(rect, egui::CornerRadius::same(5), bg);
 
     // ── Grid — log-spaced vertical frequency lines ────────────────────────
     let grid_col = Color32::from_gray(42);
@@ -1067,8 +1068,9 @@ fn draw_lp_response_curve(
     // Border (drawn last so it's on top of the curve)
     painter.rect_stroke(
         rect,
-        egui::Rounding::same(5.0),
+        egui::CornerRadius::same(5),
         egui::Stroke::new(1.0, border_col),
+        egui::StrokeKind::Middle,
     );
 }
 
@@ -1085,7 +1087,7 @@ pub fn draw_adsr_visualizer(
     );
     let rect = resp.rect;
 
-    painter.rect_filled(rect, egui::Rounding::same(3.0), theme.c(&theme.bg_adsr));
+    painter.rect_filled(rect, egui::CornerRadius::same(3), theme.c(&theme.bg_adsr));
 
     let a = adsr[0];
     let d = adsr[1];

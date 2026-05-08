@@ -166,7 +166,7 @@ impl SynthTheme {
     /// match the active theme without per-widget overrides.
     pub fn apply_to_egui(&self, ctx: &egui::Context) {
         use egui::style::WidgetVisuals;
-        use egui::{Color32, Margin, Rounding, Shadow, Stroke, Vec2, Visuals};
+        use egui::{Color32, CornerRadius, Margin, Shadow, Stroke, Vec2, Visuals};
 
         let bg_surface = self.c(&self.bg_surface);
         let bg_app = self.c(&self.bg_app);
@@ -177,7 +177,7 @@ impl SynthTheme {
         let text_secondary = self.c(&self.text_secondary);
         let accent = self.c(&self.accent);
 
-        let round_md = Rounding::same(self.rounding_md);
+        let round_md = CornerRadius::same(self.rounding_md as u8);
 
         // Slightly brighten a color for hover feedback.
         let lighten = |c: Color32, by: u8| {
@@ -196,7 +196,7 @@ impl SynthTheme {
             bg_fill: bg,
             weak_bg_fill: bg,
             bg_stroke: Stroke::new(sw, stroke_c),
-            rounding: round_md,
+            corner_radius: round_md,
             fg_stroke: Stroke::new(1.0, text),
             expansion: 0.0,
         };
@@ -213,11 +213,11 @@ impl SynthTheme {
         vis.faint_bg_color = bg_sunken;
 
         // Window chrome
-        vis.window_rounding = Rounding::same(self.rounding_lg);
+        vis.window_corner_radius = CornerRadius::same(self.rounding_lg as u8);
         vis.window_stroke = Stroke::new(self.stroke_ui, border);
         vis.window_shadow = Shadow::NONE;
         vis.popup_shadow = Shadow::NONE;
-        vis.menu_rounding = round_md;
+        vis.menu_corner_radius = round_md;
 
         // Selection
         vis.selection.bg_fill =
@@ -251,14 +251,14 @@ impl SynthTheme {
         ctx.set_visuals(vis);
 
         // Layout / spacing
-        let mut style = (*ctx.style()).clone();
+        let mut style = (*ctx.global_style()).clone();
         style.spacing.item_spacing = Vec2::new(self.sp_sm, self.sp_xs);
-        style.spacing.window_margin = Margin::same(self.sp_md);
+        style.spacing.window_margin = Margin::same(self.sp_md as i8);
         style.spacing.button_padding = Vec2::new(self.sp_sm, 3.0);
-        style.spacing.menu_margin = Margin::same(self.sp_sm);
+        style.spacing.menu_margin = Margin::same(self.sp_sm as i8);
         style.spacing.indent = self.sp_lg;
         style.spacing.interact_size = Vec2::new(40.0, 20.0);
-        ctx.set_style(style);
+        ctx.set_global_style(style);
     }
 }
 

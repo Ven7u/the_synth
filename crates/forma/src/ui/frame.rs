@@ -1,5 +1,5 @@
 use super::theme::SynthTheme;
-use egui::{Frame, Margin, Rounding, Stroke};
+use egui::{CornerRadius, Frame, Margin, Stroke};
 
 /// Typed `egui::Frame` factories that read directly from `SynthTheme` tokens.
 ///
@@ -16,16 +16,16 @@ pub struct SynthFrame;
 impl SynthFrame {
     /// Global bar and transport strips — full-bleed, no border, no rounding.
     pub fn bar(theme: &SynthTheme) -> Frame {
-        Frame::none()
+        Frame::new()
             .fill(theme.c(&theme.bg_bar))
-            .inner_margin(Margin::symmetric(theme.sp_md, 6.0))
+            .inner_margin(Margin::symmetric(theme.sp_md as i8, 6))
     }
 
     /// Transport / keyboard strip variant — tighter vertical margin.
     pub fn transport(theme: &SynthTheme) -> Frame {
-        Frame::none()
+        Frame::new()
             .fill(theme.c(&theme.bg_bar))
-            .inner_margin(Margin::symmetric(theme.sp_sm, theme.sp_xs))
+            .inner_margin(Margin::symmetric(theme.sp_sm as i8, theme.sp_xs as i8))
     }
 
     /// Section card — the primary container for editing zones.
@@ -33,11 +33,11 @@ impl SynthFrame {
     /// Provides a raised surface with a subtle border and consistent padding.
     /// Use this to wrap OSC panels, filter section, FX chain, etc.
     pub fn section(theme: &SynthTheme) -> Frame {
-        Frame::none()
+        Frame::new()
             .fill(theme.c(&theme.bg_surface))
-            .rounding(Rounding::same(theme.rounding_md))
+            .corner_radius(CornerRadius::same(theme.rounding_md as u8))
             .stroke(Stroke::new(theme.stroke_ui, theme.c(&theme.border)))
-            .inner_margin(Margin::same(theme.sp_sm))
+            .inner_margin(Margin::same(theme.sp_sm as i8))
     }
 
     /// Inset — a darker sub-region inside a section.
@@ -45,24 +45,24 @@ impl SynthFrame {
     /// Use for control groups, value readouts, or any area that should sit
     /// visually "below" the surrounding surface.
     pub fn inset(theme: &SynthTheme) -> Frame {
-        Frame::none()
+        Frame::new()
             .fill(theme.c(&theme.bg_sunken))
-            .rounding(Rounding::same(theme.rounding_sm))
-            .inner_margin(Margin::same(theme.sp_xs))
+            .corner_radius(CornerRadius::same(theme.rounding_sm as u8))
+            .inner_margin(Margin::same(theme.sp_xs as i8))
     }
 
     /// Screen — dark background for visualizers (scope, spectrum, etc.).
     pub fn screen(theme: &SynthTheme) -> Frame {
-        Frame::none()
+        Frame::new()
             .fill(theme.c(&theme.scope_bg))
-            .rounding(Rounding::same(theme.rounding_sm))
+            .corner_radius(CornerRadius::same(theme.rounding_sm as u8))
             .stroke(Stroke::new(theme.stroke_ui, theme.c(&theme.border)))
-            .inner_margin(Margin::same(theme.sp_xs))
+            .inner_margin(Margin::same(theme.sp_xs as i8))
     }
 
     /// App background — transparent fill used on CentralPanel and side panels
     /// so that the app-level `bg_app` shows through without adding a border.
     pub fn app_bg(theme: &SynthTheme) -> Frame {
-        Frame::none().fill(theme.c(&theme.bg_app))
+        Frame::new().fill(theme.c(&theme.bg_app))
     }
 }

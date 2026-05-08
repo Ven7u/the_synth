@@ -212,7 +212,7 @@ pub(crate) struct SynthApp {
     // No UI mirror needed.
 
     // Oscilloscope
-    pub(crate) scope_height: f32,
+    pub(crate) scope_fullscreen: bool,
     pub(crate) scope_x_scale: f32,
     pub(crate) scope_y_scale: f32,
     pub(crate) show_voice_debug: bool,
@@ -383,7 +383,7 @@ impl SynthApp {
             seq_sync: true,
             seq,
             chord_kb: ChordKbState::new(),
-            scope_height: 140.0,
+            scope_fullscreen: false,
             scope_x_scale: 1.0,
             scope_y_scale: 2.5,
             show_voice_debug: false,
@@ -637,7 +637,7 @@ impl SynthApp {
 // ---------------------------------------------------------------------------
 
 impl eframe::App for SynthApp {
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+    fn on_exit(&mut self) {
         let state = ui::layout::LayoutState {
             theme_name: self.theme.name.clone(),
             panels: self.panels.to_state(),
@@ -647,7 +647,9 @@ impl eframe::App for SynthApp {
         ui::layout::save_layout(&state);
     }
 
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = _ui.ctx().clone();
+        let ctx = &ctx;
         // Apply theme to egui Visuals + Style every frame — cheap struct copies.
         self.theme.apply_to_egui(ctx);
 
@@ -669,6 +671,7 @@ impl eframe::App for SynthApp {
         // Floating windows — must be shown before panels.
         self.ui_patch_browser(ctx);
         self.ui_metronome_window(ctx);
+        self.ui_scope_fullscreen(ctx);
 
         // ── Zone 1: global bar (top, always visible) ──────────────────────────
         egui::TopBottomPanel::top("global_bar")
@@ -710,16 +713,16 @@ impl eframe::App for SynthApp {
                         dock_style.separator.color_idle = egui::Color32::TRANSPARENT;
                         dock_style.separator.color_hovered = egui::Color32::from_black_alpha(60);
                         dock_style.separator.color_dragged = egui::Color32::from_black_alpha(100);
-                        dock_style.dock_area_padding = Some(egui::Margin::same(6.0));
-                        let rm = self.theme.rounding_md;
-                        let r_top = egui::Rounding {
+                        dock_style.dock_area_padding = Some(egui::Margin::same(6i8));
+                        let rm = self.theme.rounding_md as u8;
+                        let r_top = egui::CornerRadius {
                             nw: rm,
                             ne: rm,
-                            sw: 0.0,
-                            se: 0.0,
+                            sw: 0,
+                            se: 0,
                         };
-                        let r_body = egui::Rounding {
-                            nw: 0.0,
+                        let r_body = egui::CornerRadius {
+                            nw: 0,
                             ne: rm,
                             sw: rm,
                             se: rm,
@@ -731,31 +734,31 @@ impl eframe::App for SynthApp {
                         let text_sec = self.theme.c(&self.theme.text_secondary);
                         let accent = self.theme.c(&self.theme.accent);
                         // Tab body: rounded corners + subtle border
-                        dock_style.tab.tab_body.rounding = r_body;
+                        dock_style.tab.tab_body.corner_radius = r_body;
                         dock_style.tab.tab_body.stroke =
                             egui::Stroke::new(self.theme.stroke_ui, border);
                         // Tab bar: transparent so the panel background shows through
                         dock_style.tab_bar.bg_fill = egui::Color32::TRANSPARENT;
                         dock_style.tab_bar.hline_color = egui::Color32::TRANSPARENT;
-                        dock_style.tab_bar.rounding = r_body;
+                        dock_style.tab_bar.corner_radius = r_body;
                         dock_style.tab_bar.height = 28.0;
                         // Active tab: raised (bg_surface), top-only rounding, accent outline
-                        dock_style.tab.active.rounding = r_top;
+                        dock_style.tab.active.corner_radius = r_top;
                         dock_style.tab.active.bg_fill = bg_surface;
                         dock_style.tab.active.text_color = text_pri;
                         dock_style.tab.active.outline_color = accent;
                         // Focused: same as active with accent text
-                        dock_style.tab.focused.rounding = r_top;
+                        dock_style.tab.focused.corner_radius = r_top;
                         dock_style.tab.focused.bg_fill = bg_surface;
                         dock_style.tab.focused.text_color = accent;
                         dock_style.tab.focused.outline_color = accent;
                         // Inactive: transparent, dimmed text
-                        dock_style.tab.inactive.rounding = r_top;
+                        dock_style.tab.inactive.corner_radius = r_top;
                         dock_style.tab.inactive.bg_fill = egui::Color32::TRANSPARENT;
                         dock_style.tab.inactive.text_color = text_sec;
                         dock_style.tab.inactive.outline_color = egui::Color32::TRANSPARENT;
                         // Hovered: slightly raised
-                        dock_style.tab.hovered.rounding = r_top;
+                        dock_style.tab.hovered.corner_radius = r_top;
                         dock_style.tab.hovered.bg_fill = bg_surface;
                         dock_style.tab.hovered.text_color = text_pri;
                         dock_style.tab.hovered.outline_color = border;
