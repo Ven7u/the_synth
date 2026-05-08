@@ -553,7 +553,12 @@ impl SynthApp {
                     let fill =
                         egui::Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), alpha);
                     painter.rect_filled(rect, egui::CornerRadius::same(2), fill);
-                    painter.rect_stroke(rect, egui::CornerRadius::same(2), Stroke::new(1.0, edge), egui::StrokeKind::Middle);
+                    painter.rect_stroke(
+                        rect,
+                        egui::CornerRadius::same(2),
+                        Stroke::new(1.0, edge),
+                        egui::StrokeKind::Middle,
+                    );
                     if resp.clicked() {
                         pattern ^= 1u16 << i;
                         pattern_changed = true;

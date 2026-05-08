@@ -1,6 +1,6 @@
 use crate::SynthApp;
 use eframe::egui;
-use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, Vec2};
+use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, Vec2};
 
 impl SynthApp {
     pub fn ui_oscilloscope(&mut self, ui: &mut egui::Ui) {
@@ -58,9 +58,21 @@ impl SynthApp {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Fullscreen toggle
-                let fs_col = if self.scope_fullscreen { accent } else { text_sec };
+                let fs_col = if self.scope_fullscreen {
+                    accent
+                } else {
+                    text_sec
+                };
                 if ui
-                    .button(egui::RichText::new(if self.scope_fullscreen { "EXIT FULL" } else { "FULL" }).small().color(fs_col))
+                    .button(
+                        egui::RichText::new(if self.scope_fullscreen {
+                            "EXIT FULL"
+                        } else {
+                            "FULL"
+                        })
+                        .small()
+                        .color(fs_col),
+                    )
                     .on_hover_text("Toggle fullscreen scope view.")
                     .clicked()
                 {
@@ -68,7 +80,11 @@ impl SynthApp {
                 }
 
                 // Voice debug toggle
-                let v_col = if self.show_voice_debug { accent } else { Color32::from_gray(80) };
+                let v_col = if self.show_voice_debug {
+                    accent
+                } else {
+                    Color32::from_gray(80)
+                };
                 if ui
                     .button(egui::RichText::new("VOICES").small().color(v_col))
                     .on_hover_text("Per-voice gate and envelope stage inspector.")
@@ -96,18 +112,29 @@ impl SynthApp {
                         _ => "?",
                     };
                     let (dot_color, label_color) = if gate > 0.5 {
-                        (Color32::from_rgb(220, 60, 60), Color32::from_rgb(255, 120, 120))
+                        (
+                            Color32::from_rgb(220, 60, 60),
+                            Color32::from_rgb(255, 120, 120),
+                        )
                     } else if cursor > 0.5 {
-                        (Color32::from_rgb(200, 140, 40), Color32::from_rgb(220, 180, 80))
+                        (
+                            Color32::from_rgb(200, 140, 40),
+                            Color32::from_rgb(220, 180, 80),
+                        )
                     } else {
                         (Color32::from_gray(50), Color32::from_gray(100))
                     };
                     ui.vertical(|ui| {
                         ui.set_min_width(48.0);
                         ui.horizontal(|ui| {
-                            let (rect, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
+                            let (rect, _) =
+                                ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
                             ui.painter().circle_filled(rect.center(), 4.0, dot_color);
-                            ui.label(egui::RichText::new(format!("V{}", vi + 1)).small().color(label_color));
+                            ui.label(
+                                egui::RichText::new(format!("V{}", vi + 1))
+                                    .small()
+                                    .color(label_color),
+                            );
                         });
                         ui.label(
                             egui::RichText::new(format!("g:{:.0} {}", gate, stage))
@@ -154,7 +181,11 @@ impl SynthApp {
         );
 
         // CRT background
-        painter.rect_filled(rect, CornerRadius::same(4), self.theme.c(&self.theme.scope_bg));
+        painter.rect_filled(
+            rect,
+            CornerRadius::same(4),
+            self.theme.c(&self.theme.scope_bg),
+        );
 
         if !buf.is_empty() {
             // Scanlines
@@ -172,7 +203,10 @@ impl SynthApp {
 
             // Zero line
             painter.line_segment(
-                [Pos2::new(rect.left(), mid_y), Pos2::new(rect.right(), mid_y)],
+                [
+                    Pos2::new(rect.left(), mid_y),
+                    Pos2::new(rect.right(), mid_y),
+                ],
                 Stroke::new(1.0, self.theme.c(&self.theme.scope_zero)),
             );
 
@@ -181,7 +215,47 @@ impl SynthApp {
             let buf_slice = &buf[..samples_to_show];
             let step = rect.width() / buf_slice.len() as f32;
             let y_scale = self.scope_y_scale;
+            let n = buf_slice.len();
 
+            // ── Phosphor trail — draw ghost frames before current ──────────────
+            const TRAIL_FRAMES: usize = 5;
+            const TRAIL_BASE_ALPHA: f32 = 0.18; // oldest ghost opacity
+            for (ti, ghost) in self.scope_trail.iter().enumerate() {
+                let ghost_samples = ghost.len().min(n);
+                if ghost_samples < 2 { continue; }
+                let ghost_step = rect.width() / ghost_samples as f32;
+                // age: 0 = oldest, TRAIL_FRAMES-1 = most recent ghost
+                let age = ti as f32 / TRAIL_FRAMES as f32;
+                let alpha = (TRAIL_BASE_ALPHA * age * 180.0) as u8;
+                let core = self.theme.scope_glow_core;
+                let ghost_color = Color32::from_rgba_premultiplied(
+                    (core[0] as f32 * 0.6) as u8,
+                    (core[1] as f32 * 0.6) as u8,
+                    (core[2] as f32 * 0.6) as u8,
+                    alpha,
+                );
+                let ghost_pts: Vec<Pos2> = ghost[..ghost_samples]
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &s)| {
+                        let amp = (s * half_h * y_scale).clamp(-half_h, half_h);
+                        Pos2::new(rect.left() + i as f32 * ghost_step, mid_y - amp)
+                    })
+                    .collect();
+                painter.add(Shape::line(ghost_pts, Stroke::new(1.0, ghost_color)));
+            }
+            // Advance trail: push every 8 frames so ghosts are visibly separated in time
+            self.scope_trail_tick = self.scope_trail_tick.wrapping_add(1);
+            if self.scope_trail_tick % 8 == 0 {
+                self.scope_trail.push_back(buf_slice.to_vec());
+                if self.scope_trail.len() > TRAIL_FRAMES {
+                    self.scope_trail.pop_front();
+                }
+            }
+
+            // ── Build current-frame points with per-point fade ─────────────────
+            // Points fade from full opacity at the left (newest) to ~30% at right (oldest).
+            // Variable width: segments steeper than threshold draw thin, shallow draw thick.
             let points: Vec<Pos2> = buf_slice
                 .iter()
                 .enumerate()
@@ -191,21 +265,44 @@ impl SynthApp {
                 })
                 .collect();
 
-            for &(stroke_w, color) in &[
-                (5.0_f32, self.theme.ca(&self.theme.scope_glow_outer)),
-                (3.0_f32, self.theme.ca(&self.theme.scope_glow_mid)),
-                (1.2_f32, self.theme.ca(&self.theme.scope_glow_core)),
-            ] {
-                for w in points.windows(2) {
-                    painter.line_segment([w[0], w[1]], Stroke::new(stroke_w, color));
-                }
+            // Glow layers — outer/mid use Shape::line for continuity; inner uses
+            // variable-width segments for the brush feel.
+            let [go, gm, gc] = [
+                self.theme.ca(&self.theme.scope_glow_outer),
+                self.theme.ca(&self.theme.scope_glow_mid),
+                self.theme.ca(&self.theme.scope_glow_core),
+            ];
+
+            // Outer and mid: single connected polyline per layer
+            painter.add(Shape::line(points.clone(), Stroke::new(5.0, go)));
+            painter.add(Shape::line(points.clone(), Stroke::new(3.0, gm)));
+
+            // Core: variable-width segments + right-to-left opacity fade
+            for w in points.windows(2) {
+                let t = (w[0].x - rect.left()) / rect.width(); // 0=left, 1=right
+                let fade = 1.0 - t * 0.7; // 1.0 → 0.3 across width
+                let dy = (w[1].y - w[0].y).abs();
+                // Fast movement (steep) → thin; slow movement (flat) → thick
+                let width = if dy > 4.0 { 1.0 } else { 1.0 + (1.0 - dy / 4.0) * 1.8 };
+                let a = (gc.a() as f32 * fade) as u8;
+                let col = Color32::from_rgba_premultiplied(
+                    (gc.r() as f32 * fade) as u8,
+                    (gc.g() as f32 * fade) as u8,
+                    (gc.b() as f32 * fade) as u8,
+                    a,
+                );
+                painter.line_segment([w[0], w[1]], Stroke::new(width, col));
             }
         }
 
         // Stereo peak meter
         {
             let ch_w = (METER_W - 1.0) / 2.0;
-            painter.rect_filled(meter_rect, CornerRadius::same(2), self.theme.c(&self.theme.meter_bg));
+            painter.rect_filled(
+                meter_rect,
+                CornerRadius::same(2),
+                self.theme.c(&self.theme.meter_bg),
+            );
 
             for (ci, peak_raw) in [peak_raw_l, peak_raw_r].iter().enumerate() {
                 let x_left = meter_rect.left() + ci as f32 * (ch_w + 1.0);
@@ -245,7 +342,10 @@ impl SynthApp {
                     Color32::WHITE
                 };
                 painter.line_segment(
-                    [Pos2::new(ch_rect.left(), hold_y), Pos2::new(ch_rect.right(), hold_y)],
+                    [
+                        Pos2::new(ch_rect.left(), hold_y),
+                        Pos2::new(ch_rect.right(), hold_y),
+                    ],
                     Stroke::new(1.5, hold_color),
                 );
             }
@@ -359,7 +459,10 @@ pub fn draw_peak_meter(
 
     let unity_x = rect.left() + rect.width() * (1.0 / max_display);
     painter.line_segment(
-        [Pos2::new(unity_x, rect.top()), Pos2::new(unity_x, rect.bottom())],
+        [
+            Pos2::new(unity_x, rect.top()),
+            Pos2::new(unity_x, rect.bottom()),
+        ],
         Stroke::new(1.0, Color32::from_rgba_premultiplied(255, 255, 255, 100)),
     );
 

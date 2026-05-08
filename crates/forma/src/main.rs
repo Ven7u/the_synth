@@ -216,6 +216,8 @@ pub(crate) struct SynthApp {
     pub(crate) scope_x_scale: f32,
     pub(crate) scope_y_scale: f32,
     pub(crate) show_voice_debug: bool,
+    pub(crate) scope_trail: std::collections::VecDeque<Vec<f32>>,
+    pub(crate) scope_trail_tick: u32, // frame counter for trail push rate
 
     // Patch system
     pub(crate) patch_name: String,
@@ -387,6 +389,8 @@ impl SynthApp {
             scope_x_scale: 1.0,
             scope_y_scale: 2.5,
             show_voice_debug: false,
+            scope_trail: std::collections::VecDeque::new(),
+            scope_trail_tick: 0,
             patch_name: "Init".into(),
             patch_library: default_patches(),
             patch_browser_open: false,
