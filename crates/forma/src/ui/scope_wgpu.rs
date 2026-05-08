@@ -4,6 +4,37 @@ use eframe::egui_wgpu;
 use egui_wgpu::wgpu;
 use wgpu::util::DeviceExt;
 
+// ── Visualization mode ────────────────────────────────────────────────────────
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum VizMode {
+    #[default]
+    Scope,
+    Harmonograph,
+    Voronoi,
+}
+
+// ── Harmonograph uniform params (48 bytes, 3 × vec4) ──────────────────────────
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct HarmParams {
+    pub freqs: [f32; 4],  // pendulum frequencies f1..f4
+    pub phases: [f32; 4], // phase offsets p1..p4
+    pub damping: f32,
+    pub t_max: f32,
+    pub _pad: [f32; 2],
+}
+
+// ── Voronoi uniform params (144 bytes = 8 × vec4 + 1 × vec4) ─────────────────
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct VorParams {
+    pub seeds: [[f32; 4]; 8], // seeds[i].xy = UV position (0..1)
+    pub num_seeds: u32,
+    pub beat_pulse: f32,
+    pub tex_w: f32,
+    pub tex_h: f32,
+}
+
 // ── WGSL: render waveform vertices into offscreen texture ─────────────────────
 const WAVEFORM_SHADER: &str = r#"
 @vertex
@@ -15,6 +46,110 @@ fn vs_main(@location(0) pos: vec2<f32>) -> @builtin(position) vec4<f32> {
 fn fs_main() -> @location(0) vec4<f32> {
     // Full-intensity phosphor — the CRT pass handles bloom/glow
     return vec4<f32>(0.13, 1.0, 0.55, 1.0);
+}
+"#;
+
+// ── WGSL: harmonograph line strip (parametric, GPU-computed) ──────────────────
+const HARMONOGRAPH_SHADER: &str = r#"
+const N_STEPS: u32 = 3000u;
+
+struct HarmParams {
+    freqs:   vec4<f32>,
+    phases:  vec4<f32>,
+    damping: f32,
+    t_max:   f32,
+    _pad:    vec2<f32>,
+}
+
+@group(0) @binding(0) var<uniform> h: HarmParams;
+
+fn harm_pos(t: f32) -> vec2<f32> {
+    let d = exp(-h.damping * t);
+    let x = (sin(h.freqs.x * t + h.phases.x) + 0.3 * sin(h.freqs.y * t + h.phases.y)) * d * 0.9;
+    let y = (sin(h.freqs.z * t + h.phases.z) + 0.3 * sin(h.freqs.w * t + h.phases.w)) * d * 0.9;
+    return vec2<f32>(x, y);
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+    let t = f32(vi) / f32(N_STEPS - 1u) * h.t_max;
+    let p = harm_pos(t);
+    return vec4<f32>(p, 0.0, 1.0);
+}
+
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+    return vec4<f32>(0.13, 1.0, 0.55, 1.0);
+}
+"#;
+
+// ── WGSL: voronoi distance-field (fullscreen, GPU-computed) ───────────────────
+const VORONOI_SHADER: &str = r#"
+struct VertOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0)       uv:  vec2<f32>,
+}
+
+struct VorParams {
+    seeds:      array<vec4<f32>, 8>,
+    num_seeds:  u32,
+    beat_pulse: f32,
+    tex_w:      f32,
+    tex_h:      f32,
+}
+
+@group(0) @binding(0) var<uniform> v: VorParams;
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> VertOut {
+    // Fullscreen triangle: NDC (-1,-1) → UV (0,1), top-left → (0,0)
+    var p = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 3.0, -1.0),
+        vec2<f32>(-1.0,  3.0),
+    );
+    var uv = array<vec2<f32>, 3>(
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(2.0, 1.0),
+        vec2<f32>(0.0, -1.0),
+    );
+    var o: VertOut;
+    o.pos = vec4<f32>(p[vi], 0.0, 1.0);
+    o.uv  = uv[vi];
+    return o;
+}
+
+@fragment
+fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
+    if in.uv.x < 0.0 || in.uv.x > 1.0 || in.uv.y < 0.0 || in.uv.y > 1.0 {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+
+    // Aspect-corrected space: distances become equal in screen pixels
+    let aspect = v.tex_w / v.tex_h;
+    let p = vec2<f32>((in.uv.x - 0.5) * aspect, in.uv.y - 0.5);
+
+    var d1 = 1e9;
+    var d2 = 1e9;
+
+    for (var i = 0u; i < 8u; i++) {
+        if i >= v.num_seeds { break; }
+        let sp = vec2<f32>((v.seeds[i].x - 0.5) * aspect, v.seeds[i].y - 0.5);
+        let d  = length(p - sp);
+        if d < d1 {
+            d2 = d1;
+            d1 = d;
+        } else if d < d2 {
+            d2 = d;
+        }
+    }
+
+    // Edge glow: bright where two cells meet
+    let edge   = d2 - d1;
+    let edge_w = 0.025 + v.beat_pulse * 0.015;
+    let glow   = smoothstep(edge_w + 0.07, 0.0, edge);
+
+    return vec4<f32>(0.13 * glow, 1.0 * glow, 0.55 * glow, 1.0);
 }
 "#;
 
@@ -110,7 +245,7 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
 }
 "#;
 
-// ── Uniform buffer layout (must match WGSL struct, 16-byte aligned) ───────────
+// ── Uniform buffer layouts (must match WGSL structs, 16-byte aligned) ─────────
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct CrtParams {
@@ -120,7 +255,7 @@ struct CrtParams {
 
 // ── Persistent GPU resources (stored in CallbackResources across frames) ──────
 pub struct ScopeGpuResources {
-    // Offscreen texture the waveform is rendered into
+    // Offscreen texture the visualizer renders into
     tex: wgpu::Texture,
     tex_view: wgpu::TextureView,
     tex_size: (u32, u32),
@@ -135,10 +270,23 @@ pub struct ScopeGpuResources {
     crt_bind_group_layout: wgpu::BindGroupLayout,
     params_buf: wgpu::Buffer,
     sampler: wgpu::Sampler,
+
+    // Pipeline 3: harmonograph line strip → offscreen texture
+    harm_pipeline: wgpu::RenderPipeline,
+    harm_params_buf: wgpu::Buffer,
+    harm_bind_group: wgpu::BindGroup,
+    harm_bgl: wgpu::BindGroupLayout,
+
+    // Pipeline 4: voronoi fullscreen → offscreen texture
+    vor_pipeline: wgpu::RenderPipeline,
+    vor_params_buf: wgpu::Buffer,
+    vor_bind_group: wgpu::BindGroup,
+    vor_bgl: wgpu::BindGroupLayout,
 }
 
 const MAX_VERTS: u64 = 16384;
 const TEX_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const HARM_N_STEPS: u32 = 3000;
 
 impl ScopeGpuResources {
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
@@ -153,7 +301,7 @@ impl ScopeGpuResources {
             ..Default::default()
         });
 
-        // ── Params uniform buffer ─────────────────────────────────────────────
+        // ── CRT params uniform buffer ─────────────────────────────────────────
         let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("crt_params"),
             contents: bytemuck::bytes_of(&CrtParams {
@@ -163,7 +311,7 @@ impl ScopeGpuResources {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        // ── Vertex buffer (pre-allocated, updated each frame) ─────────────────
+        // ── Waveform vertex buffer (pre-allocated, updated each frame) ────────
         let vertex_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("scope_verts"),
             size: MAX_VERTS * 8, // 2 × f32 per vertex
@@ -171,10 +319,36 @@ impl ScopeGpuResources {
             mapped_at_creation: false,
         });
 
+        // ── Harm params uniform buffer ────────────────────────────────────────
+        let harm_params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("harm_params"),
+            contents: bytemuck::bytes_of(&HarmParams {
+                freqs: [1.0, 2.0, 3.0, 1.0],
+                phases: [0.0; 4],
+                damping: 0.025,
+                t_max: 400.0,
+                _pad: [0.0; 2],
+            }),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // ── Vor params uniform buffer ─────────────────────────────────────────
+        let vor_params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("vor_params"),
+            contents: bytemuck::bytes_of(&VorParams {
+                seeds: [[0.0; 4]; 8],
+                num_seeds: 5,
+                beat_pulse: 0.0,
+                tex_w: 512.0,
+                tex_h: 256.0,
+            }),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
         // ── Initial offscreen texture ─────────────────────────────────────────
         let (tex, tex_view) = Self::make_texture(device, 512, 256);
 
-        // ── Bind group layout for CRT pass ────────────────────────────────────
+        // ── CRT bind group layout ─────────────────────────────────────────────
         let crt_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("crt_bgl"),
@@ -208,13 +382,20 @@ impl ScopeGpuResources {
                 ],
             });
 
-        let crt_bind_group = Self::make_bind_group(
+        let crt_bind_group = Self::make_crt_bind_group(
             device,
             &crt_bind_group_layout,
             &tex_view,
             &sampler,
             &params_buf,
         );
+
+        // ── Single-uniform BGLs for harm and vor ──────────────────────────────
+        let harm_bgl = Self::make_uniform_bgl(device, "harm_bgl");
+        let vor_bgl = Self::make_uniform_bgl(device, "vor_bgl");
+
+        let harm_bind_group = Self::make_uniform_bg(device, &harm_bgl, &harm_params_buf, "harm_bg");
+        let vor_bind_group = Self::make_uniform_bg(device, &vor_bgl, &vor_params_buf, "vor_bg");
 
         // ── Waveform pipeline ─────────────────────────────────────────────────
         let wv_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -251,6 +432,84 @@ impl ScopeGpuResources {
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &wv_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: TEX_FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        // ── Harmonograph pipeline (line strip, no vertex buffer) ──────────────
+        let harm_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("harm_shader"),
+            source: wgpu::ShaderSource::Wgsl(HARMONOGRAPH_SHADER.into()),
+        });
+        let harm_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("harm_layout"),
+            bind_group_layouts: &[Some(&harm_bgl)],
+            immediate_size: 0,
+        });
+        let harm_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("harm_pipeline"),
+            layout: Some(&harm_layout),
+            vertex: wgpu::VertexState {
+                module: &harm_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineStrip,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &harm_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: TEX_FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        // ── Voronoi pipeline (fullscreen triangle, no vertex buffer) ──────────
+        let vor_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("vor_shader"),
+            source: wgpu::ShaderSource::Wgsl(VORONOI_SHADER.into()),
+        });
+        let vor_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("vor_layout"),
+            bind_group_layouts: &[Some(&vor_bgl)],
+            immediate_size: 0,
+        });
+        let vor_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("vor_pipeline"),
+            layout: Some(&vor_layout),
+            vertex: wgpu::VertexState {
+                module: &vor_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &vor_shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: TEX_FORMAT,
@@ -313,6 +572,14 @@ impl ScopeGpuResources {
             crt_bind_group_layout,
             params_buf,
             sampler,
+            harm_pipeline,
+            harm_params_buf,
+            harm_bind_group,
+            harm_bgl,
+            vor_pipeline,
+            vor_params_buf,
+            vor_bind_group,
+            vor_bgl,
         }
     }
 
@@ -335,7 +602,7 @@ impl ScopeGpuResources {
         (tex, view)
     }
 
-    fn make_bind_group(
+    fn make_crt_bind_group(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         view: &wgpu::TextureView,
@@ -362,13 +629,45 @@ impl ScopeGpuResources {
         })
     }
 
-    /// Recreate the offscreen texture and bind group when the panel size changes.
+    fn make_uniform_bgl(device: &wgpu::Device, label: &str) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some(label),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        })
+    }
+
+    fn make_uniform_bg(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        buf: &wgpu::Buffer,
+        label: &str,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buf.as_entire_binding(),
+            }],
+        })
+    }
+
+    /// Recreate the offscreen texture and CRT bind group when the panel size changes.
     fn resize(&mut self, device: &wgpu::Device, w: u32, h: u32) {
         let (tex, tex_view) = Self::make_texture(device, w, h);
         self.tex = tex;
         self.tex_view = tex_view;
         self.tex_size = (w, h);
-        self.crt_bind_group = Self::make_bind_group(
+        self.crt_bind_group = Self::make_crt_bind_group(
             device,
             &self.crt_bind_group_layout,
             &self.tex_view,
@@ -383,14 +682,14 @@ pub struct ScopeCallback {
     pub samples: Vec<f32>,
     pub x_scale: f32,
     pub y_scale: f32,
-    /// Physical pixel size of the scope canvas rect.
     pub viewport_size: (u32, u32),
+    pub viz_mode: VizMode,
+    pub harm_params: HarmParams,
+    pub vor_params: VorParams,
 }
 
 impl ScopeCallback {
     /// Map samples → triangle-strip ribbon vertices for the waveform pipeline.
-    /// Emits two vertices per sample (top + bottom of the ribbon) so the
-    /// TriangleStrip topology draws a continuous variable-width band.
     fn build_vertices(&self) -> Vec<[f32; 2]> {
         let n = ((self.samples.len() as f32 / self.x_scale) as usize)
             .clamp(2, self.samples.len())
@@ -398,7 +697,6 @@ impl ScopeCallback {
 
         let (w, h) = (self.viewport_size.0 as f32, self.viewport_size.1 as f32);
 
-        // Sample positions in pixel space (y: 0 = top, h = bottom)
         let pts: Vec<(f32, f32)> = self.samples[..n]
             .iter()
             .enumerate()
@@ -411,7 +709,6 @@ impl ScopeCallback {
 
         let mut verts = Vec::with_capacity(n * 2);
         for i in 0..n {
-            // Segment direction averaged over neighbours for smooth miter joins
             let (dx, dy) = if i == 0 {
                 (pts[1].0 - pts[0].0, pts[1].1 - pts[0].1)
             } else if i == n - 1 {
@@ -421,19 +718,14 @@ impl ScopeCallback {
             };
             let len = (dx * dx + dy * dy).sqrt().max(1e-6);
             let (ndx, ndy) = (dx / len, dy / len);
-            // Perpendicular to direction (rotated 90°)
             let (px, py) = (-ndy, ndx);
-
-            // Variable half-width: wide on flat segments, narrow on steep ones
             let steepness = ndy.abs();
-            let half_w = 3.0 - steepness * 1.8; // 3.0px flat → ~1.2px vertical
+            let half_w = 3.0 - steepness * 1.8;
 
-            // Top vertex (perpendicular +)
             let top = [
                 (pts[i].0 + px * half_w) / w * 2.0 - 1.0,
                 1.0 - (pts[i].1 + py * half_w) / h * 2.0,
             ];
-            // Bottom vertex (perpendicular -)
             let bot = [
                 (pts[i].0 - px * half_w) / w * 2.0 - 1.0,
                 1.0 - (pts[i].1 - py * half_w) / h * 2.0,
@@ -465,14 +757,7 @@ impl egui_wgpu::CallbackTrait for ScopeCallback {
             res.resize(device, w, h);
         }
 
-        // Upload waveform vertices
-        let verts = self.build_vertices();
-        if verts.len() < 2 {
-            return vec![];
-        }
-        queue.write_buffer(&res.vertex_buf, 0, bytemuck::cast_slice(&verts));
-
-        // Update CRT uniforms
+        // Update CRT uniforms (needed regardless of viz mode)
         queue.write_buffer(
             &res.params_buf,
             0,
@@ -482,27 +767,91 @@ impl egui_wgpu::CallbackTrait for ScopeCallback {
             }),
         );
 
-        // ── Render pass: waveform lines → offscreen texture ───────────────────
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("scope_waveform_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &res.tex_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&res.waveform_pipeline);
-            pass.set_vertex_buffer(0, res.vertex_buf.slice(..));
-            pass.draw(0..verts.len() as u32, 0..1);
+        match self.viz_mode {
+            VizMode::Scope => {
+                let verts = self.build_vertices();
+                if verts.len() < 2 {
+                    return vec![];
+                }
+                queue.write_buffer(&res.vertex_buf, 0, bytemuck::cast_slice(&verts));
+
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("scope_waveform_pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &res.tex_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&res.waveform_pipeline);
+                pass.set_vertex_buffer(0, res.vertex_buf.slice(..));
+                pass.draw(0..verts.len() as u32, 0..1);
+            }
+
+            VizMode::Harmonograph => {
+                queue.write_buffer(
+                    &res.harm_params_buf,
+                    0,
+                    bytemuck::bytes_of(&self.harm_params),
+                );
+
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("harm_pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &res.tex_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&res.harm_pipeline);
+                pass.set_bind_group(0, &res.harm_bind_group, &[]);
+                pass.draw(0..HARM_N_STEPS, 0..1);
+            }
+
+            VizMode::Voronoi => {
+                let vor = VorParams {
+                    tex_w: w as f32,
+                    tex_h: h as f32,
+                    ..self.vor_params
+                };
+                queue.write_buffer(&res.vor_params_buf, 0, bytemuck::bytes_of(&vor));
+
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("vor_pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &res.tex_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&res.vor_pipeline);
+                pass.set_bind_group(0, &res.vor_bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
         }
 
         vec![]

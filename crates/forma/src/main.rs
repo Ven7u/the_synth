@@ -229,6 +229,9 @@ pub(crate) struct SynthApp {
     pub(crate) scope_x_scale: f32,
     pub(crate) scope_y_scale: f32,
     pub(crate) show_voice_debug: bool,
+    pub(crate) viz_mode: ui::scope_wgpu::VizMode,
+    pub(crate) harm_phase: f64, // slow-drift animation phase for harmonograph
+    pub(crate) vor_time: f64,   // elapsed seconds for voronoi seed orbits
 
     // Patch system
     pub(crate) patch_name: String,
@@ -400,6 +403,9 @@ impl SynthApp {
             scope_x_scale: 1.0,
             scope_y_scale: 2.5,
             show_voice_debug: false,
+            viz_mode: ui::scope_wgpu::VizMode::Scope,
+            harm_phase: 0.0,
+            vor_time: 0.0,
             patch_name: "Init".into(),
             patch_library: default_patches(),
             patch_browser_open: false,
