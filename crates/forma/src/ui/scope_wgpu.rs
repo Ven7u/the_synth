@@ -21,14 +21,14 @@ pub struct HarmParams {
     pub phases: [f32; 4], // phase offsets p1..p4
     pub damping: f32,
     pub t_max: f32,
-    pub _pad: [f32; 2],
+    pub viewport: [f32; 2], // (width, height) px — needed for pixel-accurate ribbon width
 }
 
-// ── Voronoi uniform params (144 bytes = 8 × vec4 + 1 × vec4) ─────────────────
+// ── Voronoi uniform params (272 bytes = 16 × vec4 + 1 × vec4) ────────────────
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct VorParams {
-    pub seeds: [[f32; 4]; 8], // seeds[i].xy = UV position (0..1)
+    pub seeds: [[f32; 4]; 16], // seeds[i].xy = UV position (0..1)
     pub num_seeds: u32,
     pub beat_pulse: f32,
     pub tex_w: f32,
@@ -49,16 +49,22 @@ fn fs_main() -> @location(0) vec4<f32> {
 }
 "#;
 
-// ── WGSL: harmonograph line strip (parametric, GPU-computed) ──────────────────
+// ── WGSL: harmonograph triangle-strip ribbon (same style as waveform) ────────
 const HARMONOGRAPH_SHADER: &str = r#"
-const N_STEPS: u32 = 3000u;
+const N_STEPS: u32      = 3000u;
+const RIBBON_HALF_W: f32 = 3.0;   // half-width in pixels (matches waveform)
 
 struct HarmParams {
-    freqs:   vec4<f32>,
-    phases:  vec4<f32>,
-    damping: f32,
-    t_max:   f32,
-    _pad:    vec2<f32>,
+    freqs:    vec4<f32>,
+    phases:   vec4<f32>,
+    damping:  f32,
+    t_max:    f32,
+    viewport: vec2<f32>,  // (width, height) in pixels
+}
+
+struct VertOut {
+    @builtin(position) pos:   vec4<f32>,
+    @location(0)       alpha: f32,
 }
 
 @group(0) @binding(0) var<uniform> h: HarmParams;
@@ -71,15 +77,50 @@ fn harm_pos(t: f32) -> vec2<f32> {
 }
 
 @vertex
-fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
-    let t = f32(vi) / f32(N_STEPS - 1u) * h.t_max;
-    let p = harm_pos(t);
-    return vec4<f32>(p, 0.0, 1.0);
+fn vs_main(@builtin(vertex_index) vi: u32) -> VertOut {
+    let pt_idx = vi / 2u;
+    let side   = vi % 2u;
+
+    let dt = h.t_max / f32(N_STEPS - 1u);
+    let t  = f32(pt_idx) * dt;
+    let p0 = harm_pos(t);
+
+    // Central-difference tangent (forward/backward at endpoints)
+    var tangent: vec2<f32>;
+    if pt_idx == 0u {
+        tangent = harm_pos(dt) - p0;
+    } else if pt_idx >= N_STEPS - 1u {
+        tangent = p0 - harm_pos(t - dt);
+    } else {
+        tangent = harm_pos(t + dt) - harm_pos(t - dt);
+    }
+
+    // Work in pixel space so the ribbon width is truly pixel-accurate
+    let aspect   = h.viewport.x / h.viewport.y;
+    let tang_px  = vec2<f32>(tangent.x * aspect, tangent.y);
+    let tang_norm = normalize(tang_px + vec2<f32>(1e-6, 0.0));
+
+    // Perpendicular (rotated 90°)
+    let perp_px = vec2<f32>(-tang_norm.y, tang_norm.x);
+
+    // Variable half-width: wider on flat segments, narrower on steep (matches waveform)
+    let steepness  = abs(tang_norm.y);
+    let half_w_px  = RIBBON_HALF_W - steepness * 1.8;
+    let half_w_ndc = half_w_px * 2.0 / h.viewport.y;
+
+    // Back to NDC
+    let perp_ndc = vec2<f32>(perp_px.x / aspect, perp_px.y) * half_w_ndc;
+    let sign = select(-1.0, 1.0, side == 0u);
+
+    var out: VertOut;
+    out.pos   = vec4<f32>(p0 + perp_ndc * sign, 0.0, 1.0);
+    out.alpha = exp(-h.damping * t); // fade ribbon as pendulum decays
+    return out;
 }
 
 @fragment
-fn fs_main() -> @location(0) vec4<f32> {
-    return vec4<f32>(0.13, 1.0, 0.55, 1.0);
+fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(0.13, 1.0, 0.55, in.alpha);
 }
 "#;
 
@@ -91,7 +132,7 @@ struct VertOut {
 }
 
 struct VorParams {
-    seeds:      array<vec4<f32>, 8>,
+    seeds:      array<vec4<f32>, 16>,
     num_seeds:  u32,
     beat_pulse: f32,
     tex_w:      f32,
@@ -102,7 +143,6 @@ struct VorParams {
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> VertOut {
-    // Fullscreen triangle: NDC (-1,-1) → UV (0,1), top-left → (0,0)
     var p = array<vec2<f32>, 3>(
         vec2<f32>(-1.0, -1.0),
         vec2<f32>( 3.0, -1.0),
@@ -125,31 +165,33 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
 
-    // Aspect-corrected space: distances become equal in screen pixels
     let aspect = v.tex_w / v.tex_h;
     let p = vec2<f32>((in.uv.x - 0.5) * aspect, in.uv.y - 0.5);
+
+    // Silence: single seed → draw a radial glow dot
+    if v.num_seeds <= 1u {
+        let sp = vec2<f32>((v.seeds[0].x - 0.5) * aspect, v.seeds[0].y - 0.5);
+        let d  = length(p - sp);
+        let g  = smoothstep(0.06, 0.0, d);
+        return vec4<f32>(0.10 * g, 0.65 * g, 0.42 * g, 1.0);
+    }
 
     var d1 = 1e9;
     var d2 = 1e9;
 
-    for (var i = 0u; i < 8u; i++) {
+    for (var i = 0u; i < 16u; i++) {
         if i >= v.num_seeds { break; }
         let sp = vec2<f32>((v.seeds[i].x - 0.5) * aspect, v.seeds[i].y - 0.5);
         let d  = length(p - sp);
-        if d < d1 {
-            d2 = d1;
-            d1 = d;
-        } else if d < d2 {
-            d2 = d;
-        }
+        if d < d1 { d2 = d1; d1 = d; } else if d < d2 { d2 = d; }
     }
 
-    // Edge glow: bright where two cells meet
+    // Thinner edge, lower luminosity so overlapping cells stay readable
     let edge   = d2 - d1;
-    let edge_w = 0.025 + v.beat_pulse * 0.015;
-    let glow   = smoothstep(edge_w + 0.07, 0.0, edge);
+    let edge_w = 0.008 + v.beat_pulse * 0.004;
+    let glow   = smoothstep(edge_w + 0.010, 0.0, edge);
 
-    return vec4<f32>(0.13 * glow, 1.0 * glow, 0.55 * glow, 1.0);
+    return vec4<f32>(0.08 * glow, 0.52 * glow, 0.36 * glow, 1.0);
 }
 "#;
 
@@ -180,9 +222,9 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertOut {
 }
 
 struct Params {
-    resolution: vec2<f32>,
-    _pad0: f32,
-    _pad1: f32,
+    resolution:  vec2<f32>,
+    bloom_scale: f32,  // outer-halo multiplier: <1 = less bloom, >1 = more bloom
+    _pad:        f32,
 }
 
 @group(0) @binding(0) var t_scope:  texture_2d<f32>;
@@ -231,7 +273,7 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     outer    += textureSample(t_scope, s_scope, uv + vec2<f32>( r2, -r2)  * px).rgb * 0.08;
     outer    += textureSample(t_scope, s_scope, uv + vec2<f32>(-r2, -r2)  * px).rgb * 0.08;
 
-    var col = inner + outer * 0.85;
+    var col = inner + outer * (0.85 * p.bloom_scale);
 
     // ── Scanlines: sinusoidal brightness modulation per raster line ───────────
     let scan = sin(uv.y * p.resolution.y * 3.14159265) * 0.5 + 0.5;
@@ -250,7 +292,8 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct CrtParams {
     resolution: [f32; 2],
-    _pad: [f32; 2],
+    bloom_scale: f32,
+    _pad: f32,
 }
 
 // ── Persistent GPU resources (stored in CallbackResources across frames) ──────
@@ -306,7 +349,8 @@ impl ScopeGpuResources {
             label: Some("crt_params"),
             contents: bytemuck::bytes_of(&CrtParams {
                 resolution: [512.0, 256.0],
-                _pad: [0.0; 2],
+                bloom_scale: 1.0,
+                _pad: 0.0,
             }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -327,7 +371,7 @@ impl ScopeGpuResources {
                 phases: [0.0; 4],
                 damping: 0.025,
                 t_max: 400.0,
-                _pad: [0.0; 2],
+                viewport: [512.0, 256.0],
             }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -336,8 +380,8 @@ impl ScopeGpuResources {
         let vor_params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("vor_params"),
             contents: bytemuck::bytes_of(&VorParams {
-                seeds: [[0.0; 4]; 8],
-                num_seeds: 5,
+                seeds: [[0.0; 4]; 16],
+                num_seeds: 1,
                 beat_pulse: 0.0,
                 tex_w: 512.0,
                 tex_h: 256.0,
@@ -464,7 +508,7 @@ impl ScopeGpuResources {
                 compilation_options: Default::default(),
             },
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineStrip,
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
                 ..Default::default()
             },
             depth_stencil: None,
@@ -757,13 +801,19 @@ impl egui_wgpu::CallbackTrait for ScopeCallback {
             res.resize(device, w, h);
         }
 
-        // Update CRT uniforms (needed regardless of viz mode)
+        // Update CRT uniforms — bloom_scale varies per viz mode
+        let bloom_scale = match self.viz_mode {
+            VizMode::Scope => 1.0,
+            VizMode::Harmonograph => 2.8, // thin line needs a wide phosphor halo
+            VizMode::Voronoi => 0.2,      // filled areas already glow; keep edges crisp
+        };
         queue.write_buffer(
             &res.params_buf,
             0,
             bytemuck::bytes_of(&CrtParams {
                 resolution: [w as f32, h as f32],
-                _pad: [0.0; 2],
+                bloom_scale,
+                _pad: 0.0,
             }),
         );
 
@@ -821,7 +871,7 @@ impl egui_wgpu::CallbackTrait for ScopeCallback {
                 });
                 pass.set_pipeline(&res.harm_pipeline);
                 pass.set_bind_group(0, &res.harm_bind_group, &[]);
-                pass.draw(0..HARM_N_STEPS, 0..1);
+                pass.draw(0..HARM_N_STEPS * 2, 0..1); // 2 verts per point (ribbon)
             }
 
             VizMode::Voronoi => {

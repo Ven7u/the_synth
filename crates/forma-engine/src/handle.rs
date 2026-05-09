@@ -980,6 +980,12 @@ impl SynthEngineHandle {
         self.state.voice_gates.iter().map(|s| s.value()).collect()
     }
 
+    /// Snapshot every voice's current oscillator frequency in Hz.
+    /// Length is always `crate::audio::VOICE_COUNT`. Returns 0.0 for idle voices.
+    pub fn voice_freqs(&self) -> Vec<f32> {
+        self.state.voice_freqs.iter().map(|s| s.value()).collect()
+    }
+
     /// Current filter-envelope cursor for a voice. Same encoding as amp cursor.
     pub fn fenv_cursor(&self, voice: usize) -> f32 {
         self.state

@@ -237,37 +237,80 @@ impl SynthApp {
             ],
             damping: (0.08 - rms * 0.065).clamp(0.015, 0.08),
             t_max: 120.0 + rms * 380.0,
-            _pad: [0.0; 2],
+            viewport: [vp_w.max(1) as f32, vp_h.max(1) as f32],
         };
 
-        // ── Voronoi — 8 seeds always, one per frequency band ─────────────────
-        // Each seed lives on a circle; its radius grows when its band has energy.
-        // Result: always-visible edges that pulse and reshape with spectral content.
-        use std::f32::consts::TAU;
+        // ── Voronoi — pitch-driven radial clusters ────────────────────────────
+        // Seeds radiate from center in concentric rings, one ring per active voice.
+        // Pitch → ring radius (bass = far from center, treble = near center).
+        // Pitch → seed count on ring (treble = many, bass = few).
+        // → dense tessellation near center, sparse large cells at periphery.
+        // Envelope amplitude → how far the ring has spread from center.
+        // LFO depth → radial wobble of individual seeds.
+        // Silence → single seed at center = glowing dot.
         let t = self.vor_time as f32;
-        let mut seeds = [[0.0_f32; 4]; 8];
-        // Slow angular drift per seed (different rates = seeds don't clump together)
-        let drift = [
-            0.18 + self.osc_octave[0] as f32 * 0.025,
-            0.23 + self.osc_octave[1] as f32 * 0.025,
-            0.29 + self.osc_octave[2] as f32 * 0.025,
-            self.lfo_rate * 0.04 + 0.12,
-            self.lfo2_rate * 0.04 + 0.15,
-            0.17,
-            0.21,
-            0.26,
-        ];
-        for i in 0..N_SPEC {
-            let base_angle = TAU * i as f32 / N_SPEC as f32;
-            // Band energy pushes seed outward; still rests at 0.10 in silence (visible!)
-            let radius = 0.10 + spec_amp[i] * (0.12 + rms * 0.28);
-            let angle = base_angle + t * drift[i];
-            seeds[i][0] = 0.5 + radius * angle.cos();
-            seeds[i][1] = 0.5 + radius * angle.sin();
+        let mut seeds = [[0.0_f32; 4]; 16];
+        let mut n_seeds: usize = 0;
+
+        let freqs = self.engine.voice_freqs();
+        let cursors = self.engine.amp_cursors();
+        // cursor encoding: 0=idle, 1.x=attack (frac=progress), 2.x=decay,
+        // 3.0=sustain (exact integer — fract() would give 0!), 4.x=release
+        let env_amp = |cursor: f32| -> f32 {
+            match cursor as u8 {
+                0 => 0.0,
+                1 => cursor.fract(),                  // attack: 0 → 1
+                2 => 1.0 - cursor.fract() * 0.15,     // decay: 1 → 0.85
+                3 => 0.85,                            // sustain: held
+                4 => (1.0 - cursor.fract()).max(0.0), // release: 1 → 0
+                _ => 0.0,
+            }
+        };
+        let lfo_wobble = (self.lfo_depth * 0.14 + self.lfo2_depth * 0.09).clamp(0.0, 0.28);
+
+        for vi in 0..freqs.len() {
+            let freq = freqs[vi];
+            let cursor = cursors[vi];
+            let amp = env_amp(cursor);
+            if freq < 20.0 || amp < 0.02 {
+                continue;
+            }
+
+            // pitch_t: 0 = A1 (55 Hz) = bass, 1 = A6 (1760 Hz) = treble
+            let pitch_t = ((freq / 55.0).log2() / 5.0).clamp(0.0, 1.0);
+
+            // Bass → far ring, treble → near ring; all scale with envelope amplitude
+            let max_r = 0.10 + (1.0 - pitch_t) * 0.34; // bass 0.44, treble 0.10
+            let ring_r = max_r * amp;
+
+            // Treble = many seeds (dense small cells), bass = few (large cells)
+            let n_voice = (3.0 + pitch_t * 9.0).round() as usize; // 3 – 12
+
+            // Angular offset per voice so rings from different voices don't fully overlap
+            let angle_off = vi as f32 * std::f32::consts::TAU / freqs.len() as f32 * 0.37;
+
+            for si in 0..n_voice {
+                if n_seeds >= 16 {
+                    break;
+                }
+                let base_angle = si as f32 * std::f32::consts::TAU / n_voice as f32 + angle_off;
+                let wobble_r = lfo_wobble
+                    * ring_r
+                    * (self.lfo_rate * t * 0.4 + base_angle + vi as f32 * 1.3).sin();
+                let r = (ring_r + wobble_r).max(0.0);
+                seeds[n_seeds][0] = (0.5 + r * base_angle.cos()).clamp(0.02, 0.98);
+                seeds[n_seeds][1] = (0.5 + r * base_angle.sin()).clamp(0.02, 0.98);
+                n_seeds += 1;
+            }
+        }
+
+        if n_seeds == 0 {
+            seeds[0] = [0.5, 0.5, 0.0, 0.0];
+            n_seeds = 1;
         }
         let vor_params = VorParams {
             seeds,
-            num_seeds: N_SPEC as u32, // always 8 — edges always visible
+            num_seeds: n_seeds as u32,
             beat_pulse: rms,
             tex_w: vp_w.max(1) as f32,
             tex_h: vp_h.max(1) as f32,
