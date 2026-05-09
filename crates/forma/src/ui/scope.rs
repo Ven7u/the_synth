@@ -276,8 +276,8 @@ impl SynthApp {
                 continue;
             }
 
-            // pitch_t: 0 = A1 (55 Hz) = bass, 1 = A6 (1760 Hz) = treble
-            let pitch_t = ((freq / 55.0).log2() / 5.0).clamp(0.0, 1.0);
+            // pitch_t: 0 = A0 (27.5 Hz) = bass, 1 = A8 (7040 Hz) = treble (8 octaves)
+            let pitch_t = ((freq / 27.5).log2() / 8.0).clamp(0.0, 1.0);
 
             // Bass → far ring, treble → near ring; all scale with envelope amplitude
             let max_r = 0.10 + (1.0 - pitch_t) * 0.34; // bass 0.44, treble 0.10
