@@ -18,8 +18,44 @@
 //! 4. Same pattern for `ScaleWalker` (no input, just tick).
 
 use fundsp::prelude32::{shared, Shared};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
+
+// ---------------------------------------------------------------------------
+// Euclidean rhythm generator
+// ---------------------------------------------------------------------------
+
+/// Generate a Euclidean rhythm bitmask: distribute `k` hits across `n` steps
+/// as evenly as possible (Bjorklund / Toussaint algorithm).
+/// `rotation` shifts the pattern forward by that many steps.
+/// Bit `i` of the result = step `i` is active.
+pub fn euclidean_pattern(k: usize, n: usize, rotation: usize) -> u32 {
+    if n == 0 || n > 32 {
+        return 0;
+    }
+    let k = k.min(n);
+    let rotation = rotation % n;
+    let mut pattern = 0u32;
+    for i in 0..n {
+        let base_i = (i + n - rotation) % n;
+        if (base_i * k) % n < k {
+            pattern |= 1 << i;
+        }
+    }
+    pattern
+}
+
+/// Named rhythmic presets: (label, k, n, rotation).
+/// All are musically useful as arp gate patterns.
+pub const RING_PRESETS: &[(&str, u8, u8, u8)] = &[
+    ("Full", 8, 8, 0),      // all steps active — normal arp
+    ("Tresillo", 3, 8, 0),  // E(3,8) — Afro-Cuban syncopation
+    ("Clave", 3, 8, 1),     // E(3,8) rotated — habanera feel
+    ("Cinquillo", 5, 8, 0), // E(5,8) — denser Cuban pattern
+    ("Bossa", 5, 16, 0),    // E(5,16) — bossa nova phrasing
+    ("Sparse", 3, 16, 0),   // E(3,16) — wide spacious gaps
+    ("Offbeat", 4, 8, 1),   // E(4,8) rotated — syncopated push
+];
 
 // ---------------------------------------------------------------------------
 // Simple RT-safe LCG — no std RNG, no heap
@@ -58,6 +94,9 @@ pub enum ArpMode {
     UpDown = 2,
     Random = 3,
     AsPlayed = 4,
+    ThirdsWalk = 5, // +2 −1 delta: 1,3,2,4,3,5,...
+    Alberti = 6,    // low, high, mid, high loop
+    Pendulum = 7,   // walking idx alternates with highest: 1,N,2,N,3,N,...
 }
 
 impl ArpMode {
@@ -67,6 +106,9 @@ impl ArpMode {
             2 => Self::UpDown,
             3 => Self::Random,
             4 => Self::AsPlayed,
+            5 => Self::ThirdsWalk,
+            6 => Self::Alberti,
+            7 => Self::Pendulum,
             _ => Self::Up,
         }
     }
@@ -76,8 +118,13 @@ impl ArpMode {
         Self::UpDown,
         Self::Random,
         Self::AsPlayed,
+        Self::ThirdsWalk,
+        Self::Alberti,
+        Self::Pendulum,
     ];
-    pub const LABELS: &'static [&'static str] = &["Up", "Down", "UpDn", "Rnd", "Played"];
+    pub const LABELS: &'static [&'static str] = &[
+        "Up", "Down", "UpDn", "Rnd", "Played", "3rds", "Alberti", "Pendulum",
+    ];
 }
 
 #[repr(u8)]
@@ -221,6 +268,11 @@ pub struct ArpShared {
     pub gate: Shared,                // 0.05-1.0  (fraction of step note is held)
     pub hold: Arc<AtomicBool>,       // latch: keep chord after keys released
     pub bpm: Shared,                 // 20-300
+    // Ring gate sequencer
+    pub ring_enabled: Arc<AtomicBool>,
+    pub ring_steps: Arc<AtomicU8>,    // N: 2-16
+    pub ring_pattern: Arc<AtomicU32>, // bitmask: bit i = step i active
+    pub ring_pos: Arc<AtomicU8>,      // current step (written by audio, read by UI)
 }
 
 impl ArpShared {
@@ -233,6 +285,10 @@ impl ArpShared {
             gate: shared(0.7),
             hold: Arc::new(AtomicBool::new(false)),
             bpm: shared(120.0),
+            ring_enabled: Arc::new(AtomicBool::new(false)),
+            ring_steps: Arc::new(AtomicU8::new(8)),
+            ring_pattern: Arc::new(AtomicU32::new(0xFF)),
+            ring_pos: Arc::new(AtomicU8::new(0)),
         }
     }
 }
@@ -260,6 +316,13 @@ pub struct ArpState {
     gate_fired: bool,
     direction: i8, // +1 or -1, for UpDown mode
 
+    // Ring gate sequencer position (independent cycle from note sequence)
+    ring_step: usize,
+
+    // Pattern-mode state (ThirdsWalk, Alberti, Pendulum)
+    pattern_pos: usize,  // position within the mode's formula cycle
+    pattern_base: usize, // ThirdsWalk: accumulated absolute index
+
     rng: Lcg,
     prev_enabled: bool,
     restart_pending: bool,
@@ -276,6 +339,9 @@ impl ArpState {
             phase: 0.0,
             gate_fired: false,
             direction: 1,
+            ring_step: 0,
+            pattern_pos: 0,
+            pattern_base: 0,
             rng: Lcg::new(0xDEAD_BEEF_1234_5678),
             prev_enabled: false,
             restart_pending: false,
@@ -295,11 +361,16 @@ impl ArpState {
         self.held[self.held_count] = pitch;
         self.held_count += 1;
         self.rebuild_sorted();
-        // First note of a fresh chord: rewind so step 0 plays index 0
-        // (lowest in Up mode) instead of advancing past it.
+        // First note of a fresh chord: rewind and force an immediate step boundary
+        // so the first arp note fires on the very next audio buffer, not after a
+        // full step delay.
         if was_empty {
             self.step_idx = 0;
             self.direction = 1;
+            self.pattern_pos = 0;
+            self.pattern_base = 0;
+            self.phase = 1.0; // trigger step boundary on next tick
+            self.gate_fired = false;
             self.restart_pending = true;
         }
     }
@@ -347,6 +418,9 @@ impl ArpState {
     pub fn restart(&mut self) -> Option<u8> {
         let off = self.current.take();
         self.step_idx = 0;
+        self.ring_step = 0;
+        self.pattern_pos = 0;
+        self.pattern_base = 0;
         self.phase = 1.0; // force immediate retrigger on next tick
         self.gate_fired = false;
         self.direction = 1;
@@ -365,6 +439,9 @@ impl ArpState {
             let off = self.current.take();
             self.held_count = 0;
             self.step_idx = 0;
+            self.ring_step = 0;
+            self.pattern_pos = 0;
+            self.pattern_base = 0;
             self.phase = 0.0;
             self.gate_fired = false;
             self.direction = 1;
@@ -379,6 +456,9 @@ impl ArpState {
         // Transition: just enabled -> restart from a clean step boundary.
         if enabled && !self.prev_enabled {
             self.step_idx = 0;
+            self.ring_step = 0;
+            self.pattern_pos = 0;
+            self.pattern_base = 0;
             self.phase = 1.0; // force immediate first step note_on on this tick
             self.gate_fired = false;
             self.direction = 1;
@@ -429,14 +509,33 @@ impl ArpState {
             if self.held_count > 0 {
                 let mode = ArpMode::from_u8(cfg.mode.load(Ordering::Relaxed));
                 let octave_range = cfg.octave_range.load(Ordering::Relaxed).clamp(1, 4) as usize;
-                let note = if self.restart_pending {
-                    self.restart_pending = false;
-                    self.note_at_index(mode, octave_range)
+
+                // Ring gate: check if this step should fire a note.
+                // ring_step advances every clock step; note sequence only advances on hits.
+                let ring_on = cfg.ring_enabled.load(Ordering::Relaxed);
+                let fire = if ring_on {
+                    let n = (cfg.ring_steps.load(Ordering::Relaxed) as usize).clamp(2, 16);
+                    let pattern = cfg.ring_pattern.load(Ordering::Relaxed);
+                    let idx = self.ring_step % n;
+                    let active = (pattern >> idx) & 1 == 1;
+                    cfg.ring_pos.store(idx as u8, Ordering::Relaxed);
+                    self.ring_step = idx + 1;
+                    active
                 } else {
-                    self.advance(mode, octave_range)
+                    true
                 };
-                self.current = Some(note);
-                ev.note_on = Some(note);
+
+                if fire {
+                    let note = if self.restart_pending {
+                        self.restart_pending = false;
+                        self.note_at_index(mode, octave_range)
+                    } else {
+                        self.advance(mode, octave_range)
+                    };
+                    self.current = Some(note);
+                    ev.note_on = Some(note);
+                }
+                // On a rest step: note sequence doesn't advance, restart_pending stays set.
             }
         }
 
@@ -449,6 +548,13 @@ impl ArpState {
     }
 
     fn note_at_index(&mut self, mode: ArpMode, octave_range: usize) -> u8 {
+        // Pattern modes always start at the first note (pattern_pos/base reset to 0)
+        match mode {
+            ArpMode::ThirdsWalk | ArpMode::Alberti | ArpMode::Pendulum => {
+                return self.held_sorted[0];
+            }
+            _ => {}
+        }
         let total = (self.held_count * octave_range).max(1);
         self.step_idx %= total;
         let octave = self.step_idx / self.held_count;
@@ -461,7 +567,50 @@ impl ArpState {
     }
 
     fn advance(&mut self, mode: ArpMode, octave_range: usize) -> u8 {
-        let total = (self.held_count * octave_range).max(1);
+        let n = self.held_count.max(1);
+        let total = (n * octave_range).max(1);
+
+        match mode {
+            ArpMode::ThirdsWalk => {
+                // Delta pattern [+2, −1] applied to an absolute index mod total.
+                // Produces: 1,3,2,4,3,5,... across the note set.
+                const DELTAS: [i32; 2] = [2, -1];
+                let delta = DELTAS[self.pattern_pos % DELTAS.len()];
+                self.pattern_pos += 1;
+                self.pattern_base =
+                    ((self.pattern_base as i32 + delta).rem_euclid(total as i32)) as usize;
+                let octave = self.pattern_base / n;
+                let note_idx = self.pattern_base % n;
+                return self.held_sorted[note_idx].saturating_add(octave as u8 * 12);
+            }
+            ArpMode::Alberti => {
+                // 4-step cycle: lowest, highest, middle, highest.
+                self.pattern_pos += 1;
+                let idx = match self.pattern_pos % 4 {
+                    0 => 0,
+                    1 => total - 1,
+                    2 => total / 2,
+                    _ => total - 1,
+                };
+                let octave = idx / n;
+                let note_idx = idx % n;
+                return self.held_sorted[note_idx].saturating_add(octave as u8 * 12);
+            }
+            ArpMode::Pendulum => {
+                // Even steps: walk forward through indices.
+                // Odd steps: always play the highest note (pivot).
+                self.pattern_pos += 1;
+                let idx = if self.pattern_pos % 2 == 0 {
+                    (self.pattern_pos / 2) % total
+                } else {
+                    total - 1
+                };
+                let octave = idx / n;
+                let note_idx = idx % n;
+                return self.held_sorted[note_idx].saturating_add(octave as u8 * 12);
+            }
+            _ => {}
+        }
 
         self.step_idx = match mode {
             ArpMode::Up | ArpMode::AsPlayed => (self.step_idx + 1) % total,
@@ -489,6 +638,7 @@ impl ArpState {
                 }
             }
             ArpMode::Random => self.rng.next_usize(total),
+            _ => self.step_idx, // unreachable — pattern modes returned above
         };
 
         self.note_at_index(mode, octave_range)

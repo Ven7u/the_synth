@@ -827,6 +827,33 @@ impl SynthEngineHandle {
         self.state.arp.bpm.value()
     }
 
+    // -- Arp ring gate sequencer --
+
+    pub fn set_arp_ring_enabled(&self, on: bool) {
+        self.state.arp.ring_enabled.store(on, Ordering::Relaxed);
+    }
+    pub fn arp_ring_enabled(&self) -> bool {
+        self.state.arp.ring_enabled.load(Ordering::Relaxed)
+    }
+    pub fn set_arp_ring_steps(&self, n: u8) {
+        self.state
+            .arp
+            .ring_steps
+            .store(n.clamp(2, 16), Ordering::Relaxed);
+    }
+    pub fn arp_ring_steps(&self) -> u8 {
+        self.state.arp.ring_steps.load(Ordering::Relaxed)
+    }
+    pub fn set_arp_ring_pattern(&self, p: u32) {
+        self.state.arp.ring_pattern.store(p, Ordering::Relaxed);
+    }
+    pub fn arp_ring_pattern(&self) -> u32 {
+        self.state.arp.ring_pattern.load(Ordering::Relaxed)
+    }
+    pub fn arp_ring_pos(&self) -> u8 {
+        self.state.arp.ring_pos.load(Ordering::Relaxed)
+    }
+
     // -- Scale walker --
 
     pub fn set_walker_enabled(&self, on: bool) {
@@ -1396,6 +1423,11 @@ impl SynthEngineHandle {
         self.set_gate_lfo2_length(p.gate_lfo2_length);
         self.set_gate_lfo2_division(p.gate_lfo2_division as u8);
 
+        // -- Arp ring sequencer --
+        self.set_arp_ring_enabled(p.arp_ring_enabled);
+        self.set_arp_ring_steps(p.arp_ring_steps);
+        self.set_arp_ring_pattern(p.arp_ring_pattern);
+
         // -- Amp envelope + glide + master --
         self.set_amp_attack(p.amp_adsr[0]);
         self.set_amp_decay(p.amp_adsr[1]);
@@ -1628,6 +1660,13 @@ impl SynthEngineHandle {
             fx_crystal_feedback: self.crystal_feedback(),
             fx_crystal_delay_ms: self.crystal_delay(),
             fx_crystal_pitch: self.crystal_pitch(),
+
+            arp_ring_enabled: self.arp_ring_enabled(),
+            arp_ring_steps: self.arp_ring_steps(),
+            arp_ring_pattern: self.arp_ring_pattern(),
+
+            note_seq_div: 1,  // 1/8 note default; UI overrides on save
+            chord_seq_div: 4, // 1 bar default; UI overrides on save
         }
     }
 }

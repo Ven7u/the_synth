@@ -217,6 +217,20 @@ pub struct Patch {
     pub fx_crystal_delay_ms: f32,
     #[serde(default = "default_crystal_pitch")]
     pub fx_crystal_pitch: u8,
+
+    // Arp ring gate sequencer
+    #[serde(default)]
+    pub arp_ring_enabled: bool,
+    #[serde(default = "default_arp_ring_steps")]
+    pub arp_ring_steps: u8,
+    #[serde(default = "default_arp_ring_pattern")]
+    pub arp_ring_pattern: u32,
+
+    // Per-sequencer clock division (index into SeqClockDiv::LABELS)
+    #[serde(default = "default_note_seq_div")]
+    pub note_seq_div: u8,
+    #[serde(default = "default_chord_seq_div")]
+    pub chord_seq_div: u8,
 }
 
 fn default_filter_drive() -> f32 {
@@ -318,4 +332,16 @@ fn default_crystal_delay() -> f32 {
 }
 fn default_crystal_pitch() -> u8 {
     2
+}
+fn default_arp_ring_steps() -> u8 {
+    8
+}
+fn default_arp_ring_pattern() -> u32 {
+    0xFF // all 8 steps active
+}
+fn default_note_seq_div() -> u8 {
+    1 // 1/8 note
+}
+fn default_chord_seq_div() -> u8 {
+    4 // 1 bar
 }

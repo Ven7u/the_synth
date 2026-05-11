@@ -409,6 +409,42 @@ impl SeqMode {
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+// ---------------------------------------------------------------------------
+// Per-sequencer clock division
+// ---------------------------------------------------------------------------
+
+pub struct SeqClockDiv;
+
+impl SeqClockDiv {
+    /// Human-readable labels, index matches `beats_per_step`.
+    pub const LABELS: &'static [&'static str] = &[
+        "1/16", "1/8", "1/4", "1/2", "1", "2", "4", "8", "16", "32", "64",
+    ];
+
+    /// Quarter-note beats per sequencer step for division index `idx`.
+    pub fn beats_per_step(idx: u8) -> f64 {
+        match idx {
+            0 => 0.25,
+            1 => 0.5,
+            2 => 1.0,
+            3 => 2.0,
+            4 => 4.0,
+            5 => 8.0,
+            6 => 16.0,
+            7 => 32.0,
+            8 => 64.0,
+            9 => 128.0,
+            10 => 256.0,
+            _ => 0.5,
+        }
+    }
+
+    pub fn step_dur_ms(idx: u8, bpm: u32) -> u64 {
+        let beats = Self::beats_per_step(idx);
+        ((beats * 60_000.0) / bpm.max(1) as f64).round() as u64
+    }
+}
+
 pub struct SequencerHandle {
     /// UI writes, thread reads: is the sequencer running?
     pub playing: Arc<AtomicBool>,
@@ -428,6 +464,10 @@ pub struct SequencerHandle {
     pub arp_restart: Arc<AtomicBool>,
     /// UI sets true, thread swaps to false and fires WalkerRestart at bar boundary.
     pub walker_restart: Arc<AtomicBool>,
+    /// Clock division index for NoteSeq (index into SeqClockDiv::LABELS). Default: 1 (1/8 note).
+    pub note_div: Arc<AtomicU8>,
+    /// Clock division index for ChordSeq (index into SeqClockDiv::LABELS). Default: 4 (1 bar).
+    pub chord_div: Arc<AtomicU8>,
 }
 
 impl SequencerHandle {
@@ -442,6 +482,8 @@ impl SequencerHandle {
             current_step: Arc::new(AtomicUsize::new(0)),
             arp_restart: Arc::new(AtomicBool::new(false)),
             walker_restart: Arc::new(AtomicBool::new(false)),
+            note_div: Arc::new(AtomicU8::new(1)),
+            chord_div: Arc::new(AtomicU8::new(4)),
         }
     }
 }
@@ -481,17 +523,23 @@ pub fn spawn_sequencer(
                 }
 
                 if !was_playing {
-                    // First tick fires after one step_dur, same as the old UI-frame logic.
-                    let bpm = handle.bpm.load(Ordering::Relaxed).max(1);
-                    let step_dur = Duration::from_millis(60_000 / bpm as u64 / 2);
-                    next_tick = Instant::now() + step_dur;
+                    // Fire the first step immediately.
+                    next_tick = Instant::now();
                     was_playing = true;
                 }
 
-                // Self-correcting sleep until the next scheduled tick.
-                let now = Instant::now();
-                if next_tick > now {
-                    std::thread::sleep(next_tick - now);
+                // Capped sleep: wake every 50 ms so stopping is responsive even with
+                // very long step durations (e.g. 64 bars = ~128 s at 120 BPM).
+                loop {
+                    let now = Instant::now();
+                    if now >= next_tick {
+                        break;
+                    }
+                    let remaining = next_tick - now;
+                    std::thread::sleep(remaining.min(Duration::from_millis(50)));
+                    if !handle.playing.load(Ordering::Relaxed) {
+                        break;
+                    }
                 }
 
                 // Re-check playing after sleep (user may have stopped).
@@ -500,7 +548,14 @@ pub fn spawn_sequencer(
                 }
 
                 let bpm = handle.bpm.load(Ordering::Relaxed).max(1);
-                let step_dur = Duration::from_millis(60_000 / bpm as u64 / 2);
+                let mode_now = SeqMode::from_u8(handle.mode.load(Ordering::Relaxed));
+                let div_idx = match mode_now {
+                    SeqMode::NoteSeq => handle.note_div.load(Ordering::Relaxed),
+                    SeqMode::ChordSeq => handle.chord_div.load(Ordering::Relaxed),
+                    SeqMode::ChordKb => 1,
+                };
+                let step_ms = SeqClockDiv::step_dur_ms(div_idx, bpm).max(1);
+                let step_dur = Duration::from_millis(step_ms);
                 next_tick += step_dur;
 
                 // NoteOff previous notes.
@@ -511,7 +566,7 @@ pub fn spawn_sequencer(
                 // Advance step. On the very first tick after Play we play the
                 // stored current_step as-is so step 0 isn't skipped; subsequent
                 // ticks advance by one.
-                let mode = SeqMode::from_u8(handle.mode.load(Ordering::Relaxed));
+                let mode = mode_now;
                 let seq_length = match mode {
                     SeqMode::NoteSeq => handle.note_seq.lock().map(|g| g.length).unwrap_or(8),
                     SeqMode::ChordSeq => handle.chord_seq.lock().map(|g| g.length).unwrap_or(8),

@@ -221,8 +221,18 @@ pub(crate) struct SynthApp {
     // Sequencer — chord keyboard (live, not threaded)
     pub(crate) chord_kb: ChordKbState,
 
-    // Arp + walker state lives in the engine (`handle.arp_*()`, `handle.walker_*()`).
-    // No UI mirror needed.
+    // Arp ring gate sequencer — mirrored here for patch save/load and UI
+    pub(crate) arp_ring_enabled: bool,
+    pub(crate) arp_ring_steps: u8,
+    pub(crate) arp_ring_pattern: u32,
+    pub(crate) arp_ring_k: u8, // euclidean K input (UI-only, not persisted to patch)
+
+    // Per-sequencer clock division mirrors (index into SeqClockDiv::LABELS)
+    pub(crate) note_seq_div: u8,
+    pub(crate) chord_seq_div: u8,
+
+    /// When bar-quantize is on, Play defers start until the next bar boundary.
+    pub(crate) seq_pending_start: bool,
 
     // Oscilloscope
     pub(crate) scope_fullscreen: bool,
@@ -397,6 +407,13 @@ impl SynthApp {
             arp_sync: true,
             walker_sync: true,
             seq_sync: true,
+            arp_ring_enabled: false,
+            arp_ring_steps: 8,
+            arp_ring_pattern: 0xFF,
+            arp_ring_k: 3,
+            note_seq_div: 1,  // 1/8 note
+            chord_seq_div: 4, // 1 bar
+            seq_pending_start: false,
             seq,
             chord_kb: ChordKbState::new(),
             scope_fullscreen: false,
@@ -860,6 +877,11 @@ impl SynthApp {
         p.gate_lfo2_pattern = self.lfo2_gate_pattern;
         p.gate_lfo2_length = self.lfo2_gate_length;
         p.gate_lfo2_division = self.lfo2_gate_division;
+        p.arp_ring_enabled = self.arp_ring_enabled;
+        p.arp_ring_steps = self.arp_ring_steps;
+        p.arp_ring_pattern = self.arp_ring_pattern;
+        p.note_seq_div = self.note_seq_div;
+        p.chord_seq_div = self.chord_seq_div;
         p.filter_enabled = self.filter_enabled;
         p.filter_cutoff = self.filter_cutoff;
         p.filter_q = self.filter_q;
@@ -966,6 +988,16 @@ impl SynthApp {
         self.lfo2_gate_pattern = p.gate_lfo2_pattern;
         self.lfo2_gate_length = p.gate_lfo2_length;
         self.lfo2_gate_division = p.gate_lfo2_division;
+        self.arp_ring_enabled = p.arp_ring_enabled;
+        self.arp_ring_steps = p.arp_ring_steps;
+        self.arp_ring_pattern = p.arp_ring_pattern;
+        self.engine.set_arp_ring_enabled(p.arp_ring_enabled);
+        self.engine.set_arp_ring_steps(p.arp_ring_steps);
+        self.engine.set_arp_ring_pattern(p.arp_ring_pattern);
+        self.note_seq_div = p.note_seq_div;
+        self.chord_seq_div = p.chord_seq_div;
+        self.seq.note_div.store(p.note_seq_div, Ordering::Relaxed);
+        self.seq.chord_div.store(p.chord_seq_div, Ordering::Relaxed);
         self.filter_enabled = p.filter_enabled;
         self.filter_cutoff = p.filter_cutoff;
         self.filter_q = p.filter_q;

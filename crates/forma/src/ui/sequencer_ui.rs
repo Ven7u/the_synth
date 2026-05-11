@@ -1,8 +1,11 @@
-use crate::sequencer::{chord_name, chord_quality, ScaleType, SeqMode, DEGREE_LABELS, NOTE_NAMES};
+use crate::sequencer::{
+    chord_name, chord_quality, ScaleType, SeqClockDiv, SeqMode, DEGREE_LABELS, NOTE_NAMES,
+};
 use crate::SynthApp;
 use eframe::egui;
 use egui::{Color32, CornerRadius, Sense, Stroke, StrokeKind, Vec2};
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 const SEQ_CHROMATIC: &[u8] = &[
     36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
@@ -45,26 +48,45 @@ impl SynthApp {
 
             // Play/Stop
             {
-                let btn = if seq_playing { "■ Stop" } else { "▶ Play" };
-                if ui
-                    .button(btn)
-                    .on_hover_text("Start or stop the sequencer.")
-                    .clicked()
-                {
-                    let new_playing = !seq_playing;
-                    self.seq.playing.store(new_playing, Ordering::Relaxed);
-                    if new_playing {
-                        let bar_quantize = self.seq.bar_quantize.load(Ordering::Relaxed);
-                        let current_step = self.seq.current_step.load(Ordering::Relaxed);
-                        if bar_quantize && current_step == 0 {
-                            if self.seq.arp_restart.load(Ordering::Relaxed) {
-                                self.engine.arp_restart();
-                                self.seq.arp_restart.store(false, Ordering::Relaxed);
-                            }
-                            if self.seq.walker_restart.load(Ordering::Relaxed) {
-                                self.engine.walker_restart();
-                                self.seq.walker_restart.store(false, Ordering::Relaxed);
-                            }
+                let bar_quantize = self.seq.bar_quantize.load(Ordering::Relaxed);
+                let btn = if seq_playing {
+                    "■ Stop"
+                } else if self.seq_pending_start {
+                    "… Bar"
+                } else {
+                    "▶ Play"
+                };
+                let tip = if self.seq_pending_start {
+                    "Waiting for the next bar boundary — click to cancel."
+                } else if seq_playing {
+                    "Stop the sequencer."
+                } else if bar_quantize {
+                    "Start the sequencer on the next bar boundary (bar-quantize is on)."
+                } else {
+                    "Start the sequencer immediately."
+                };
+                if ui.button(btn).on_hover_text(tip).clicked() {
+                    if seq_playing || self.seq_pending_start {
+                        // Stop: reset to step 0 so next Play starts from the beginning.
+                        self.seq.playing.store(false, Ordering::Relaxed);
+                        self.seq.current_step.store(0, Ordering::Relaxed);
+                        self.seq_pending_start = false;
+                    } else if bar_quantize {
+                        // Defer: sequencer fires on next bar boundary detected in tick_metronome.
+                        self.seq_pending_start = true;
+                        self.seq.current_step.store(0, Ordering::Relaxed);
+                    } else {
+                        // Start from step 0, align metronome to beat 1.
+                        self.seq.current_step.store(0, Ordering::Relaxed);
+                        self.seq.playing.store(true, Ordering::Relaxed);
+                        self.metro_reset();
+                        if self.seq.arp_restart.load(Ordering::Relaxed) {
+                            self.engine.arp_restart();
+                            self.seq.arp_restart.store(false, Ordering::Relaxed);
+                        }
+                        if self.seq.walker_restart.load(Ordering::Relaxed) {
+                            self.engine.walker_restart();
+                            self.seq.walker_restart.store(false, Ordering::Relaxed);
                         }
                     }
                 }
@@ -132,6 +154,43 @@ impl SynthApp {
                         let current = self.seq.current_step.load(Ordering::Relaxed);
                         if current >= len {
                             self.seq.current_step.store(0, Ordering::Relaxed);
+                        }
+                    }
+                }
+
+                // Clock division selector
+                ui.label("Div:")
+                    .on_hover_text("Duration of each step. Short values = fast sequencing; long values = slow chord changes.");
+                let (cur_div, div_atomic) = match seq_mode {
+                    SeqMode::NoteSeq => (
+                        self.seq.note_div.load(Ordering::Relaxed),
+                        Arc::clone(&self.seq.note_div),
+                    ),
+                    SeqMode::ChordSeq => (
+                        self.seq.chord_div.load(Ordering::Relaxed),
+                        Arc::clone(&self.seq.chord_div),
+                    ),
+                    SeqMode::ChordKb => unreachable!(),
+                };
+                for (i, &label) in SeqClockDiv::LABELS.iter().enumerate() {
+                    let active = cur_div == i as u8;
+                    let col = if active {
+                        self.theme.c(&self.theme.accent_dim)
+                    } else {
+                        Color32::GRAY
+                    };
+                    if ui
+                        .button(egui::RichText::new(label).color(col))
+                        .on_hover_text(format!("Step duration: {} note/bar(s).", label))
+                        .clicked()
+                        && !active
+                    {
+                        div_atomic.store(i as u8, Ordering::Relaxed);
+                        // Also persist to SynthApp mirror
+                        match seq_mode {
+                            SeqMode::NoteSeq => self.note_seq_div = i as u8,
+                            SeqMode::ChordSeq => self.chord_seq_div = i as u8,
+                            SeqMode::ChordKb => {}
                         }
                     }
                 }

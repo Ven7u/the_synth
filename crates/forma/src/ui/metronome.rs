@@ -3,19 +3,31 @@ use eframe::egui;
 use egui::{Color32, Pos2, Rect, Rounding, Sense, Vec2};
 
 /// Advance the metronome phase by wall-clock delta each frame.
-/// Must be called once per frame while the metronome is enabled.
+/// Must be called once per frame — also drives bar-quantized sequencer start.
 impl SynthApp {
     pub fn tick_metronome(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|i| i.time);
-        if self.metro_enabled {
-            let dt = (now - self.metro_last_time).max(0.0).min(0.5);
-            // beats per second depends on BPM and beat unit.
-            // 4/4 at 120 BPM: 2 beats/s. 6/8 at 120 BPM: 4 eighth-beats/s.
+        let dt = (now - self.metro_last_time).max(0.0).min(0.5);
+        self.metro_last_time = now;
+
+        // Advance phase whenever the metronome is running or a quantized start is pending.
+        if self.metro_enabled || self.seq_pending_start {
+            // beats per second: 4/4 at 120 BPM → 2 beats/s; 6/8 → 4 eighth-beats/s.
             let bps = self.global_bpm as f64 / 60.0 * (4.0 / self.metro_denom as f64);
+            let prev_phase = self.metro_phase;
             self.metro_phase = (self.metro_phase + dt * bps) % self.metro_beats as f64;
+
+            // Fire the pending sequencer start on a bar boundary (phase wrap).
+            if self.seq_pending_start && self.metro_phase < prev_phase {
+                self.seq_pending_start = false;
+                self.metro_phase = 0.0; // snap to exact bar 1
+                self.seq
+                    .playing
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+
             ctx.request_repaint();
         }
-        self.metro_last_time = now;
     }
 
     /// Reset metronome phase to 0 — call alongside sync_transport_now().
@@ -50,9 +62,34 @@ impl SynthApp {
                     if ui.button(play_label).clicked() {
                         self.metro_enabled = !self.metro_enabled;
                         if self.metro_enabled {
+                            // Reset phase and align sequencer to bar 1 together.
                             self.metro_phase = 0.0;
+                            self.seq
+                                .current_step
+                                .store(0, std::sync::atomic::Ordering::Relaxed);
                         }
                     }
+
+                    // Re-align to beat 1 without stopping.
+                    if ui
+                        .button("RST")
+                        .on_hover_text("Snap metronome and sequencer back to beat 1.")
+                        .clicked()
+                    {
+                        self.metro_phase = 0.0;
+                        self.seq
+                            .current_step
+                            .store(0, std::sync::atomic::Ordering::Relaxed);
+                    }
+
+                    ui.separator();
+
+                    // BPM is always locked to the global tempo.
+                    ui.label(
+                        egui::RichText::new(format!("♩ {} BPM", self.global_bpm))
+                            .small()
+                            .color(accent),
+                    );
 
                     ui.separator();
 
@@ -192,8 +229,8 @@ impl SynthApp {
                 let bar_dur_s = self.metro_beats as f64 / bps;
                 ui.label(
                     egui::RichText::new(format!(
-                        "{} BPM  ·  {}/{} = {:.2}s / bar",
-                        self.global_bpm, self.metro_beats, self.metro_denom, bar_dur_s
+                        "{}/{} = {:.2}s / bar",
+                        self.metro_beats, self.metro_denom, bar_dur_s
                     ))
                     .small()
                     .color(text_sec),
