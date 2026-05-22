@@ -2,6 +2,7 @@ use crate::sequencer::{
     chord_name, chord_quality, ChordType, ScaleType, SeqMode, CHORD_KB_COLS, CHORD_KB_ROWS,
     DEGREE_LABELS, NOTE_NAMES,
 };
+use crate::ui::layout::AppMode;
 use crate::SynthApp;
 use eframe::egui;
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
@@ -59,6 +60,25 @@ impl SynthApp {
             egui::Key::H,
             egui::Key::J,
         ];
+
+        // F1–F4 → switch focused synth track; F5 → Drum Machine mode.
+        for (key, track) in [
+            (egui::Key::F1, 0usize),
+            (egui::Key::F2, 1),
+            (egui::Key::F3, 2),
+            (egui::Key::F4, 3),
+        ] {
+            if ctx.input(|i| i.key_pressed(key)) {
+                self.switch_focused_track(track);
+                // Bring up LIVE mode so the rig strip is visible.
+                if self.app_mode == AppMode::DrumMachine || self.app_mode == AppMode::Studio {
+                    self.app_mode = AppMode::Live;
+                }
+            }
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::F5)) {
+            self.app_mode = AppMode::DrumMachine;
+        }
 
         // Space bar toggles freeze (when no text widget has focus).
         let space_pressed = ctx.input(|inp| inp.key_pressed(egui::Key::Space));

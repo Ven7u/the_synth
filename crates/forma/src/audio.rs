@@ -1,14 +1,17 @@
-//! cpal stream setup. AudioState, voice allocation, and DSP graph live in
-//! `forma-engine`. This file wires cpal's output callback to an engine
-//! `VoiceAllocator` plus the per-sample modulation / metering passes that
-//! the callback owns (LFO phase accumulators, DC blocker, lookahead limiter,
-//! scope, peak metering).
+//! cpal stream setup — multi-track mixer.
+//!
+//! Four independent synth engines run simultaneously. Each is a `TrackProcessor`
+//! that owns its own DSP graph, voice allocator, LFO state, gate lanes, DC
+//! blocker, and glide state. The audio callback processes all four tracks per
+//! buffer, applies per-track volume/pan/mute from `TrackMixerAtomics`, sums
+//! into a stereo mix bus, then applies the lookahead limiter and outputs.
 
 #![allow(clippy::precedence)]
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SizedSample, Stream};
 use fundsp::prelude32::*;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::recorder::Recorder;
@@ -17,70 +20,842 @@ use forma_dsp::LookaheadLimiter;
 use forma_engine::audio::build_synth_graph;
 use forma_engine::{SynthEngineHandle, VoiceAllocator};
 
-type RecorderSink = Arc<Mutex<Option<Recorder>>>;
-
-// Re-export so main.rs can keep its existing import unchanged.
 pub use forma_engine::audio::{AudioState, VOICE_COUNT};
 
+pub const TRACK_COUNT: usize = 4;
+pub const DRUM_CHANNELS: usize = 8;
+
+type RecorderSink = Arc<Mutex<Option<Recorder>>>;
+
+// ── Per-track mixer atomics (UI → audio thread) ──────────────────────────────
+
+pub struct TrackMixerAtomics {
+    volume: AtomicU32, // f32 bits, 0.0–1.0
+    pan: AtomicU32,    // f32 bits, -1.0–+1.0
+    pub muted: AtomicBool,
+    pub solo: AtomicBool,
+    /// Per-track peak level — written by audio thread, read by UI for VU meters.
+    pub peak_l: AtomicU32, // f32 bits
+    pub peak_r: AtomicU32, // f32 bits
+}
+
+impl TrackMixerAtomics {
+    fn new(volume: f32, muted: bool) -> Arc<Self> {
+        Arc::new(Self {
+            volume: AtomicU32::new(volume.to_bits()),
+            pan: AtomicU32::new(0.0f32.to_bits()),
+            muted: AtomicBool::new(muted),
+            solo: AtomicBool::new(false),
+            peak_l: AtomicU32::new(0),
+            peak_r: AtomicU32::new(0),
+        })
+    }
+
+    pub fn volume(&self) -> f32 {
+        f32::from_bits(self.volume.load(Ordering::Relaxed))
+    }
+    pub fn pan(&self) -> f32 {
+        f32::from_bits(self.pan.load(Ordering::Relaxed))
+    }
+    pub fn muted(&self) -> bool {
+        self.muted.load(Ordering::Relaxed)
+    }
+    pub fn solo(&self) -> bool {
+        self.solo.load(Ordering::Relaxed)
+    }
+    pub fn peak(&self) -> f32 {
+        let l = f32::from_bits(self.peak_l.load(Ordering::Relaxed));
+        let r = f32::from_bits(self.peak_r.load(Ordering::Relaxed));
+        l.max(r)
+    }
+    pub fn set_volume(&self, v: f32) {
+        self.volume.store(v.to_bits(), Ordering::Relaxed);
+    }
+    pub fn set_pan(&self, v: f32) {
+        self.pan.store(v.to_bits(), Ordering::Relaxed);
+    }
+    pub fn set_muted(&self, v: bool) {
+        self.muted.store(v, Ordering::Relaxed);
+    }
+    pub fn set_solo(&self, v: bool) {
+        self.solo.store(v, Ordering::Relaxed);
+    }
+}
+
+// ── Drum engine atomics (UI → audio thread) ──────────────────────────────────
+
+pub struct DrumEngineAtomics {
+    pub enabled: AtomicBool,
+    pub bpm: AtomicU32,                            // f32 bits
+    pub swing: AtomicU32,                          // f32 bits, 0.0–0.5
+    pub step_patterns: [AtomicU16; DRUM_CHANNELS], // bit i = step i active
+    pub channel_muted: [AtomicBool; DRUM_CHANNELS],
+    pub channel_volume: [AtomicU32; DRUM_CHANNELS], // f32 bits
+    pub current_step: AtomicUsize,                  // written by audio, read by UI
+    // Drum bus mixer
+    pub volume: AtomicU32, // f32 bits
+    pub pan: AtomicU32,    // f32 bits, -1..+1
+    pub muted: AtomicBool,
+    pub peak_l: AtomicU32, // f32 bits
+    pub peak_r: AtomicU32, // f32 bits
+}
+
+impl DrumEngineAtomics {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            enabled: AtomicBool::new(false),
+            bpm: AtomicU32::new(120.0f32.to_bits()),
+            swing: AtomicU32::new(0.0f32.to_bits()),
+            step_patterns: std::array::from_fn(|_| AtomicU16::new(0)),
+            channel_muted: std::array::from_fn(|_| AtomicBool::new(false)),
+            channel_volume: std::array::from_fn(|_| AtomicU32::new(0.8f32.to_bits())),
+            current_step: AtomicUsize::new(0),
+            volume: AtomicU32::new(0.8f32.to_bits()),
+            pan: AtomicU32::new(0.0f32.to_bits()),
+            muted: AtomicBool::new(false),
+            peak_l: AtomicU32::new(0),
+            peak_r: AtomicU32::new(0),
+        })
+    }
+
+    pub fn bpm(&self) -> f32 {
+        f32::from_bits(self.bpm.load(Ordering::Relaxed))
+    }
+    pub fn swing(&self) -> f32 {
+        f32::from_bits(self.swing.load(Ordering::Relaxed))
+    }
+    pub fn channel_volume(&self, ch: usize) -> f32 {
+        f32::from_bits(self.channel_volume[ch].load(Ordering::Relaxed))
+    }
+    pub fn volume(&self) -> f32 {
+        f32::from_bits(self.volume.load(Ordering::Relaxed))
+    }
+    pub fn pan(&self) -> f32 {
+        f32::from_bits(self.pan.load(Ordering::Relaxed))
+    }
+    pub fn peak(&self) -> f32 {
+        let l = f32::from_bits(self.peak_l.load(Ordering::Relaxed));
+        let r = f32::from_bits(self.peak_r.load(Ordering::Relaxed));
+        l.max(r)
+    }
+    pub fn set_bpm(&self, v: f32) {
+        self.bpm.store(v.to_bits(), Ordering::Relaxed);
+    }
+    pub fn set_swing(&self, v: f32) {
+        self.swing.store(v.to_bits(), Ordering::Relaxed);
+    }
+    pub fn set_volume(&self, v: f32) {
+        self.volume.store(v.to_bits(), Ordering::Relaxed);
+    }
+    pub fn set_pan(&self, v: f32) {
+        self.pan.store(v.to_bits(), Ordering::Relaxed);
+    }
+    pub fn set_channel_volume(&self, ch: usize, v: f32) {
+        self.channel_volume[ch].store(v.to_bits(), Ordering::Relaxed);
+    }
+}
+
+// ── Per-track processor (owns all per-track callback state) ──────────────────
+
+struct TrackProcessor {
+    state: Arc<AudioState>,
+    rx: ControlReceiver,
+    graph: BlockRateAdapter,
+    voices: VoiceAllocator,
+
+    // LFO phases
+    lfo_phase: f32,
+    lfo2_phase: f32,
+
+    // Per-buffer LFO params (read once in begin_buffer)
+    lfo_rate: f32,
+    lfo_depth: f32,
+    lfo_shape: u8,
+    lfo_dest: u8,
+    lfo_dt: f32,
+    lfo2_rate: f32,
+    lfo2_depth: f32,
+    lfo2_shape: u8,
+    lfo2_dest: u8,
+    lfo2_dt: f32,
+
+    // Per-buffer key-tracked cutoff
+    keyed_cutoff: f32,
+    last_keyed_freq: f32,
+
+    // Gate lane "Pulse" (amp ducker)
+    gate_aenv_enabled: bool,
+    gate_aenv_pattern: u16,
+    gate_aenv_length: u32,
+    gate_aenv_dt: f32,
+    gate_aenv_acc: f32,
+    gate_aenv_step: u32,
+    gate_aenv_was_enabled: bool,
+    duck_env: f32,
+    duck_attacking: bool,
+    depth_smooth: f32,
+
+    // Gate lane LFO1 retrigger
+    gate_lfo1_enabled: bool,
+    gate_lfo1_pattern: u16,
+    gate_lfo1_length: u32,
+    gate_lfo1_dt: f32,
+    gate_lfo1_acc: f32,
+    gate_lfo1_step: u32,
+    gate_lfo1_was_enabled: bool,
+
+    // Gate lane LFO2 retrigger
+    gate_lfo2_enabled: bool,
+    gate_lfo2_pattern: u16,
+    gate_lfo2_length: u32,
+    gate_lfo2_dt: f32,
+    gate_lfo2_acc: f32,
+    gate_lfo2_step: u32,
+    gate_lfo2_was_enabled: bool,
+
+    // DC blocker state
+    dc_x_prev_l: f32,
+    dc_x_prev_r: f32,
+    dc_y_prev_l: f32,
+    dc_y_prev_r: f32,
+
+    // Glide
+    smoothed_freqs: Vec<f32>,
+
+    // Volume staging (smoothed 1/sqrt(n_voices))
+    voice_gain_smooth: f32,
+
+    // Smoothed global volume
+    global_vol_smooth: f32,
+
+    // Pre-computed smoothing coefficients (fixed per stream)
+    vgs_coeff: f32,
+    duck_attack_coeff: f32,
+    duck_decay_coeff: f32,
+    depth_smooth_coeff: f32,
+    global_vol_coeff: f32,
+}
+
+impl TrackProcessor {
+    fn new(state: Arc<AudioState>, rx: ControlReceiver, sr: f64) -> Self {
+        let graph = BlockRateAdapter::new(build_synth_graph(&state, sr) as Box<dyn AudioUnit>);
+        let sr_f = sr as f32;
+        Self {
+            state,
+            rx,
+            graph,
+            voices: VoiceAllocator::new(),
+            lfo_phase: 0.0,
+            lfo2_phase: 0.25,
+            lfo_rate: 0.0,
+            lfo_depth: 0.0,
+            lfo_shape: 0u8,
+            lfo_dest: 1u8,
+            lfo_dt: 0.0,
+            lfo2_rate: 0.0,
+            lfo2_depth: 0.0,
+            lfo2_shape: 0u8,
+            lfo2_dest: 2u8,
+            lfo2_dt: 0.0,
+            keyed_cutoff: 3000.0,
+            last_keyed_freq: 261.63,
+            gate_aenv_enabled: false,
+            gate_aenv_pattern: 0,
+            gate_aenv_length: 16,
+            gate_aenv_dt: 0.0,
+            gate_aenv_acc: 1.0,
+            gate_aenv_step: 0,
+            gate_aenv_was_enabled: false,
+            duck_env: 0.0,
+            duck_attacking: false,
+            depth_smooth: 0.0,
+            gate_lfo1_enabled: false,
+            gate_lfo1_pattern: 0,
+            gate_lfo1_length: 16,
+            gate_lfo1_dt: 0.0,
+            gate_lfo1_acc: 1.0,
+            gate_lfo1_step: 0,
+            gate_lfo1_was_enabled: false,
+            gate_lfo2_enabled: false,
+            gate_lfo2_pattern: 0,
+            gate_lfo2_length: 16,
+            gate_lfo2_dt: 0.0,
+            gate_lfo2_acc: 1.0,
+            gate_lfo2_step: 0,
+            gate_lfo2_was_enabled: false,
+            dc_x_prev_l: 0.0,
+            dc_x_prev_r: 0.0,
+            dc_y_prev_l: 0.0,
+            dc_y_prev_r: 0.0,
+            smoothed_freqs: vec![440.0; VOICE_COUNT],
+            voice_gain_smooth: 1.0,
+            global_vol_smooth: 1.0,
+            vgs_coeff: (-1.0_f64 / (0.020 * sr)).exp() as f32,
+            duck_attack_coeff: (-1.0_f32 / (0.0015 * sr_f)).exp(),
+            duck_decay_coeff: (-1.0_f32 / (0.150 * sr_f)).exp(),
+            depth_smooth_coeff: (-1.0_f32 / (0.010 * sr_f)).exp(),
+            global_vol_coeff: (-1.0_f64 / (0.010 * sr)).exp() as f32,
+        }
+    }
+
+    /// Called once per buffer before the per-sample loop.
+    fn begin_buffer(&mut self, frames: usize, sr: f64) {
+        let sr_f = sr as f32;
+
+        // Drain control events, tick arp/walker.
+        self.voices.begin_buffer(&self.state, &self.rx, frames, sr);
+
+        // Voice gain staging: smooth 1/sqrt(active_voices).
+        let n_active = Ord::max(
+            self.state
+                .amp_cursors
+                .iter()
+                .filter(|c| c.value() > 0.01)
+                .count(),
+            1,
+        );
+        let target_scale = 1.0_f32 / (n_active as f32).sqrt();
+        self.voice_gain_smooth =
+            target_scale + self.vgs_coeff * (self.voice_gain_smooth - target_scale);
+        self.state.voice_gain_scale.set(self.voice_gain_smooth);
+
+        // Per-buffer LFO params.
+        self.lfo_rate = self.state.lfo_rate.value();
+        self.lfo_depth = self.state.lfo_depth.value();
+        self.lfo_shape = self.state.lfo_shape.load(Ordering::Relaxed);
+        self.lfo_dest = self.state.lfo_dest.load(Ordering::Relaxed);
+        self.lfo_dt = self.lfo_rate / sr_f;
+        self.lfo2_rate = self.state.lfo2_rate.value();
+        self.lfo2_depth = self.state.lfo2_depth.value();
+        self.lfo2_shape = self.state.lfo2_shape.load(Ordering::Relaxed);
+        self.lfo2_dest = self.state.lfo2_dest.load(Ordering::Relaxed);
+        self.lfo2_dt = self.lfo2_rate / sr_f;
+
+        // Gate lane params (read once per buffer).
+        macro_rules! read_gate {
+            ($lane:ident, $enabled:ident, $pattern:ident, $length:ident, $dt:ident,
+             $acc:ident, $step:ident, $was:ident) => {{
+                let en = self.state.$lane.enabled.load(Ordering::Relaxed);
+                let pat = self.state.$lane.pattern.load(Ordering::Relaxed);
+                let len = {
+                    let raw = self.state.$lane.length.load(Ordering::Relaxed);
+                    if raw < 1 {
+                        1u32
+                    } else {
+                        raw as u32
+                    }
+                };
+                let dt = self.state.$lane.rate.value() / sr_f;
+                if en && !self.$was {
+                    self.$acc = 1.0;
+                    self.$step = 0;
+                }
+                self.$was = en;
+                self.$enabled = en;
+                self.$pattern = pat;
+                self.$length = len;
+                self.$dt = dt;
+            }};
+        }
+        read_gate!(
+            gate_aenv,
+            gate_aenv_enabled,
+            gate_aenv_pattern,
+            gate_aenv_length,
+            gate_aenv_dt,
+            gate_aenv_acc,
+            gate_aenv_step,
+            gate_aenv_was_enabled
+        );
+        read_gate!(
+            gate_lfo1,
+            gate_lfo1_enabled,
+            gate_lfo1_pattern,
+            gate_lfo1_length,
+            gate_lfo1_dt,
+            gate_lfo1_acc,
+            gate_lfo1_step,
+            gate_lfo1_was_enabled
+        );
+        read_gate!(
+            gate_lfo2,
+            gate_lfo2_enabled,
+            gate_lfo2_pattern,
+            gate_lfo2_length,
+            gate_lfo2_dt,
+            gate_lfo2_acc,
+            gate_lfo2_step,
+            gate_lfo2_was_enabled
+        );
+
+        // Key tracking: find highest sounding voice.
+        let key_track = self.state.filter_key_track.value();
+        let base_cutoff = (self.state.cutoff.value() + self.state.mod_wheel_cutoff_add.value())
+            .clamp(80.0, 18000.0);
+        if key_track > 0.001 {
+            let mut top_freq: f32 = 0.0;
+            for vi in 0..VOICE_COUNT {
+                if self.state.amp_cursors[vi].value() > 0.5 {
+                    let f = self.state.voice_freq_targets[vi].value();
+                    if f > top_freq {
+                        top_freq = f;
+                    }
+                }
+            }
+            if top_freq > 0.0 {
+                self.last_keyed_freq = top_freq;
+            }
+        }
+        let key_mult = if key_track > 0.001 {
+            (self.last_keyed_freq / 261.63_f32).powf(key_track * 2.0)
+        } else {
+            1.0
+        };
+        self.keyed_cutoff = base_cutoff * key_mult;
+
+        // Glide: smooth voice frequencies.
+        let glide_time = self.state.glide_time.value();
+        for vi in 0..VOICE_COUNT {
+            let target = self.state.voice_freq_targets[vi].value();
+            if glide_time < 0.001 {
+                self.smoothed_freqs[vi] = target;
+            } else {
+                let coeff = (-(frames as f32) / (glide_time * sr_f)).exp();
+                self.smoothed_freqs[vi] = coeff * self.smoothed_freqs[vi] + (1.0 - coeff) * target;
+            }
+            self.state.voice_freqs[vi].set(self.smoothed_freqs[vi]);
+        }
+    }
+
+    /// Called once per sample. Returns post-DC-blocker (L, R) with global vol
+    /// and duck envelope applied, ready to be mixed.
+    #[inline]
+    fn get_stereo_frame(&mut self, dc_coeff: f32) -> (f32, f32) {
+        // LFO 1.
+        self.lfo_phase += self.lfo_dt;
+        if self.lfo_phase >= 1.0 {
+            self.lfo_phase -= 1.0;
+        }
+        let lfo_raw = lfo_shape_sample(self.lfo_phase, self.lfo_shape);
+
+        // LFO 2.
+        self.lfo2_phase += self.lfo2_dt;
+        if self.lfo2_phase >= 1.0 {
+            self.lfo2_phase -= 1.0;
+        }
+        let lfo2_raw = lfo_shape_sample(self.lfo2_phase, self.lfo2_shape);
+
+        // Combine modulation.
+        let mut pitch_mod: f32 = 0.0;
+        let mut filter_mod: f32 = 0.0;
+        let mut amp_mod: f32 = 1.0;
+        for (raw, depth, dest) in [
+            (lfo_raw, self.lfo_depth, self.lfo_dest),
+            (lfo2_raw, self.lfo2_depth, self.lfo2_dest),
+        ] {
+            match dest {
+                0 => pitch_mod += raw * depth,
+                2 => amp_mod *= 1.0 - depth * (1.0 - raw) * 0.5,
+                _ => filter_mod += raw * depth,
+            }
+        }
+        self.state
+            .lfo_pitch_mult
+            .set(2_f32.powf(pitch_mod * 2.0 / 12.0));
+        self.state
+            .effective_cutoff
+            .set((self.keyed_cutoff + filter_mod * self.keyed_cutoff * 0.5).clamp(80.0, 18000.0));
+
+        // Gate lane "Pulse" (amp ducker).
+        if self.gate_aenv_enabled {
+            self.gate_aenv_acc += self.gate_aenv_dt;
+            if self.gate_aenv_acc >= 1.0 {
+                self.gate_aenv_acc -= 1.0;
+                let step_idx = (self.gate_aenv_step % self.gate_aenv_length) as u8;
+                if (self.gate_aenv_pattern >> step_idx) & 1 != 0 {
+                    self.duck_attacking = true;
+                }
+                self.gate_aenv_step = self.gate_aenv_step.wrapping_add(1);
+            }
+        }
+        // Gate lanes for LFO retrigger.
+        if self.gate_lfo1_enabled {
+            self.gate_lfo1_acc += self.gate_lfo1_dt;
+            if self.gate_lfo1_acc >= 1.0 {
+                self.gate_lfo1_acc -= 1.0;
+                let step_idx = (self.gate_lfo1_step % self.gate_lfo1_length) as u8;
+                if (self.gate_lfo1_pattern >> step_idx) & 1 != 0 {
+                    self.lfo_phase = 0.0;
+                }
+                self.gate_lfo1_step = self.gate_lfo1_step.wrapping_add(1);
+            }
+        }
+        if self.gate_lfo2_enabled {
+            self.gate_lfo2_acc += self.gate_lfo2_dt;
+            if self.gate_lfo2_acc >= 1.0 {
+                self.gate_lfo2_acc -= 1.0;
+                let step_idx = (self.gate_lfo2_step % self.gate_lfo2_length) as u8;
+                if (self.gate_lfo2_pattern >> step_idx) & 1 != 0 {
+                    self.lfo2_phase = 0.0;
+                }
+                self.gate_lfo2_step = self.gate_lfo2_step.wrapping_add(1);
+            }
+        }
+        // Duck envelope.
+        if self.duck_attacking {
+            self.duck_env = 1.0 + self.duck_attack_coeff * (self.duck_env - 1.0);
+            if self.duck_env > 0.99 {
+                self.duck_attacking = false;
+            }
+        } else {
+            self.duck_env *= self.duck_decay_coeff;
+        }
+
+        self.voices.tick_sample(&self.state);
+
+        let (raw_l, raw_r) = self.graph.get_stereo();
+
+        // DC blocker.
+        let dc_l = raw_l - self.dc_x_prev_l + dc_coeff * self.dc_y_prev_l;
+        let dc_r = raw_r - self.dc_x_prev_r + dc_coeff * self.dc_y_prev_r;
+        self.dc_x_prev_l = raw_l;
+        self.dc_y_prev_l = dc_l;
+        self.dc_x_prev_r = raw_r;
+        self.dc_y_prev_r = dc_r;
+
+        // Global volume + duck.
+        let target_global = self.state.global_vol.value() as f32;
+        self.global_vol_smooth =
+            target_global + self.global_vol_coeff * (self.global_vol_smooth - target_global);
+        let target_depth = self.state.gate_aenv_depth.value();
+        self.depth_smooth =
+            target_depth + self.depth_smooth_coeff * (self.depth_smooth - target_depth);
+        let duck_mult = 1.0 - self.duck_env * self.depth_smooth;
+
+        let l = if dc_l.is_finite() { dc_l.tanh() } else { 0.0 }
+            * amp_mod
+            * self.global_vol_smooth
+            * duck_mult;
+        let r = if dc_r.is_finite() { dc_r.tanh() } else { 0.0 }
+            * amp_mod
+            * self.global_vol_smooth
+            * duck_mult;
+
+        (l, r)
+    }
+}
+
+#[inline]
+fn lfo_shape_sample(phase: f32, shape: u8) -> f32 {
+    match shape {
+        1 => {
+            if phase < 0.5 {
+                4.0 * phase - 1.0
+            } else {
+                3.0 - 4.0 * phase
+            }
+        }
+        2 => 2.0 * phase - 1.0,
+        _ => (phase * std::f32::consts::TAU).sin(),
+    }
+}
+
+// ── Drum synthesis ───────────────────────────────────────────────────────────
+//
+// Channel map (matches CHANNEL_NAMES in drum_machine_ui):
+//   0=KICK  1=SNARE  2=HAT  3=CLAP  4=TOM1  5=TOM2  6=PERC  7=NOISE
+
+const DRUM_AMP_DECAY_S: [f32; DRUM_CHANNELS] = [0.25, 0.12, 0.045, 0.09, 0.20, 0.26, 0.06, 0.35];
+const DRUM_PITCH_DECAY_S: [f32; DRUM_CHANNELS] = [0.08, 0.0, 0.0, 0.0, 0.12, 0.14, 0.03, 0.0];
+const DRUM_BASE_FREQ: [f32; DRUM_CHANNELS] = [55.0, 180.0, 0.0, 0.0, 120.0, 75.0, 350.0, 0.0];
+const DRUM_PITCH_RANGE: [f32; DRUM_CHANNELS] = [150.0, 0.0, 0.0, 0.0, 80.0, 60.0, 200.0, 0.0];
+
+struct DrumVoice {
+    phase: f32,
+    env: f32,
+    pitch_env: f32,
+    hp_x1: f32,
+    hp_y1: f32,
+    noise: u32,
+}
+
+impl DrumVoice {
+    fn new(seed: u32) -> Self {
+        Self {
+            phase: 0.0,
+            env: 0.0,
+            pitch_env: 0.0,
+            hp_x1: 0.0,
+            hp_y1: 0.0,
+            noise: seed,
+        }
+    }
+
+    fn trigger(&mut self) {
+        self.env = 1.0;
+        self.pitch_env = 1.0;
+    }
+
+    #[inline]
+    fn next_noise(&mut self) -> f32 {
+        self.noise = self
+            .noise
+            .wrapping_mul(1_664_525)
+            .wrapping_add(1_013_904_223);
+        (self.noise as i32 as f32) * (1.0 / i32::MAX as f32)
+    }
+}
+
+struct DrumProcessor {
+    atomics: Arc<DrumEngineAtomics>,
+    voices: [DrumVoice; DRUM_CHANNELS],
+    amp_coeff: [f32; DRUM_CHANNELS],
+    pitch_coeff: [f32; DRUM_CHANNELS],
+    hp_coeff: f32,
+    sr: f32,
+    // Step clock
+    step_acc: f32,
+    step_dt: f32,
+    step_idx: usize,
+    // Per-buffer cached params
+    patterns: [u16; DRUM_CHANNELS],
+    ch_muted: [bool; DRUM_CHANNELS],
+    ch_vol: [f32; DRUM_CHANNELS],
+    enabled: bool,
+}
+
+impl DrumProcessor {
+    fn new(sr: f64, atomics: Arc<DrumEngineAtomics>) -> Self {
+        let sr_f = sr as f32;
+        let amp_coeff = std::array::from_fn(|ch| {
+            let d = DRUM_AMP_DECAY_S[ch];
+            if d > 0.0 {
+                (-1.0 / (d * sr_f)).exp()
+            } else {
+                0.0
+            }
+        });
+        let pitch_coeff = std::array::from_fn(|ch| {
+            let d = DRUM_PITCH_DECAY_S[ch];
+            if d > 0.0 {
+                (-1.0 / (d * sr_f)).exp()
+            } else {
+                0.0
+            }
+        });
+        // 1-pole HP coefficient for the hat (6 kHz cutoff)
+        let hp_coeff = (-(std::f32::consts::TAU * 6000.0) / sr_f).exp();
+        Self {
+            atomics,
+            voices: std::array::from_fn(|ch| {
+                DrumVoice::new(0x5EED_1234u32.wrapping_mul(ch as u32 + 1))
+            }),
+            amp_coeff,
+            pitch_coeff,
+            hp_coeff,
+            sr: sr_f,
+            step_acc: 1.0,
+            step_dt: 0.0,
+            step_idx: 15,
+            patterns: [0u16; DRUM_CHANNELS],
+            ch_muted: [false; DRUM_CHANNELS],
+            ch_vol: [0.8; DRUM_CHANNELS],
+            enabled: false,
+        }
+    }
+
+    fn begin_buffer(&mut self, _frames: usize, _sr: f64) {
+        let bpm = self.atomics.bpm();
+        self.step_dt = bpm * 4.0 / 60.0 / self.sr; // 16th-note steps
+        self.enabled = self.atomics.enabled.load(Ordering::Relaxed);
+        for ch in 0..DRUM_CHANNELS {
+            self.patterns[ch] = self.atomics.step_patterns[ch].load(Ordering::Relaxed);
+            self.ch_muted[ch] = self.atomics.channel_muted[ch].load(Ordering::Relaxed);
+            self.ch_vol[ch] = self.atomics.channel_volume(ch);
+        }
+    }
+
+    #[inline]
+    fn get_stereo_frame(&mut self) -> (f32, f32) {
+        if !self.enabled {
+            return (0.0, 0.0);
+        }
+
+        // Step clock
+        self.step_acc += self.step_dt;
+        if self.step_acc >= 1.0 {
+            self.step_acc -= 1.0;
+            self.step_idx = (self.step_idx + 1) % 16;
+            self.atomics
+                .current_step
+                .store(self.step_idx, Ordering::Relaxed);
+            for ch in 0..DRUM_CHANNELS {
+                if !self.ch_muted[ch] && (self.patterns[ch] >> self.step_idx) & 1 != 0 {
+                    self.voices[ch].trigger();
+                }
+            }
+        }
+
+        let mut out: f32 = 0.0;
+        for ch in 0..DRUM_CHANNELS {
+            let v = &mut self.voices[ch];
+            if v.env < 0.001 {
+                continue;
+            }
+            v.env *= self.amp_coeff[ch];
+            if self.pitch_coeff[ch] > 0.0 {
+                v.pitch_env *= self.pitch_coeff[ch];
+            }
+            let freq = DRUM_BASE_FREQ[ch] + DRUM_PITCH_RANGE[ch] * v.pitch_env;
+            if freq > 1.0 {
+                v.phase += freq / self.sr;
+                if v.phase >= 1.0 {
+                    v.phase -= 1.0;
+                }
+            }
+            let noise = v.next_noise();
+            let sample: f32 = match ch {
+                0 => (v.phase * std::f32::consts::TAU).sin() * v.env,
+                1 => ((v.phase * std::f32::consts::TAU).sin() * 0.4 + noise * 0.6) * v.env,
+                2 => {
+                    // HAT: 1-pole HP filtered noise
+                    let hp = noise - v.hp_x1 + self.hp_coeff * v.hp_y1;
+                    v.hp_x1 = noise;
+                    v.hp_y1 = hp;
+                    hp * v.env
+                }
+                3 | 7 => noise * v.env,
+                4 | 5 => (v.phase * std::f32::consts::TAU).sin() * v.env,
+                6 => ((v.phase * std::f32::consts::TAU).sin() * 0.5 + noise * 0.5) * v.env,
+                _ => 0.0,
+            };
+            out += sample * self.ch_vol[ch];
+        }
+        // Soft-clip the summed drum bus
+        let out = out.tanh() * 0.85;
+        (out, out) // mono → stereo; pan applied in mix bus
+    }
+}
+
+// ── AudioEngine ──────────────────────────────────────────────────────────────
+
 pub struct AudioEngine {
-    /// Typed facade over the engine's internal state and control channel.
-    /// Clone this into any thread (UI, MIDI, sequencer, future OSC/WS/FFI
-    /// bridges) that needs to talk to the engine.
-    pub handle: SynthEngineHandle,
+    /// One handle per synth track. Track 0 = the existing forma synth UI.
+    pub handles: [SynthEngineHandle; TRACK_COUNT],
+    /// Per-track mixer atomics — shared with the audio callback.
+    pub mixers: [Arc<TrackMixerAtomics>; TRACK_COUNT],
+    /// Drum engine atomics — shared with the audio callback.
+    pub drum: Arc<DrumEngineAtomics>,
     _stream: Stream,
 }
 
 impl AudioEngine {
     pub fn new(recorder_sink: RecorderSink) -> anyhow::Result<Self> {
-        let state = Arc::new(AudioState::new());
-        let (tx, rx) = make_control_channel(1024);
-        let stream = build_stream(Arc::clone(&state), rx, recorder_sink)?;
+        let host = cpal::default_host();
+        let device = host
+            .default_output_device()
+            .ok_or_else(|| anyhow::anyhow!("No output device"))?;
+        let config = device.default_output_config()?;
+        let sr = config.sample_rate().0 as f64;
+
+        // Create 4 independent engine instances.
+        let mut states: Vec<Arc<AudioState>> = Vec::with_capacity(TRACK_COUNT);
+        let mut rxs: Vec<ControlReceiver> = Vec::with_capacity(TRACK_COUNT);
+        let mut handle_vec: Vec<SynthEngineHandle> = Vec::with_capacity(TRACK_COUNT);
+        let mut mixer_vec: Vec<Arc<TrackMixerAtomics>> = Vec::with_capacity(TRACK_COUNT);
+
+        for i in 0..TRACK_COUNT {
+            let state = Arc::new(AudioState::new());
+            state.sample_rate.store(sr as u32, Ordering::Relaxed);
+            let (tx, rx) = make_control_channel(1024);
+            let handle = SynthEngineHandle::new(Arc::clone(&state), tx);
+            // Track 0 is live at full volume; tracks 1–3 start muted.
+            let mixer = TrackMixerAtomics::new(0.8, i > 0);
+            states.push(state);
+            rxs.push(rx);
+            handle_vec.push(handle);
+            mixer_vec.push(mixer);
+        }
+
+        let drum = DrumEngineAtomics::new();
+
+        let stream = match config.sample_format() {
+            cpal::SampleFormat::F32 => build_stream::<f32>(
+                &device,
+                &config.into(),
+                states,
+                rxs,
+                Arc::clone(&mixer_vec[0]),
+                Arc::clone(&mixer_vec[1]),
+                Arc::clone(&mixer_vec[2]),
+                Arc::clone(&mixer_vec[3]),
+                Arc::clone(&drum),
+                sr,
+                recorder_sink,
+            )?,
+            cpal::SampleFormat::I16 => build_stream::<i16>(
+                &device,
+                &config.into(),
+                states,
+                rxs,
+                Arc::clone(&mixer_vec[0]),
+                Arc::clone(&mixer_vec[1]),
+                Arc::clone(&mixer_vec[2]),
+                Arc::clone(&mixer_vec[3]),
+                Arc::clone(&drum),
+                sr,
+                recorder_sink,
+            )?,
+            cpal::SampleFormat::U16 => build_stream::<u16>(
+                &device,
+                &config.into(),
+                states,
+                rxs,
+                Arc::clone(&mixer_vec[0]),
+                Arc::clone(&mixer_vec[1]),
+                Arc::clone(&mixer_vec[2]),
+                Arc::clone(&mixer_vec[3]),
+                Arc::clone(&drum),
+                sr,
+                recorder_sink,
+            )?,
+            _ => anyhow::bail!("Unsupported sample format"),
+        };
         stream.play()?;
-        let handle = SynthEngineHandle::new(state, tx);
+
         Ok(Self {
-            handle,
+            handles: [
+                handle_vec.remove(0),
+                handle_vec.remove(0),
+                handle_vec.remove(0),
+                handle_vec.remove(0),
+            ],
+            mixers: [
+                mixer_vec.remove(0),
+                mixer_vec.remove(0),
+                mixer_vec.remove(0),
+                mixer_vec.remove(0),
+            ],
+            drum,
             _stream: stream,
         })
     }
 }
 
-// ---------------------------------------------------------------------------
-// cpal stream
-// ---------------------------------------------------------------------------
+// ── Stream builder ───────────────────────────────────────────────────────────
 
-fn build_stream(
-    state: Arc<AudioState>,
-    rx: ControlReceiver,
-    recorder_sink: RecorderSink,
-) -> anyhow::Result<Stream> {
-    let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .ok_or_else(|| anyhow::anyhow!("No output device"))?;
-    let config = device.default_output_config()?;
-    let sr = config.sample_rate().0 as f64;
-
-    let stream = match config.sample_format() {
-        cpal::SampleFormat::F32 => {
-            make_stream::<f32>(&device, &config.into(), state, sr, rx, recorder_sink)?
-        }
-        cpal::SampleFormat::I16 => {
-            make_stream::<i16>(&device, &config.into(), state, sr, rx, recorder_sink)?
-        }
-        cpal::SampleFormat::U16 => {
-            make_stream::<u16>(&device, &config.into(), state, sr, rx, recorder_sink)?
-        }
-        _ => anyhow::bail!("Unsupported sample format"),
-    };
-    Ok(stream)
-}
-
-fn make_stream<T>(
+#[allow(clippy::too_many_arguments)]
+fn build_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
-    state: Arc<AudioState>,
+    states: Vec<Arc<AudioState>>,
+    rxs: Vec<ControlReceiver>,
+    mixer0: Arc<TrackMixerAtomics>,
+    mixer1: Arc<TrackMixerAtomics>,
+    mixer2: Arc<TrackMixerAtomics>,
+    mixer3: Arc<TrackMixerAtomics>,
+    drum_atomics: Arc<DrumEngineAtomics>,
     sr: f64,
-    rx: ControlReceiver,
     recorder_sink: RecorderSink,
 ) -> anyhow::Result<Stream>
 where
@@ -88,76 +863,29 @@ where
 {
     let channels = config.channels as usize;
 
-    state
-        .sample_rate
-        .store(sr as u32, std::sync::atomic::Ordering::Relaxed);
+    let mut states = states;
+    let mut rxs = rxs;
 
-    // Fundsp best practice for callback efficiency: run the graph through a
-    // block-rate adapter instead of raw sample-by-sample graph traversal.
-    let mut graph = BlockRateAdapter::new(build_synth_graph(&state, sr));
+    // Build 4 track processors.
+    let mut tracks: Vec<TrackProcessor> = (0..TRACK_COUNT)
+        .map(|_| TrackProcessor::new(states.remove(0), rxs.remove(0), sr))
+        .collect();
 
-    let mut osc_idx: usize = 0;
+    // Drum processor.
+    let mut drum_proc = DrumProcessor::new(sr, Arc::clone(&drum_atomics));
+
+    // Per-track scope ring-buffer write indices.
+    let mut osc_idx: [usize; TRACK_COUNT] = [0; TRACK_COUNT];
     let mut buffer_size_captured = false;
 
-    // Lookahead true-peak limiter: 1.5ms lookahead, 80ms release
+    // Lookahead limiter on the mix bus.
     let mut lookahead_lim = LookaheadLimiter::new(sr as f32, 1.5, 80.0);
 
-    // Smoothed global volume — 10ms one-pole to prevent clicks on slider moves
-    let global_vol_coeff = (-1.0_f64 / (0.010 * sr)).exp() as f32;
-    let mut global_vol_smooth: f32 = state.global_vol.value() as f32;
-
-    // DC blocker: 1-pole high-pass at ~20 Hz. Removes low-frequency bias that
-    // builds up from FX chains (reverb, chorus, delay) and eats headroom.
-    // y[n] = x[n] - x[n-1] + coeff * y[n-1]  (coeff ≈ 1 - 2π·20/sr)
+    // DC blocker coefficient (shared constant, same formula for all tracks).
     let dc_coeff = 1.0_f32 - (std::f32::consts::TAU * 20.0 / sr as f32);
-    let mut dc_x_prev_l: f32 = 0.0;
-    let mut dc_x_prev_r: f32 = 0.0;
-    let mut dc_y_prev_l: f32 = 0.0;
-    let mut dc_y_prev_r: f32 = 0.0;
 
-    // Voice gain staging: smooth 1/sqrt(active_voices) to prevent polyphonic
-    // passages from sounding louder than monophonic notes.
-    let vgs_coeff = (-1.0_f64 / (0.020 * sr)).exp() as f32; // 20ms smoothing
-    let mut voice_gain_smooth: f32 = 1.0;
-
-    // LFO phase accumulators (0..1, advance per sample)
-    let mut lfo_phase: f32 = 0.0;
-    let mut lfo2_phase: f32 = 0.25; // offset by 90° so LFO1 and LFO2 don't start in sync
-
-    // Gate-lane "Pulse" (master ducker) state.
-    //   acc starts at 1.0 so the first sample after enabling fires step 0.
-    //   step counter wraps modulo `length` from the engine state.
-    //   duck_env follows a one-pole asymmetric envelope: fast attack toward 1.0,
-    //   slow exponential decay back to 0. Bandlimits the modulator → no clicks.
-    let mut gate_aenv_acc: f32 = 1.0;
-    let mut gate_aenv_step: u32 = 0;
-    let mut gate_aenv_was_enabled: bool = false;
-    let mut duck_env: f32 = 0.0;
-    let mut duck_attacking: bool = false;
-    let duck_attack_coeff: f32 = (-1.0_f32 / (0.0015 * sr as f32)).exp(); // 1.5 ms attack
-    let duck_decay_coeff: f32 = (-1.0_f32 / (0.150 * sr as f32)).exp(); // 150 ms decay
-                                                                        // Smoothed depth — prevents zipper noise / micro-clicks when the user moves the slider.
-    let depth_smooth_coeff: f32 = (-1.0_f32 / (0.010 * sr as f32)).exp(); // 10 ms
-    let mut depth_smooth: f32 = 0.0;
-
-    // Gate-lane retrigger state for LFO1 and LFO2 — each lane resets its LFO's
-    // phase to 0 on every fired step. Same accumulator pattern as the duck lane.
-    let mut gate_lfo1_acc: f32 = 1.0;
-    let mut gate_lfo1_step: u32 = 0;
-    let mut gate_lfo1_was_enabled: bool = false;
-    let mut gate_lfo2_acc: f32 = 1.0;
-    let mut gate_lfo2_step: u32 = 0;
-    let mut gate_lfo2_was_enabled: bool = false;
-
-    // Per-voice smoothed frequencies for glide (callback writes to voice_freqs from these)
-    let mut smoothed_freqs: Vec<f32> = vec![440.0; VOICE_COUNT];
-
-    // Voice allocation + event dispatch + arp/walker state. Audio-thread-owned.
-    let mut voices = VoiceAllocator::new();
-
-    // Last frequency used for key tracking — persists across buffers so the
-    // filter doesn't snap back to C4 during note release or retrigger gaps.
-    let mut last_keyed_freq: f32 = 261.63;
+    // Mixer references for solo logic.
+    let mixers = [mixer0, mixer1, mixer2, mixer3];
 
     let stream = device.build_output_stream(
         config,
@@ -165,337 +893,165 @@ where
             let frames = data.len() / channels;
 
             // First-callback setup: flush-to-zero / denormals-are-zero.
-            // Prevents reverb / crystallizer tails from triggering a 10–100×
-            // CPU cliff when values slip into subnormal range. Thread-local
-            // CPU state, safe to re-set each callback but only needs once.
             if !buffer_size_captured {
                 forma_engine::enable_ftz_on_current_thread();
-            }
-
-            // --- Per-buffer: release cleanup + event drain + arp/walker tick ---
-            voices.begin_buffer(&state, &rx, frames, sr);
-
-            // Capture actual buffer size on first callback (cpal may use Default buffer size
-            // which is only known at runtime).
-            if !buffer_size_captured {
-                let frames = (data.len() / channels) as u32;
-                state
+                let frames_u32 = (data.len() / channels) as u32;
+                tracks[0]
+                    .state
                     .buffer_frames
-                    .store(frames, std::sync::atomic::Ordering::Relaxed);
+                    .store(frames_u32, Ordering::Relaxed);
                 buffer_size_captured = true;
             }
 
-            // Voice gain staging: count sounding voices, smooth 1/sqrt(n) gain
-            {
-                let n_active = state
-                    .amp_cursors
-                    .iter()
-                    .filter(|c| c.value() > 0.01)
-                    .count();
-                let n_active = if n_active < 1 { 1 } else { n_active };
-                let target_scale = 1.0_f32 / (n_active as f32).sqrt();
-                voice_gain_smooth = target_scale + vgs_coeff * (voice_gain_smooth - target_scale);
-                state.voice_gain_scale.set(voice_gain_smooth);
-            }
-
-            // Read per-buffer params once (cheap; avoids repeated atomic loads per sample)
-            let sr_f = sr as f32;
-            let lfo_rate = state.lfo_rate.value();
-            let lfo_depth = state.lfo_depth.value();
-            let lfo_shape = state.lfo_shape.load(std::sync::atomic::Ordering::Relaxed);
-            let lfo_dest = state.lfo_dest.load(std::sync::atomic::Ordering::Relaxed);
-            let lfo_dt = lfo_rate / sr_f;
-            let lfo2_rate = state.lfo2_rate.value();
-            let lfo2_depth = state.lfo2_depth.value();
-            let lfo2_shape = state.lfo2_shape.load(std::sync::atomic::Ordering::Relaxed);
-            let lfo2_dest = state.lfo2_dest.load(std::sync::atomic::Ordering::Relaxed);
-            let lfo2_dt = lfo2_rate / sr_f;
-
-            // Gate lanes: read each lane's state once per buffer. Each lane stores
-            // (enabled, pattern, length, rate); per-callback locals carry the phase
-            // accumulator and step counter so all lanes stay phase-coherent within a buffer.
-            // Rising-edge resets ensure step 0 fires the moment a lane is enabled.
-            macro_rules! read_gate_lane {
-                ($lane:ident, $acc:ident, $step:ident, $was:ident) => {{
-                    let enabled = state
-                        .$lane
-                        .enabled
-                        .load(std::sync::atomic::Ordering::Relaxed);
-                    let pattern = state
-                        .$lane
-                        .pattern
-                        .load(std::sync::atomic::Ordering::Relaxed);
-                    let length = {
-                        let raw = state
-                            .$lane
-                            .length
-                            .load(std::sync::atomic::Ordering::Relaxed);
-                        if raw < 1 { 1u32 } else { raw as u32 }
-                    };
-                    let dt = state.$lane.rate.value() / sr_f;
-                    if enabled && !$was {
-                        $acc = 1.0;
-                        $step = 0;
-                    }
-                    $was = enabled;
-                    (enabled, pattern, length, dt)
-                }};
-            }
-            let (gate_aenv_enabled, gate_aenv_pattern, gate_aenv_length, gate_aenv_dt) =
-                read_gate_lane!(gate_aenv, gate_aenv_acc, gate_aenv_step, gate_aenv_was_enabled);
-            let (gate_lfo1_enabled, gate_lfo1_pattern, gate_lfo1_length, gate_lfo1_dt) =
-                read_gate_lane!(gate_lfo1, gate_lfo1_acc, gate_lfo1_step, gate_lfo1_was_enabled);
-            let (gate_lfo2_enabled, gate_lfo2_pattern, gate_lfo2_length, gate_lfo2_dt) =
-                read_gate_lane!(gate_lfo2, gate_lfo2_acc, gate_lfo2_step, gate_lfo2_was_enabled);
-            let base_cutoff =
-                (state.cutoff.value() + state.mod_wheel_cutoff_add.value()).clamp(80.0, 18000.0);
-
-            // Key tracking: scale cutoff by the pitch of the highest sounding voice.
-            // Uses amp_cursors (non-zero from attack through release) so a fresh
-            // note's pitch is picked up even during the 4-sample retrigger gap.
-            // last_keyed_freq persists so release phase keeps the note's tracking.
-            let key_track = state.filter_key_track.value();
-            if key_track > 0.001 {
-                let mut top_freq: f32 = 0.0;
-                for vi in 0..VOICE_COUNT {
-                    if state.amp_cursors[vi].value() > 0.5 {
-                        let f = state.voice_freq_targets[vi].value();
-                        if f > top_freq {
-                            top_freq = f;
-                        }
-                    }
-                }
-                if top_freq > 0.0 {
-                    last_keyed_freq = top_freq;
-                }
-            }
-            // Exponent × 2 so KEY=0.5 = standard 1:1 tracking (one octave → 2× cutoff)
-            // and KEY=1.0 = hyper tracking (one octave → 4× cutoff).
-            let key_mult = if key_track > 0.001 {
-                (last_keyed_freq / 261.63_f32).powf(key_track * 2.0)
-            } else {
-                1.0
-            };
-            let keyed_cutoff = base_cutoff * key_mult;
-
-            // --- Glide: smooth voice_freq_targets → voice_freqs once per buffer ---
-            let glide_time = state.glide_time.value();
-            for vi in 0..VOICE_COUNT {
-                let target = state.voice_freq_targets[vi].value();
-                if glide_time < 0.001 {
-                    smoothed_freqs[vi] = target;
-                } else {
-                    let coeff = (-(frames as f32) / (glide_time * sr_f)).exp();
-                    smoothed_freqs[vi] = coeff * smoothed_freqs[vi] + (1.0 - coeff) * target;
-                }
-                state.voice_freqs[vi].set(smoothed_freqs[vi]);
-            }
-
-            // Real-time latency measurement: if a note_on timestamp is pending,
-            // consume it now and record how long it took to reach this callback.
-            // try_lock ensures we never block the audio thread.
-            if let Ok(mut guard) = state.note_on_time.try_lock() {
+            // Latency measurement on track 0.
+            if let Ok(mut guard) = tracks[0].state.note_on_time.try_lock() {
                 if let Some(t) = guard.take() {
                     let us = t.elapsed().as_micros() as u32;
-                    state
-                        .last_latency_us
-                        .store(us, std::sync::atomic::Ordering::Relaxed);
+                    tracks[0].state.last_latency_us.store(us, Ordering::Relaxed);
                 }
             }
 
-            // Try to lock oscilloscope buffer once per callback (instead of once per sample).
-            let mut scope_buf = state.osc_buffer.try_lock().ok();
+            // Per-buffer setup for all tracks.
+            for track in tracks.iter_mut() {
+                track.begin_buffer(frames, sr);
+            }
+            drum_proc.begin_buffer(frames, sr);
 
-            let limiter_on = state
-                .limiter_enabled
-                .load(std::sync::atomic::Ordering::Relaxed);
-            let threshold = state.limiter_threshold.value();
+            // Solo logic: if any track is soloed, mute all others.
+            let any_solo = mixers.iter().any(|m| m.solo());
+
+            // Extract limiter settings from track 0 before mutably borrowing `tracks`.
+            let limiter_on = tracks[0].state.limiter_enabled.load(Ordering::Relaxed);
+            let threshold = tracks[0].state.limiter_threshold.value();
+
+            // Clone each track's scope buffer Arc so we can lock them independently
+            // of the mutable borrow of `tracks` inside the frame loop.
+            // try_lock — never block the audio thread.
+            let scope_arcs: Vec<Arc<std::sync::Mutex<Vec<f32>>>> = tracks
+                .iter()
+                .map(|t| Arc::clone(&t.state.osc_buffer))
+                .collect();
+            let mut scope_guards: Vec<Option<std::sync::MutexGuard<Vec<f32>>>> =
+                scope_arcs.iter().map(|a| a.try_lock().ok()).collect();
             let mut peak_l_local: f32 = 0.0;
             let mut peak_r_local: f32 = 0.0;
+            // Per-track peak accumulators (flushed to TrackMixerAtomics after the frame loop).
+            let mut track_peak_l = [0.0f32; TRACK_COUNT];
+            let mut track_peak_r = [0.0f32; TRACK_COUNT];
+            let mut drum_peak_l: f32 = 0.0;
+            let mut drum_peak_r: f32 = 0.0;
 
             for (frame_i, frame) in data.chunks_mut(channels).enumerate() {
-                // --- LFO 1 & 2: advance phases and combine modulation ---
-                lfo_phase += lfo_dt;
-                if lfo_phase >= 1.0 {
-                    lfo_phase -= 1.0;
-                }
-                let lfo_raw = match lfo_shape {
-                    1 => {
-                        if lfo_phase < 0.5 {
-                            4.0 * lfo_phase - 1.0
-                        } else {
-                            3.0 - 4.0 * lfo_phase
-                        }
+                let mut mix_l: f32 = 0.0;
+                let mut mix_r: f32 = 0.0;
+
+                for (t_idx, track) in tracks.iter_mut().enumerate() {
+                    let (tl, tr) = track.get_stereo_frame(dc_coeff);
+
+                    // Track peak before mute/solo so VU shows signal even when muted.
+                    if tl.abs() > track_peak_l[t_idx] {
+                        track_peak_l[t_idx] = tl.abs();
                     }
-                    2 => 2.0 * lfo_phase - 1.0,
-                    _ => (lfo_phase * std::f32::consts::TAU).sin(),
-                };
-                lfo2_phase += lfo2_dt;
-                if lfo2_phase >= 1.0 {
-                    lfo2_phase -= 1.0;
-                }
-                let lfo2_raw = match lfo2_shape {
-                    1 => {
-                        if lfo2_phase < 0.5 {
-                            4.0 * lfo2_phase - 1.0
-                        } else {
-                            3.0 - 4.0 * lfo2_phase
-                        }
+                    if tr.abs() > track_peak_r[t_idx] {
+                        track_peak_r[t_idx] = tr.abs();
                     }
-                    2 => 2.0 * lfo2_phase - 1.0,
-                    _ => (lfo2_phase * std::f32::consts::TAU).sin(),
-                };
 
-                // Accumulate pitch, filter, and amp contributions from both LFOs
-                let mut pitch_mod: f32 = 0.0; // additive semitones * 2
-                let mut filter_mod: f32 = 0.0; // additive cutoff multiplier
-                let mut amp_mod: f32 = 1.0; // multiplicative
-
-                for (raw, depth, dest) in [
-                    (lfo_raw, lfo_depth, lfo_dest),
-                    (lfo2_raw, lfo2_depth, lfo2_dest),
-                ] {
-                    match dest {
-                        0 => pitch_mod += raw * depth,
-                        2 => amp_mod *= 1.0 - depth * (1.0 - raw) * 0.5,
-                        _ => filter_mod += raw * depth,
-                    }
-                }
-
-                state.lfo_pitch_mult.set(2_f32.powf(pitch_mod * 2.0 / 12.0));
-                state
-                    .effective_cutoff
-                    .set((keyed_cutoff + filter_mod * keyed_cutoff * 0.5).clamp(80.0, 18000.0));
-                let lfo_amp = amp_mod;
-
-                // Gate-lane "Pulse": advance step accumulator, fire on each step boundary.
-                // acc wraps from 1.0 — when it crosses 1.0 we've reached the next step.
-                if gate_aenv_enabled {
-                    gate_aenv_acc += gate_aenv_dt;
-                    if gate_aenv_acc >= 1.0 {
-                        gate_aenv_acc -= 1.0;
-                        let step_idx = (gate_aenv_step % gate_aenv_length) as u8;
-                        if (gate_aenv_pattern >> step_idx) & 1 != 0 {
-                            duck_attacking = true;
-                        }
-                        gate_aenv_step = gate_aenv_step.wrapping_add(1);
-                    }
-                }
-                // Gate lanes for LFO1/LFO2: each "on" step resets the LFO's phase to 0.
-                // Phase reset is a discontinuity in the modulator — a small click at high LFO
-                // depth. Documented in click-prevention plan; click-free retrigger is a follow-up.
-                if gate_lfo1_enabled {
-                    gate_lfo1_acc += gate_lfo1_dt;
-                    if gate_lfo1_acc >= 1.0 {
-                        gate_lfo1_acc -= 1.0;
-                        let step_idx = (gate_lfo1_step % gate_lfo1_length) as u8;
-                        if (gate_lfo1_pattern >> step_idx) & 1 != 0 {
-                            lfo_phase = 0.0;
-                        }
-                        gate_lfo1_step = gate_lfo1_step.wrapping_add(1);
-                    }
-                }
-                if gate_lfo2_enabled {
-                    gate_lfo2_acc += gate_lfo2_dt;
-                    if gate_lfo2_acc >= 1.0 {
-                        gate_lfo2_acc -= 1.0;
-                        let step_idx = (gate_lfo2_step % gate_lfo2_length) as u8;
-                        if (gate_lfo2_pattern >> step_idx) & 1 != 0 {
-                            lfo2_phase = 0.0;
-                        }
-                        gate_lfo2_step = gate_lfo2_step.wrapping_add(1);
-                    }
-                }
-                // Asymmetric envelope: ramp up to 1.0 with fast attack, then decay slowly.
-                // Bandlimits the modulator and kills the trigger click.
-                if duck_attacking {
-                    duck_env = 1.0 + duck_attack_coeff * (duck_env - 1.0);
-                    if duck_env > 0.99 {
-                        duck_attacking = false;
-                    }
-                } else {
-                    duck_env *= duck_decay_coeff;
-                }
-
-                // Drive the voice allocator's per-sample retrigger countdown.
-                // Flips any voice's gate back to 1.0 when its countdown
-                // expires, giving the ADSR a real 0→1 transition for a clean
-                // attack after same-buffer NoteOff+NoteOn sequences.
-                voices.tick_sample(&state);
-
-                let (raw_l_pre, raw_r_pre) = graph.get_stereo();
-
-                // DC blocker applied before limiter so limiter sees clean signal
-                let dc_l = raw_l_pre - dc_x_prev_l + dc_coeff * dc_y_prev_l;
-                let dc_r = raw_r_pre - dc_x_prev_r + dc_coeff * dc_y_prev_r;
-                dc_x_prev_l = raw_l_pre;
-                dc_y_prev_l = dc_l;
-                dc_x_prev_r = raw_r_pre;
-                dc_y_prev_r = dc_r;
-                let (mut raw_l, mut raw_r) = (dc_l, dc_r);
-
-                // Lookahead true-peak limiter: applies gain before the peak arrives
-                if limiter_on {
-                    let (lim_l, lim_r) = lookahead_lim.process_stereo(raw_l, raw_r, threshold);
-                    raw_l = lim_l;
-                    raw_r = lim_r;
-                }
-
-                // Gentle soft clip for occasional overshoots.
-                // Apply tremolo after limiter so the limiter doesn't fight the modulation.
-                let target_global = state.global_vol.value() as f32;
-                global_vol_smooth =
-                    target_global + global_vol_coeff * (global_vol_smooth - target_global);
-                let target_depth = state.gate_aenv_depth.value();
-                depth_smooth =
-                    target_depth + depth_smooth_coeff * (depth_smooth - target_depth);
-                let duck_mult = 1.0 - duck_env * depth_smooth;
-                let l = if raw_l.is_finite() { raw_l.tanh() } else { 0.0 }
-                    * lfo_amp
-                    * global_vol_smooth
-                    * duck_mult;
-                let r_out = if raw_r.is_finite() { raw_r.tanh() } else { 0.0 }
-                    * lfo_amp
-                    * global_vol_smooth
-                    * duck_mult;
-
-                // Peak metering: track true output level (post-limiter, post-tanh)
-                if l.abs() > peak_l_local {
-                    peak_l_local = l.abs();
-                }
-                if r_out.abs() > peak_r_local {
-                    peak_r_local = r_out.abs();
-                }
-
-                if let Some(buf) = scope_buf.as_mut() {
-                    // Downsample scope writes to reduce callback pressure.
+                    // Write pre-mix signal to this track's scope buffer (every 4th sample).
                     if frame_i & 3 == 0 {
-                        let len = buf.len();
-                        buf[osc_idx % len] = l;
-                        osc_idx = osc_idx.wrapping_add(1);
+                        if let Some(buf) = scope_guards[t_idx].as_mut() {
+                            let len = buf.len();
+                            buf[osc_idx[t_idx] % len] = tl;
+                            osc_idx[t_idx] = osc_idx[t_idx].wrapping_add(1);
+                        }
                     }
+
+                    let muted = mixers[t_idx].muted();
+                    let soloed = mixers[t_idx].solo();
+                    let silenced = muted || (any_solo && !soloed);
+                    if silenced {
+                        continue;
+                    }
+
+                    let vol = mixers[t_idx].volume();
+                    let pan = mixers[t_idx].pan(); // -1..+1
+                                                   // Constant-power pan: equal-loudness at center.
+                    let pan_r = (std::f32::consts::FRAC_PI_4 * (pan + 1.0)).sin();
+                    let pan_l = (std::f32::consts::FRAC_PI_4 * (1.0 - pan)).sin();
+                    mix_l += tl * vol * pan_l;
+                    mix_r += tr * vol * pan_r;
                 }
 
+                // Drum bus
+                let (dl, dr) = drum_proc.get_stereo_frame();
+                if dl.abs() > drum_peak_l {
+                    drum_peak_l = dl.abs();
+                }
+                if dr.abs() > drum_peak_r {
+                    drum_peak_r = dr.abs();
+                }
+                if !drum_atomics.muted.load(Ordering::Relaxed) {
+                    let dvol = drum_atomics.volume();
+                    let dpan = drum_atomics.pan();
+                    let pan_r = (std::f32::consts::FRAC_PI_4 * (dpan + 1.0)).sin();
+                    let pan_l = (std::f32::consts::FRAC_PI_4 * (1.0 - dpan)).sin();
+                    mix_l += dl * dvol * pan_l;
+                    mix_r += dr * dvol * pan_r;
+                }
+
+                // Lookahead limiter on the mix bus.
+                let (lim_l, lim_r) = if limiter_on {
+                    lookahead_lim.process_stereo(mix_l, mix_r, threshold)
+                } else {
+                    (mix_l, mix_r)
+                };
+
+                // Peak metering.
+                if lim_l.abs() > peak_l_local {
+                    peak_l_local = lim_l.abs();
+                }
+                if lim_r.abs() > peak_r_local {
+                    peak_r_local = lim_r.abs();
+                }
+
+                // Recorder writes to the final mix output.
                 if let Ok(rec) = recorder_sink.try_lock() {
                     if let Some(rec) = rec.as_ref() {
-                        rec.push(l, r_out);
+                        rec.push(lim_l, lim_r);
                     }
                 }
 
-                let left = T::from_sample(l);
-                let right = T::from_sample(r_out);
+                let left = T::from_sample(lim_l);
+                let right = T::from_sample(lim_r);
                 for (i, smp) in frame.iter_mut().enumerate() {
                     *smp = if i & 1 == 0 { left } else { right };
                 }
             }
 
-            // Write peak levels for UI metering
-            state
+            // Flush per-track peaks to mixer atomics for VU meters.
+            for t_idx in 0..TRACK_COUNT {
+                mixers[t_idx]
+                    .peak_l
+                    .store(track_peak_l[t_idx].to_bits(), Ordering::Relaxed);
+                mixers[t_idx]
+                    .peak_r
+                    .store(track_peak_r[t_idx].to_bits(), Ordering::Relaxed);
+            }
+            drum_atomics
                 .peak_l
-                .store(peak_l_local.to_bits(), std::sync::atomic::Ordering::Relaxed);
-            state
+                .store(drum_peak_l.to_bits(), Ordering::Relaxed);
+            drum_atomics
                 .peak_r
-                .store(peak_r_local.to_bits(), std::sync::atomic::Ordering::Relaxed);
+                .store(drum_peak_r.to_bits(), Ordering::Relaxed);
+
+            // Write mix-bus peak to track 0's state for the legacy latency/peak display.
+            tracks[0]
+                .state
+                .peak_l
+                .store(peak_l_local.to_bits(), Ordering::Relaxed);
+            tracks[0]
+                .state
+                .peak_r
+                .store(peak_r_local.to_bits(), Ordering::Relaxed);
         },
         |err| eprintln!("audio error: {err}"),
         None,
