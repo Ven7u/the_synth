@@ -49,7 +49,7 @@ impl SynthApp {
 
         // ── Toolbar ────────────────────────────────────────────────────────────
         ui.horizontal(|ui| {
-            // Mode picker: SCOPE / HARM / VOR
+            // Mode picker: SCOPE / HARM / VOR / SPEC / ENV
             for (mode, label, tip) in [
                 (VizMode::Scope, "SCOPE", "Waveform oscilloscope"),
                 (
@@ -61,6 +61,16 @@ impl SynthApp {
                     VizMode::Voronoi,
                     "VOR",
                     "Voronoi cells driven by synth parameters",
+                ),
+                (
+                    VizMode::Spectrum,
+                    "SPEC",
+                    "Spectrum analyzer — frequency content 20 Hz – 20 kHz",
+                ),
+                (
+                    VizMode::Envelope,
+                    "ENV",
+                    "Envelope visualizer — live ADSR curve with voice cursors",
                 ),
             ] {
                 let col = if self.viz_mode == mode {
@@ -198,6 +208,21 @@ impl SynthApp {
         let vp_w = (row.width() * ppp).round() as u32;
         let vp_h = (row.height() * ppp).round() as u32;
 
+        // ── CPU-drawn modes: Spectrum and Envelope ────────────────────────────
+        if self.viz_mode == VizMode::Spectrum {
+            draw_spectrum(&cpu_painter, row, &buf, self.engine.sample_rate());
+            return;
+        }
+        if self.viz_mode == VizMode::Envelope {
+            let a = self.engine.amp_attack();
+            let d = self.engine.amp_decay();
+            let s = self.engine.amp_sustain();
+            let r = self.engine.amp_release();
+            let cursors = self.engine.amp_cursors();
+            draw_envelope(&cpu_painter, row, a, d, s, r, &cursors);
+            return;
+        }
+
         // ── Spectrum analysis — 8 log-spaced bins 80 Hz → 8 kHz ─────────────
         let sr = self.engine.sample_rate();
         const N_SPEC: usize = 8;
@@ -328,6 +353,293 @@ impl SynthApp {
                 vor_params,
             },
         ));
+    }
+}
+
+/// Draw a spectrum analyzer bar graph using egui CPU painter.
+/// 80 log-spaced bins 20 Hz → 20 kHz, Hann windowed, dB-scaled.
+fn draw_spectrum(painter: &egui::Painter, rect: Rect, buf: &[f32], sample_rate: u32) {
+    use std::f32::consts::PI;
+
+    painter.rect_filled(rect, CornerRadius::same(4), Color32::from_rgb(8, 10, 14));
+
+    let sr = if sample_rate > 0 {
+        sample_rate as f32
+    } else {
+        44100.0
+    };
+    let n = buf.len().min(2048);
+    if n < 8 {
+        return;
+    }
+
+    const N_BINS: usize = 80;
+    const F_MIN: f32 = 20.0;
+    const F_MAX: f32 = 20_000.0;
+    // Floor at -70 dB; anything below is treated as silence.
+    const DB_FLOOR: f32 = -70.0;
+
+    // Hann-windowed DFT at each log-spaced frequency.
+    let mut bins = [0.0f32; N_BINS];
+    for k in 0..N_BINS {
+        let t = k as f32 / (N_BINS - 1) as f32;
+        let freq = F_MIN * (F_MAX / F_MIN).powf(t);
+        let step = 2.0 * PI * freq / sr;
+        let (mut re, mut im) = (0.0f32, 0.0f32);
+        let mut w_sum = 0.0f32;
+        for (i, &s) in buf[..n].iter().enumerate() {
+            let w = 0.5 * (1.0 - (2.0 * PI * i as f32 / (n - 1) as f32).cos()); // Hann
+            re += s * w * (step * i as f32).cos();
+            im += s * w * (step * i as f32).sin();
+            w_sum += w;
+        }
+        let mag = (re * re + im * im).sqrt() / w_sum.max(1e-9);
+        let db = 20.0 * mag.max(1e-9).log10();
+        bins[k] = ((db - DB_FLOOR) / (-DB_FLOOR)).clamp(0.0, 1.0);
+    }
+
+    let pad_l = 36.0;
+    let pad_b = 18.0;
+    let pad_t = 8.0;
+    let draw_w = rect.width() - pad_l - 4.0;
+    let draw_h = rect.height() - pad_b - pad_t;
+    let draw_origin = Pos2::new(rect.left() + pad_l, rect.top() + pad_t);
+
+    // dB grid lines and labels.
+    for &db_mark in &[-60.0f32, -48.0, -36.0, -24.0, -12.0, 0.0] {
+        let y_t = ((db_mark - DB_FLOOR) / (-DB_FLOOR)).clamp(0.0, 1.0);
+        let y = draw_origin.y + draw_h * (1.0 - y_t);
+        painter.line_segment(
+            [
+                Pos2::new(draw_origin.x, y),
+                Pos2::new(draw_origin.x + draw_w, y),
+            ],
+            Stroke::new(0.5, Color32::from_rgba_premultiplied(60, 60, 70, 120)),
+        );
+        painter.text(
+            Pos2::new(rect.left() + 2.0, y),
+            egui::Align2::LEFT_CENTER,
+            format!("{db_mark:.0}"),
+            egui::FontId::monospace(8.0),
+            Color32::from_gray(90),
+        );
+    }
+
+    // Frequency axis labels.
+    for &(freq_hz, label) in &[
+        (50.0f32, "50"),
+        (100.0, "100"),
+        (200.0, "200"),
+        (500.0, "500"),
+        (1000.0, "1k"),
+        (2000.0, "2k"),
+        (5000.0, "5k"),
+        (10000.0, "10k"),
+        (20000.0, "20k"),
+    ] {
+        let t = ((freq_hz / F_MIN).log2() / (F_MAX / F_MIN).log2()).clamp(0.0, 1.0);
+        let x = draw_origin.x + t * draw_w;
+        let y_bot = draw_origin.y + draw_h;
+        painter.line_segment(
+            [Pos2::new(x, draw_origin.y), Pos2::new(x, y_bot)],
+            Stroke::new(0.5, Color32::from_rgba_premultiplied(60, 60, 70, 80)),
+        );
+        painter.text(
+            Pos2::new(x, y_bot + 2.0),
+            egui::Align2::CENTER_TOP,
+            label,
+            egui::FontId::monospace(8.0),
+            Color32::from_gray(80),
+        );
+    }
+
+    // Bars with gradient color: blue (bass) → cyan → green → yellow → red (treble).
+    let bar_w = (draw_w / N_BINS as f32 - 1.0).max(1.0);
+    for (k, &amp) in bins.iter().enumerate() {
+        if amp < 0.001 {
+            continue;
+        }
+        let t = k as f32 / (N_BINS - 1) as f32;
+        // Gradient: bass=blue, low-mids=cyan, mids=green, high-mids=yellow, highs=red
+        let bar_color = if t < 0.25 {
+            let u = t / 0.25;
+            Color32::from_rgb(
+                (20.0 + u * 10.0) as u8,
+                (80.0 + u * 120.0) as u8,
+                (200.0 - u * 60.0) as u8,
+            )
+        } else if t < 0.5 {
+            let u = (t - 0.25) / 0.25;
+            Color32::from_rgb(
+                (30.0 + u * 60.0) as u8,
+                (200.0 - u * 40.0) as u8,
+                (140.0 - u * 120.0) as u8,
+            )
+        } else if t < 0.75 {
+            let u = (t - 0.5) / 0.25;
+            Color32::from_rgb((90.0 + u * 140.0) as u8, (160.0 + u * 40.0) as u8, 20)
+        } else {
+            let u = (t - 0.75) / 0.25;
+            Color32::from_rgb((230.0 - u * 30.0) as u8, (200.0 - u * 160.0) as u8, 20)
+        };
+        let x = draw_origin.x + t * draw_w;
+        let bar_h = amp * draw_h;
+        let y_top = draw_origin.y + draw_h - bar_h;
+        painter.rect_filled(
+            Rect::from_min_size(Pos2::new(x, y_top), Vec2::new(bar_w, bar_h)),
+            CornerRadius::same(1),
+            bar_color,
+        );
+        // Bright cap on each bar
+        painter.rect_filled(
+            Rect::from_min_size(Pos2::new(x, y_top), Vec2::new(bar_w, 2.0)),
+            CornerRadius::ZERO,
+            Color32::from_rgba_premultiplied(bar_color.r(), bar_color.g(), bar_color.b(), 220),
+        );
+    }
+}
+
+/// Draw the ADSR envelope curve with live voice cursor dots.
+fn draw_envelope(
+    painter: &egui::Painter,
+    rect: Rect,
+    attack: f32,
+    decay: f32,
+    sustain: f32,
+    release: f32,
+    cursors: &[f32],
+) {
+    use std::f32::consts::PI;
+    painter.rect_filled(rect, CornerRadius::same(4), Color32::from_rgb(8, 10, 14));
+
+    let pad = 20.0;
+    let draw_rect = Rect::from_min_max(
+        Pos2::new(rect.left() + pad, rect.top() + pad),
+        Pos2::new(rect.right() - pad, rect.bottom() - pad),
+    );
+    let w = draw_rect.width();
+    let h = draw_rect.height();
+
+    // Time segments: attack, decay, sustain hold (fixed display width), release.
+    let s_hold = 0.3; // fixed sustain display duration in seconds
+    let total = (attack + decay + s_hold + release).max(0.001);
+    let t_a = attack / total;
+    let t_d = decay / total;
+    let t_s = s_hold / total;
+    let t_r = release / total;
+
+    // Key x positions (left edge of draw_rect = time 0).
+    let x0 = draw_rect.left();
+    let x1 = x0 + t_a * w; // end of attack
+    let x2 = x1 + t_d * w; // end of decay
+    let x3 = x2 + t_s * w; // end of sustain
+    let x4 = x3 + t_r * w; // end of release (= right edge)
+    let y_top = draw_rect.top();
+    let y_bot = draw_rect.bottom();
+    let y_sus = y_top + (1.0 - sustain) * h;
+
+    // Grid lines.
+    for &(x, label) in &[(x1, "A"), (x2, "D"), (x3, "S"), (x4, "R")] {
+        painter.line_segment(
+            [Pos2::new(x, y_top - 4.0), Pos2::new(x, y_bot)],
+            Stroke::new(0.5, Color32::from_rgba_premultiplied(70, 70, 80, 120)),
+        );
+        painter.text(
+            Pos2::new(x, y_bot + 3.0),
+            egui::Align2::CENTER_TOP,
+            label,
+            egui::FontId::monospace(9.0),
+            Color32::from_gray(80),
+        );
+    }
+    // Sustain level line.
+    painter.line_segment(
+        [Pos2::new(x0, y_sus), Pos2::new(x4, y_sus)],
+        Stroke::new(0.5, Color32::from_rgba_premultiplied(80, 120, 80, 100)),
+    );
+    painter.text(
+        Pos2::new(x0 - 2.0, y_sus),
+        egui::Align2::RIGHT_CENTER,
+        format!("{:.0}%", sustain * 100.0),
+        egui::FontId::monospace(8.0),
+        Color32::from_gray(80),
+    );
+
+    // Filled area under the envelope curve.
+    let fill_color = Color32::from_rgba_premultiplied(60, 120, 200, 40);
+    let envelope_points = [
+        Pos2::new(x0, y_bot),
+        Pos2::new(x0, y_top), // attack peak
+        Pos2::new(x1, y_top),
+        Pos2::new(x2, y_sus), // decay → sustain
+        Pos2::new(x3, y_sus), // sustain hold
+        Pos2::new(x4, y_bot), // release → 0
+    ];
+    painter.add(egui::Shape::convex_polygon(
+        envelope_points.to_vec(),
+        fill_color,
+        Stroke::NONE,
+    ));
+
+    // Envelope curve line.
+    let line_pts = vec![
+        Pos2::new(x0, y_bot),
+        Pos2::new(x1, y_top),
+        Pos2::new(x2, y_sus),
+        Pos2::new(x3, y_sus),
+        Pos2::new(x4, y_bot),
+    ];
+    painter.add(egui::Shape::line(
+        line_pts,
+        Stroke::new(2.0, Color32::from_rgb(80, 160, 255)),
+    ));
+
+    // Live voice cursor dots.
+    for &cursor in cursors {
+        let stage = cursor as u8;
+        if stage == 0 {
+            continue;
+        }
+        let frac = cursor.fract();
+
+        // Map cursor to (x, y) on the envelope curve.
+        let (cx, cy) = match stage {
+            1 => {
+                // attack: 0 → peak
+                let x = x0 + frac * (x1 - x0);
+                let y = y_bot + frac * (y_top - y_bot);
+                (x, y)
+            }
+            2 => {
+                // decay: peak → sustain
+                let x = x1 + frac * (x2 - x1);
+                let y = y_top + frac * (y_sus - y_top);
+                (x, y)
+            }
+            3 => {
+                // sustain: held
+                // Animate slightly so it's visible
+                let pulse = (cursor.fract() * PI * 2.0).sin() * 0.5 + 0.5;
+                (x2 + pulse * (x3 - x2), y_sus)
+            }
+            4 => {
+                // release
+                let x = x3 + frac * (x4 - x3);
+                let y = y_sus + frac * (y_bot - y_sus);
+                (x, y)
+            }
+            _ => continue,
+        };
+
+        let dot_color = match stage {
+            1 => Color32::from_rgb(100, 220, 100), // attack: green
+            2 => Color32::from_rgb(240, 180, 40),  // decay: amber
+            3 => Color32::from_rgb(80, 160, 255),  // sustain: blue
+            4 => Color32::from_rgb(220, 80, 80),   // release: red
+            _ => Color32::WHITE,
+        };
+        painter.circle_filled(Pos2::new(cx, cy), 5.0, dot_color);
+        painter.circle_stroke(Pos2::new(cx, cy), 6.0, Stroke::new(1.0, Color32::WHITE));
     }
 }
 

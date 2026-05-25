@@ -13,5 +13,8 @@
   "app_mode": "Studio",
   "studio_tab": "Voice",
   "patch_favorites": [],
-  "patch_recent": []
+  "patch_recent": [
+    "Random",
+    "Init"
+  ]
 }

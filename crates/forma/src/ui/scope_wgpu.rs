@@ -11,6 +11,8 @@ pub enum VizMode {
     Scope,
     Harmonograph,
     Voronoi,
+    Spectrum,
+    Envelope,
 }
 
 // ── Harmonograph uniform params (48 bytes, 3 × vec4) ──────────────────────────
@@ -804,8 +806,10 @@ impl egui_wgpu::CallbackTrait for ScopeCallback {
         // Update CRT uniforms — bloom_scale varies per viz mode
         let bloom_scale = match self.viz_mode {
             VizMode::Scope => 1.0,
-            VizMode::Harmonograph => 2.8, // thin line needs a wide phosphor halo
-            VizMode::Voronoi => 0.2,      // filled areas already glow; keep edges crisp
+            VizMode::Harmonograph => 2.8,
+            VizMode::Voronoi => 0.2,
+            // Spectrum and Envelope are drawn by CPU painter; wgpu pass is a no-op.
+            VizMode::Spectrum | VizMode::Envelope => 0.0,
         };
         queue.write_buffer(
             &res.params_buf,
@@ -902,6 +906,9 @@ impl egui_wgpu::CallbackTrait for ScopeCallback {
                 pass.set_bind_group(0, &res.vor_bind_group, &[]);
                 pass.draw(0..3, 0..1);
             }
+
+            // Spectrum and Envelope are CPU-drawn; nothing to do in the wgpu pass.
+            VizMode::Spectrum | VizMode::Envelope => {}
         }
 
         vec![]
