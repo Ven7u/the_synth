@@ -1176,7 +1176,7 @@ impl SynthEngineHandle {
     }
 
     /// Generic parameter write keyed by `ParamId`. One arm per variant.
-    fn set_by_id(&self, id: ParamId, v: f32) {
+    pub fn set_by_id(&self, id: ParamId, v: f32) {
         // Helper for u8-backed discrete casts.
         #[inline]
         fn u8c(v: f32, max: u8) -> u8 {

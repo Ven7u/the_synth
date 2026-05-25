@@ -23,7 +23,7 @@ live_rig = []
 # Dipendenze interne
 forma-dsp     = { path = "../forma-dsp" }
 forma-engine  = { path = "../forma-engine" }
-forma-control = { path = "../forma-control" }
+forma-control = { path = "../forma-control", features = ["serde"] }
 forma-common  = { path = "../forma-common" }
 
 # Dipendenze esterne (spostate dalla root)

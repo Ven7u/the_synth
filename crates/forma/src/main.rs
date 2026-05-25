@@ -374,6 +374,14 @@ pub(crate) struct SynthApp {
 
     /// Shared WAV recorder sink — `Some` while recording, `None` otherwise.
     pub(crate) recorder_sink: Arc<Mutex<Option<recorder::Recorder>>>,
+
+    // MIDI learn
+    pub(crate) midi_bindings: std::collections::HashMap<u8, forma_control::ParamId>,
+    pub(crate) midi_learn_open: bool,
+    pub(crate) midi_learn_param: Option<forma_control::ParamId>,
+    pub(crate) midi_learn_filter: String,
+    /// Last CC number seen (for highlighting in the learn window)
+    pub(crate) midi_last_cc: Option<u8>,
 }
 
 impl SynthApp {
@@ -609,6 +617,11 @@ impl SynthApp {
             scene_chain_active: false,
             scene_chain_elapsed_s: 0.0,
             recorder_sink,
+            midi_bindings: load_midi_bindings(),
+            midi_learn_open: false,
+            midi_learn_param: None,
+            midi_learn_filter: String::new(),
+            midi_last_cc: None,
         }
     }
 }
@@ -844,6 +857,32 @@ impl SynthApp {
 }
 
 // ---------------------------------------------------------------------------
+// MIDI learn persistence helpers
+// ---------------------------------------------------------------------------
+
+fn midi_bindings_path() -> std::path::PathBuf {
+    std::path::PathBuf::from("forma-midi-bindings.json")
+}
+
+fn load_midi_bindings() -> std::collections::HashMap<u8, forma_control::ParamId> {
+    let path = midi_bindings_path();
+    if let Ok(json) = std::fs::read_to_string(&path) {
+        if let Ok(map) =
+            serde_json::from_str::<std::collections::HashMap<u8, forma_control::ParamId>>(&json)
+        {
+            return map;
+        }
+    }
+    std::collections::HashMap::new()
+}
+
+fn save_midi_bindings(bindings: &std::collections::HashMap<u8, forma_control::ParamId>) {
+    if let Ok(json) = serde_json::to_string_pretty(bindings) {
+        let _ = std::fs::write(midi_bindings_path(), json);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // MIDI tick — drain events from the MIDI thread each frame
 // ---------------------------------------------------------------------------
 
@@ -868,6 +907,25 @@ impl SynthApp {
                 }
                 MidiEvent::CC { cc, value, .. } => {
                     let v = value as f32 / 127.0;
+                    self.midi_last_cc = Some(cc);
+
+                    // MIDI learn: if we're waiting for a CC, bind it now.
+                    if let Some(param_id) = self.midi_learn_param.take() {
+                        self.midi_bindings.insert(cc, param_id);
+                        save_midi_bindings(&self.midi_bindings);
+                    } else {
+                        // Apply any learned binding for this CC.
+                        if let Some(&param_id) = self.midi_bindings.get(&cc) {
+                            let desc = forma_control::all_params()
+                                .iter()
+                                .find(|d| d.id == param_id);
+                            if let Some(desc) = desc {
+                                let mapped = desc.min + v * (desc.max - desc.min);
+                                self.engine.set_by_id(param_id, mapped);
+                            }
+                        }
+                    }
+
                     match cc {
                         1 => {
                             // Mod wheel — routed by mod_wheel_dest in the engine
@@ -930,6 +988,7 @@ impl eframe::App for SynthApp {
             patch_recent: self.patch_recent.clone(),
         };
         ui::layout::save_layout(&state);
+        save_midi_bindings(&self.midi_bindings);
     }
 
     fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -961,6 +1020,7 @@ impl eframe::App for SynthApp {
         self.ui_metronome_window(ctx);
         self.ui_scope_fullscreen(ctx);
         self.ui_scene_browser(ctx);
+        self.ui_midi_learn_window(ctx);
 
         // ── Zone 1: global bar (top, always visible) ──────────────────────────
         egui::TopBottomPanel::top("global_bar")
@@ -1877,6 +1937,26 @@ impl SynthApp {
                     self.show_metronome = !self.show_metronome;
                 }
 
+                // MIDI learn button
+                {
+                    let active = self.midi_learn_open;
+                    let learn_col = if active {
+                        self.theme.c(&self.theme.accent)
+                    } else {
+                        self.theme.c(&self.theme.text_secondary)
+                    };
+                    if ui
+                        .add(egui::SelectableLabel::new(
+                            active,
+                            egui::RichText::new("MIDI").size(11.0).color(learn_col),
+                        ))
+                        .on_hover_text("MIDI Learn — bind hardware CCs to parameters.")
+                        .clicked()
+                    {
+                        self.midi_learn_open = !active;
+                    }
+                }
+
                 // Patch library button — direct access, no submenu navigation needed
                 let lib_col = if self.patch_browser_open {
                     self.theme.c(&self.theme.accent)
@@ -2090,5 +2170,152 @@ impl SynthApp {
                     .set_crystal_mix(if !on { self.fx_crystal_mix } else { 0.0 });
             });
         });
+    }
+
+    pub(crate) fn ui_midi_learn_window(&mut self, ctx: &egui::Context) {
+        if !self.midi_learn_open {
+            return;
+        }
+        let accent = self.theme.c(&self.theme.accent);
+        let text_sec = self.theme.c(&self.theme.text_secondary);
+        let text_dis = self.theme.c(&self.theme.text_disabled);
+        let waiting = self.midi_learn_param.is_some();
+
+        let mut open = self.midi_learn_open;
+        egui::Window::new("MIDI Learn")
+            .open(&mut open)
+            .resizable(true)
+            .default_size([420.0, 520.0])
+            .show(ctx, |ui| {
+                // Status bar
+                if waiting {
+                    let param_name = self
+                        .midi_learn_param
+                        .as_ref()
+                        .and_then(|id| {
+                            forma_control::all_params()
+                                .iter()
+                                .find(|d| d.id == *id)
+                                .map(|d| d.name)
+                        })
+                        .unwrap_or("?");
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("Waiting for CC → {param_name}"))
+                                .color(accent)
+                                .size(12.0),
+                        );
+                        if ui.small_button("Cancel").clicked() {
+                            self.midi_learn_param = None;
+                        }
+                    });
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("Click a param, then move a hardware knob.")
+                                .color(text_sec)
+                                .size(11.0),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .small_button("Clear All")
+                                .on_hover_text("Remove all MIDI CC bindings.")
+                                .clicked()
+                            {
+                                self.midi_bindings.clear();
+                                save_midi_bindings(&self.midi_bindings);
+                            }
+                        });
+                    });
+                }
+
+                ui.separator();
+
+                // Search box
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Filter:").color(text_dis).size(11.0));
+                    ui.text_edit_singleline(&mut self.midi_learn_filter);
+                });
+
+                ui.add_space(4.0);
+
+                // Build reverse map: ParamId → CC
+                let bound_cc: std::collections::HashMap<_, _> = self
+                    .midi_bindings
+                    .iter()
+                    .map(|(&cc, &id)| (id, cc))
+                    .collect();
+
+                let filter_lower = self.midi_learn_filter.to_lowercase();
+                let params: Vec<_> = forma_control::all_params()
+                    .iter()
+                    .filter(|d| {
+                        filter_lower.is_empty() || d.name.to_lowercase().contains(&filter_lower)
+                    })
+                    .collect();
+
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::Grid::new("midi_learn_grid")
+                        .num_columns(3)
+                        .striped(true)
+                        .spacing([8.0, 2.0])
+                        .show(ui, |ui| {
+                            // Header
+                            ui.label(egui::RichText::new("Parameter").color(text_dis).size(10.0));
+                            ui.label(egui::RichText::new("CC").color(text_dis).size(10.0));
+                            ui.label(egui::RichText::new("").size(10.0));
+                            ui.end_row();
+
+                            for desc in &params {
+                                let is_selected = self.midi_learn_param == Some(desc.id);
+                                let cc_opt = bound_cc.get(&desc.id).copied();
+                                let is_last =
+                                    self.midi_last_cc.is_some() && cc_opt == self.midi_last_cc;
+
+                                // Parameter name — click to arm for learning
+                                let label_col = if is_selected {
+                                    accent
+                                } else {
+                                    self.theme.c(&self.theme.text_primary)
+                                };
+                                let resp = ui.add(egui::SelectableLabel::new(
+                                    is_selected,
+                                    egui::RichText::new(desc.name).size(11.0).color(label_col),
+                                ));
+                                if resp.clicked() {
+                                    if is_selected {
+                                        self.midi_learn_param = None;
+                                    } else {
+                                        self.midi_learn_param = Some(desc.id);
+                                    }
+                                }
+
+                                // CC column
+                                if let Some(cc) = cc_opt {
+                                    let cc_col = if is_last { accent } else { text_sec };
+                                    ui.label(
+                                        egui::RichText::new(format!("CC {cc}"))
+                                            .size(11.0)
+                                            .color(cc_col),
+                                    );
+                                    // Unlearn button
+                                    if ui
+                                        .small_button("✕")
+                                        .on_hover_text("Remove binding")
+                                        .clicked()
+                                    {
+                                        self.midi_bindings.remove(&cc);
+                                        save_midi_bindings(&self.midi_bindings);
+                                    }
+                                } else {
+                                    ui.label(egui::RichText::new("—").size(11.0).color(text_dis));
+                                    ui.label("");
+                                }
+                                ui.end_row();
+                            }
+                        });
+                });
+            });
+        self.midi_learn_open = open;
     }
 }
