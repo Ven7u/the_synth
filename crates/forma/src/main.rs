@@ -931,11 +931,17 @@ impl eframe::App for SynthApp {
                 AppMode::Studio => {
                     self.ui_synth_dock(ui);
                 }
+                #[cfg(feature = "live_rig")]
                 AppMode::DrumMachine => {
                     self.ui_drum_machine(ui);
                 }
+                #[cfg(feature = "live_rig")]
                 AppMode::Live => {
                     self.ui_live_view(ui);
+                }
+                #[cfg(not(feature = "live_rig"))]
+                _ => {
+                    self.ui_synth_dock(ui);
                 }
             });
 
@@ -1451,7 +1457,8 @@ impl SynthApp {
     fn ui_global_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             // ── Mode toggle: STUDIO | DRUM MACHINE | LIVE ─────────────────
-            for (mode, label, hover) in [
+            #[cfg(feature = "live_rig")]
+            let mode_entries: &[(AppMode, &str, &str)] = &[
                 (AppMode::Studio, "STUDIO", "Single-synth deep editing."),
                 (
                     AppMode::DrumMachine,
@@ -1459,7 +1466,11 @@ impl SynthApp {
                     "Drum machine — step grid + voice editor.",
                 ),
                 (AppMode::Live, "LIVE", "Rig performance view."),
-            ] {
+            ];
+            #[cfg(not(feature = "live_rig"))]
+            let mode_entries: &[(AppMode, &str, &str)] =
+                &[(AppMode::Studio, "STUDIO", "Single-synth deep editing.")];
+            for (mode, label, hover) in mode_entries.iter().copied() {
                 let active = self.app_mode == mode;
                 let col = if active {
                     self.theme.c(&self.theme.accent)

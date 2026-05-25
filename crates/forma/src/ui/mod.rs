@@ -5,13 +5,16 @@ pub mod frame;
 pub mod fx_chain;
 pub mod keyboard;
 pub mod layout;
+#[cfg(feature = "live_rig")]
 pub mod live_view;
 pub mod metronome;
 pub mod midi;
+#[cfg(feature = "live_rig")]
 pub mod mixer;
 pub mod modulation;
 pub mod oscillators;
 pub mod patch_browser;
+#[cfg(feature = "live_rig")]
 pub mod rig_strip;
 pub mod scene_browser;
 pub mod scope;
