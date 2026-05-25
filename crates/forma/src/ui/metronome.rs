@@ -10,20 +10,45 @@ impl SynthApp {
         let dt = (now - self.metro_last_time).max(0.0).min(0.5);
         self.metro_last_time = now;
 
-        // Advance phase whenever the metronome is running or a quantized start is pending.
-        if self.metro_enabled || self.seq_pending_start {
+        let seq_playing = self.seq.playing.load(std::sync::atomic::Ordering::Relaxed);
+        let drums_running = self
+            .drum_engine
+            .enabled
+            .load(std::sync::atomic::Ordering::Relaxed);
+
+        // Keep the phase clock running whenever anything tempo-related is active so that
+        // (a) the beat indicator stays animated while the sequencer or drums are playing, and
+        // (b) a pending BAR-quantized launch fires at the correct next bar boundary rather
+        //     than waiting a full extra bar because the phase had been frozen at 0.
+        let clock_active = self.metro_enabled
+            || self.seq_pending_start
+            || self.arp_pending_start
+            || seq_playing
+            || drums_running;
+
+        if clock_active {
             // beats per second: 4/4 at 120 BPM → 2 beats/s; 6/8 → 4 eighth-beats/s.
             let bps = self.global_bpm as f64 / 60.0 * (4.0 / self.metro_denom as f64);
             let prev_phase = self.metro_phase;
             self.metro_phase = (self.metro_phase + dt * bps) % self.metro_beats as f64;
 
-            // Fire the pending sequencer start on a bar boundary (phase wrap).
-            if self.seq_pending_start && self.metro_phase < prev_phase {
-                self.seq_pending_start = false;
+            // On bar boundary (phase wrap), fire all pending quantized launches together.
+            if self.metro_phase < prev_phase {
                 self.metro_phase = 0.0; // snap to exact bar 1
-                self.seq
-                    .playing
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                if self.seq_pending_start {
+                    self.seq_pending_start = false;
+                    self.seq
+                        .playing
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                    // Align drum to bar 1 when seq launches.
+                    self.drum_engine
+                        .phase_reset
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                if self.arp_pending_start {
+                    self.arp_pending_start = false;
+                    self.engine.arp_restart();
+                }
             }
 
             ctx.request_repaint();

@@ -10,6 +10,6 @@
     "scope": true,
     "midi": true
   },
-  "app_mode": "Live",
+  "app_mode": "DrumMachine",
   "studio_tab": "Voice"
 }

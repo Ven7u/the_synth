@@ -92,6 +92,8 @@ pub struct DrumEngineAtomics {
     pub channel_muted: [AtomicBool; DRUM_CHANNELS],
     pub channel_volume: [AtomicU32; DRUM_CHANNELS], // f32 bits
     pub current_step: AtomicUsize,                  // written by audio, read by UI
+    /// UI sets true; audio thread resets step phase to bar 1 on next sample and clears.
+    pub phase_reset: AtomicBool,
     // Drum bus mixer
     pub volume: AtomicU32, // f32 bits
     pub pan: AtomicU32,    // f32 bits, -1..+1
@@ -110,6 +112,7 @@ impl DrumEngineAtomics {
             channel_muted: std::array::from_fn(|_| AtomicBool::new(false)),
             channel_volume: std::array::from_fn(|_| AtomicU32::new(0.8f32.to_bits())),
             current_step: AtomicUsize::new(0),
+            phase_reset: AtomicBool::new(false),
             volume: AtomicU32::new(0.8f32.to_bits()),
             pan: AtomicU32::new(0.0f32.to_bits()),
             muted: AtomicBool::new(false),
@@ -668,6 +671,11 @@ impl DrumProcessor {
         let bpm = self.atomics.bpm();
         self.step_dt = bpm * 4.0 / 60.0 / self.sr; // 16th-note steps
         self.enabled = self.atomics.enabled.load(Ordering::Relaxed);
+        if self.atomics.phase_reset.swap(false, Ordering::Relaxed) {
+            // Snap to step 0 at the next step boundary.
+            self.step_acc = 1.0;
+            self.step_idx = 15; // advances to 0 on next trigger
+        }
         for ch in 0..DRUM_CHANNELS {
             self.patterns[ch] = self.atomics.step_patterns[ch].load(Ordering::Relaxed);
             self.ch_muted[ch] = self.atomics.channel_muted[ch].load(Ordering::Relaxed);

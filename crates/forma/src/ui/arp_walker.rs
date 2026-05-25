@@ -14,29 +14,48 @@ impl SynthApp {
             // ── Left: ARP controls ────────────────────────────────────────
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
-                    let label = egui::RichText::new("ARP").strong().color(if enabled {
-                        self.theme.c(&self.theme.accent)
+                    let bar_quantize = self.seq.bar_quantize.load(Ordering::Relaxed);
+                    let arp_label = if self.arp_pending_start {
+                        egui::RichText::new("… Bar").strong().color(Color32::YELLOW)
                     } else {
-                        Color32::GRAY
-                    });
-                    if ui.button(label).clicked() {
-                        let new_enabled = !enabled;
-                        self.all_notes_off();
-                        self.engine.set_arp_enabled(new_enabled);
-                        if new_enabled && self.arp_sync_active() {
-                            self.apply_clock_sync();
-                            self.schedule_or_restart_arp();
-                        }
-                        if !new_enabled {
-                            self.engine.chord_hold(&[]);
+                        egui::RichText::new("ARP").strong().color(if enabled {
+                            self.theme.c(&self.theme.accent)
+                        } else {
+                            Color32::GRAY
+                        })
+                    };
+                    let arp_tip = if self.arp_pending_start {
+                        "Waiting for the next bar boundary — click to cancel."
+                    } else if bar_quantize && self.arp_sync_active() {
+                        "Toggle arp — start is quantized to the next bar (BAR is on)."
+                    } else {
+                        "Toggle arp on/off."
+                    };
+                    if ui.button(arp_label).on_hover_text(arp_tip).clicked() {
+                        if self.arp_pending_start {
+                            // Cancel the pending launch.
+                            self.arp_pending_start = false;
+                        } else {
+                            let new_enabled = !enabled;
+                            self.all_notes_off();
+                            self.engine.set_arp_enabled(new_enabled);
+                            if new_enabled && self.arp_sync_active() {
+                                self.apply_clock_sync();
+                                self.schedule_or_restart_arp();
+                            }
+                            if !new_enabled {
+                                self.arp_pending_start = false;
+                                self.engine.chord_hold(&[]);
+                            }
                         }
                     }
-                    if ui
-                        .button("RST")
-                        .on_hover_text("Restart arp phase/step from beginning.")
-                        .clicked()
-                    {
-                        self.engine.arp_restart();
+                    let rst_tip = if bar_quantize && self.arp_sync_active() {
+                        "Restart arp at the next bar boundary (BAR is on)."
+                    } else {
+                        "Restart arp phase/step from beginning."
+                    };
+                    if ui.button("RST").on_hover_text(rst_tip).clicked() {
+                        self.schedule_or_restart_arp();
                     }
                     let hold = self.engine.arp_hold();
                     let hold_label = egui::RichText::new("HOLD").color(if hold {

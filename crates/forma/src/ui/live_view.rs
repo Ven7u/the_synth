@@ -144,6 +144,9 @@ impl SynthApp {
         let border = self.theme.c(&self.theme.border);
 
         ui.horizontal(|ui| {
+            let mut switch_to: Option<usize> = None;
+            let mut switch_to_drums = false;
+
             // ── Synth tracks ────────────────────────────────────────────────
             for t in 0..TRACK_COUNT {
                 let focused = self.focused_track == t && self.app_mode == AppMode::Live;
@@ -183,17 +186,23 @@ impl SynthApp {
                         ui.set_min_width(CARD_W);
                         ui.set_max_width(CARD_W);
 
-                        // Row 1: dot + track label + seq indicator.
+                        // Row 1: dot + track label (click to focus) + seq indicator.
                         ui.horizontal(|ui| {
                             let dot_col = if muted { Color32::from_gray(40) } else { tint };
                             ui.label(egui::RichText::new("●").size(7.0).color(dot_col));
 
                             let label_col = if focused { tint } else { text_sec };
-                            ui.label(
-                                egui::RichText::new(format!("T{}  {}", t + 1, track_name))
-                                    .size(10.0)
-                                    .color(label_col),
+                            let label_resp = ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(format!("T{}  {}", t + 1, track_name))
+                                        .size(10.0)
+                                        .color(label_col),
+                                )
+                                .sense(Sense::click()),
                             );
+                            if label_resp.clicked() {
+                                switch_to = Some(t);
+                            }
 
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
@@ -273,14 +282,14 @@ impl SynthApp {
                         });
                     })
                     .response;
-
-                // Click anywhere on the card to focus this track.
-                if card_resp.interact(Sense::click()).clicked() {
-                    self.switch_focused_track(t);
-                    self.app_mode = AppMode::Live;
-                }
+                let _ = card_resp;
 
                 ui.add_space(4.0);
+            }
+
+            if let Some(t) = switch_to {
+                self.switch_focused_track(t);
+                self.app_mode = AppMode::Live;
             }
 
             // Divider before drums.
@@ -327,7 +336,17 @@ impl SynthApp {
                         };
                         ui.label(egui::RichText::new("●").size(7.0).color(dot_col));
                         let label_col = if drums_active { drum_tint } else { text_sec };
-                        ui.label(egui::RichText::new("DRUMS").size(10.0).color(label_col));
+                        if ui
+                            .add(
+                                egui::Label::new(
+                                    egui::RichText::new("DRUMS").size(10.0).color(label_col),
+                                )
+                                .sense(Sense::click()),
+                            )
+                            .clicked()
+                        {
+                            switch_to_drums = true;
+                        }
                     });
 
                     ui.label(egui::RichText::new("Step seq").size(8.0).color(text_dis));
@@ -373,8 +392,9 @@ impl SynthApp {
                     });
                 })
                 .response;
+            let _ = drums_resp;
 
-            if drums_resp.interact(Sense::click()).clicked() {
+            if switch_to_drums {
                 self.app_mode = AppMode::DrumMachine;
             }
 

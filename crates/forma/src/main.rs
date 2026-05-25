@@ -229,6 +229,7 @@ pub(crate) struct SynthApp {
     pub(crate) track_arp_sync: [bool; TRACK_COUNT],
     pub(crate) track_seq_sync: [bool; TRACK_COUNT],
     pub(crate) track_seq_pending: [bool; TRACK_COUNT],
+    pub(crate) track_arp_pending: [bool; TRACK_COUNT],
 
     // Sequencer — chord keyboard (live, not threaded)
     pub(crate) chord_kb: ChordKbState,
@@ -245,6 +246,8 @@ pub(crate) struct SynthApp {
 
     /// When bar-quantize is on, Play defers start until the next bar boundary.
     pub(crate) seq_pending_start: bool,
+    /// When bar-quantize is on, Arp enable/RST defers restart until the next bar boundary.
+    pub(crate) arp_pending_start: bool,
 
     // Oscilloscope
     pub(crate) scope_fullscreen: bool,
@@ -490,11 +493,13 @@ impl SynthApp {
             note_seq_div: 1,  // 1/8 note
             chord_seq_div: 4, // 1 bar
             seq_pending_start: false,
+            arp_pending_start: false,
             seq,
             track_seq,
             track_arp_sync: [true; TRACK_COUNT],
             track_seq_sync: [true; TRACK_COUNT],
             track_seq_pending: [false; TRACK_COUNT],
+            track_arp_pending: [false; TRACK_COUNT],
             chord_kb: ChordKbState::new(),
             scope_fullscreen: false,
             scope_x_scale: 1.0,
@@ -619,8 +624,14 @@ impl SynthApp {
     pub(crate) fn schedule_or_restart_arp(&mut self) {
         let playing = self.seq.playing.load(Ordering::Relaxed);
         let bar_quantize = self.seq.bar_quantize.load(Ordering::Relaxed);
-        if self.arp_sync_active() && bar_quantize && playing {
-            self.seq.arp_restart.store(true, Ordering::Relaxed);
+        if self.arp_sync_active() && bar_quantize {
+            if playing {
+                // Sequencer is the clock master — it fires arp restart at next bar boundary.
+                self.seq.arp_restart.store(true, Ordering::Relaxed);
+            } else {
+                // No running sequencer — defer via metro bar-wrap.
+                self.arp_pending_start = true;
+            }
         } else {
             self.engine.arp_restart();
         }
@@ -676,20 +687,20 @@ impl SynthApp {
         }
     }
 
-    /// Push a NoteOn event — routes to focused track in Studio mode, or to all
-    /// tracks matching the note's key range in LIVE mode (as if from internal kbd).
+    /// Push a NoteOn from the on-screen keyboard — always routes to the focused
+    /// track only (tracks are independent synths; the piano controls the one you see).
     pub(crate) fn push_note_on(&mut self, midi: u8) {
-        self.route_note_on(midi, 0xFF); // 0xFF = bypass channel filter (internal keyboard)
+        self.engine.note_on(midi, self.piano_velocity);
     }
 
-    /// Fan a NoteOn to the appropriate engine(s) based on split and MIDI channel.
-    /// `channel`: 0-based MIDI channel, or 0xFF for internal (no channel filter).
+    /// Route a NoteOn from a hardware MIDI device using per-track channel + split filters.
+    /// In LIVE mode each track acts as an independent synth: hardware MIDI is the only
+    /// path that fans out, and only when a track's channel/range matches.
+    /// `channel`: 0-based MIDI channel (0–15).
     pub(crate) fn route_note_on(&mut self, midi: u8, channel: u8) {
         if self.app_mode == crate::ui::layout::AppMode::Live {
             for t in 0..TRACK_COUNT {
-                let ch_ok = self.track_midi_ch[t] == 0
-                    || channel == 0xFF
-                    || self.track_midi_ch[t] == channel + 1;
+                let ch_ok = self.track_midi_ch[t] == 0 || self.track_midi_ch[t] == channel + 1;
                 let key_ok = midi >= self.track_key_lo[t] && midi <= self.track_key_hi[t];
                 if ch_ok && key_ok {
                     self.track_engines[t].note_on(midi, self.piano_velocity);
@@ -700,15 +711,9 @@ impl SynthApp {
         }
     }
 
-    /// Push a NoteOff — fans out to all track engines in LIVE mode to prevent stuck notes.
+    /// Push a NoteOff from the on-screen keyboard — focused track only.
     pub(crate) fn push_note_off(&mut self, midi: u8) {
-        if self.app_mode == crate::ui::layout::AppMode::Live {
-            for t in 0..TRACK_COUNT {
-                self.track_engines[t].note_off(midi);
-            }
-        } else {
-            self.engine.note_off(midi);
-        }
+        self.engine.note_off(midi);
     }
 
     /// Silence all voices, reset all FX tails, and clear all note-tracking state.
@@ -735,22 +740,13 @@ impl SynthApp {
     }
 
     pub(crate) fn all_notes_off(&mut self) {
-        if self.app_mode == crate::ui::layout::AppMode::Live {
-            for t in 0..TRACK_COUNT {
-                self.track_engines[t].silence_all_voices();
-            }
-            let held: Vec<u8> = self.piano_held_midi.drain().collect();
-            for n in held {
-                for t in 0..TRACK_COUNT {
-                    self.track_engines[t].note_off(n);
-                }
-            }
-        } else {
-            self.engine.silence_all_voices();
-            let held: Vec<u8> = self.piano_held_midi.drain().collect();
-            for n in held {
-                self.engine.note_off(n);
-            }
+        // Silence the focused engine and release held piano notes.
+        // In LIVE mode each track is independent — other tracks' arps/seqs
+        // keep running; only the focused track's keyboard input is cleared.
+        self.engine.silence_all_voices();
+        let held: Vec<u8> = self.piano_held_midi.drain().collect();
+        for n in held {
+            self.engine.note_off(n);
         }
         if self.app_mode == crate::ui::layout::AppMode::Live {
             for t in 0..TRACK_COUNT {
@@ -1257,11 +1253,19 @@ impl SynthApp {
         }
         let old = self.focused_track;
 
+        // Release any piano-held notes on the old track before switching so they
+        // don't sustain indefinitely (each track is an independent synth).
+        let held: Vec<u8> = self.piano_held_midi.iter().copied().collect();
+        for n in held {
+            self.track_engines[old].note_off(n);
+        }
+
         // Save current track's patch and sync flags.
         self.track_patches[old] = self.capture_patch();
         self.track_arp_sync[old] = self.arp_sync;
         self.track_seq_sync[old] = self.seq_sync;
         self.track_seq_pending[old] = self.seq_pending_start;
+        self.track_arp_pending[old] = self.arp_pending_start;
 
         // Switch engine + sequencer handle to the new track.
         // The old track's sequencer thread keeps running independently.
@@ -1273,6 +1277,7 @@ impl SynthApp {
         self.arp_sync = self.track_arp_sync[new];
         self.seq_sync = self.track_seq_sync[new];
         self.seq_pending_start = self.track_seq_pending[new];
+        self.arp_pending_start = self.track_arp_pending[new];
 
         // Restore new track state: sync UI mirrors AND push params to the engine.
         let p = self.track_patches[new].clone();
@@ -1538,6 +1543,100 @@ impl SynthApp {
                     self.seq.bar_quantize.store(!bq, Ordering::Relaxed);
                 }
             });
+
+            // ── BPM display + beat indicator ──────────────────────────────
+            // Clicking opens/closes the metronome window.
+            {
+                let seq_playing = self.seq.playing.load(Ordering::Relaxed);
+                let drums_running = self.drum_engine.enabled.load(Ordering::Relaxed);
+                let metro_active = self.metro_enabled
+                    || self.seq_pending_start
+                    || self.arp_pending_start
+                    || seq_playing
+                    || drums_running;
+                let beat_idx = self.metro_phase as usize;
+                let beat_frac = self.metro_phase.fract() as f32;
+
+                // Accent dot pulses on beat 1; beat dot pulses on beats 2+.
+                let accent_t = if metro_active && beat_idx == 0 {
+                    (1.0_f32 - beat_frac).powf(2.2)
+                } else {
+                    0.0
+                };
+                let beat_t = if metro_active && beat_idx > 0 {
+                    (1.0_f32 - beat_frac).powf(2.2)
+                } else {
+                    0.0
+                };
+
+                const DOT_R: f32 = 3.5;
+                // Fixed layout: 30px BPM text + 5px gap + dot + 4px gap + dot
+                let total_w = 30.0 + 5.0 + DOT_R * 2.0 + 4.0 + DOT_R * 2.0;
+                let (rect, resp) = ui.allocate_exact_size(
+                    egui::Vec2::new(total_w, ui.available_height()),
+                    egui::Sense::click(),
+                );
+                if resp.clicked() {
+                    self.show_metronome = !self.show_metronome;
+                }
+                if resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                resp.on_hover_text("Click to open metronome / time signature settings.");
+
+                if ui.is_rect_visible(rect) {
+                    let painter = ui.painter();
+                    let cy = rect.center().y;
+
+                    // Time signature label (e.g. "4/4")
+                    let sig_col = if self.show_metronome {
+                        self.theme.c(&self.theme.accent)
+                    } else {
+                        self.theme.c(&self.theme.text_secondary)
+                    };
+                    painter.text(
+                        egui::Pos2::new(rect.left() + 15.0, cy),
+                        egui::Align2::CENTER_CENTER,
+                        format!("{}/{}", self.metro_beats, self.metro_denom),
+                        egui::FontId::monospace(10.0),
+                        sig_col,
+                    );
+
+                    // Helper: lerp between two Color32s
+                    let lerp_col = |a: egui::Color32, b: egui::Color32, t: f32| {
+                        let t = t.clamp(0.0, 1.0);
+                        egui::Color32::from_rgb(
+                            (a.r() as f32 + (b.r() as f32 - a.r() as f32) * t) as u8,
+                            (a.g() as f32 + (b.g() as f32 - a.g() as f32) * t) as u8,
+                            (a.b() as f32 + (b.b() as f32 - a.b() as f32) * t) as u8,
+                        )
+                    };
+
+                    // Accent dot (beat 1) — accent colour
+                    let accent_full = self.theme.c(&self.theme.accent);
+                    let accent_dim = egui::Color32::from_rgb(
+                        (accent_full.r() as f32 * 0.18) as u8,
+                        (accent_full.g() as f32 * 0.18) as u8,
+                        (accent_full.b() as f32 * 0.18) as u8,
+                    );
+                    let dot1_x = rect.left() + 30.0 + 5.0 + DOT_R;
+                    painter.circle_filled(
+                        egui::Pos2::new(dot1_x, cy),
+                        DOT_R,
+                        lerp_col(accent_dim, accent_full, accent_t),
+                    );
+
+                    // Beat dot (beats 2+) — cool blue
+                    let beat_full = egui::Color32::from_rgb(100, 170, 220);
+                    let beat_dim = egui::Color32::from_rgb(15, 30, 45);
+                    let dot2_x = dot1_x + DOT_R * 2.0 + 4.0;
+                    painter.circle_filled(
+                        egui::Pos2::new(dot2_x, cy),
+                        DOT_R,
+                        lerp_col(beat_dim, beat_full, beat_t),
+                    );
+                }
+            }
 
             ui.separator();
 
