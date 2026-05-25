@@ -123,6 +123,9 @@ pub struct Patch {
     /// How much velocity opens the filter (adds up to 8 kHz at 1.0). 0 = off.
     #[serde(default)]
     pub vel_filter: f32,
+    /// Voice mode: 0 = poly, 1 = mono, 2 = legato.
+    #[serde(default)]
+    pub mono_mode: u8,
     pub fenv_adsr: [f32; 4],
 
     // Amp

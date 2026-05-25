@@ -529,6 +529,45 @@ impl SynthApp {
                         {
                             self.engine.set_glide_time(glide);
                         }
+
+                        // Voice mode selector
+                        let mode = self.engine.mono_mode();
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new("VOICE")
+                                    .weak()
+                                    .size(9.0)
+                                    .color(self.theme.c(&self.theme.text_secondary)),
+                            );
+                            ui.horizontal(|ui| {
+                                for (label, val, tip) in [
+                                    ("POLY", 0u8, "Polyphonic — multiple simultaneous notes"),
+                                    ("MONO", 1u8, "Mono — single voice, retrigger on each note"),
+                                    (
+                                        "LEGATO",
+                                        2u8,
+                                        "Legato — single voice, glide without retrigger",
+                                    ),
+                                ] {
+                                    let active = mode == val;
+                                    let col = if active {
+                                        self.theme.c(&self.theme.accent)
+                                    } else {
+                                        self.theme.c(&self.theme.text_secondary)
+                                    };
+                                    if ui
+                                        .selectable_label(
+                                            active,
+                                            egui::RichText::new(label).size(9.0).color(col),
+                                        )
+                                        .on_hover_text(tip)
+                                        .clicked()
+                                    {
+                                        self.engine.set_mono_mode(val);
+                                    }
+                                }
+                            });
+                        });
                     });
 
                     ui.add_space(sp_xs);

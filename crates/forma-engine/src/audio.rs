@@ -135,6 +135,8 @@ pub struct AudioState {
 
     // Glide
     pub glide_time: Shared, // 0.0..0.5 s
+    /// 0 = poly, 1 = mono (retrigger), 2 = legato (no retrigger while gate held)
+    pub mono_mode: Arc<std::sync::atomic::AtomicU8>,
 
     // Master
     pub master_vol: Shared, // OSC mix level — pre-FX
@@ -324,6 +326,7 @@ impl AudioState {
             amp_cursors: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
             fenv_cursors: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
             glide_time: shared(0.0),
+            mono_mode: Arc::new(AtomicU8::new(0)),
             master_vol: shared(0.8),
             global_vol: shared(0.8),
             voice_gain_scale: shared(1.0),

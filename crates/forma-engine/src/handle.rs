@@ -225,6 +225,12 @@ impl SynthEngineHandle {
     pub fn vel_filter(&self) -> f32 {
         self.state.vel_filter.value()
     }
+    pub fn set_mono_mode(&self, v: u8) {
+        self.state.mono_mode.store(v.min(2), Ordering::Relaxed);
+    }
+    pub fn mono_mode(&self) -> u8 {
+        self.state.mono_mode.load(Ordering::Relaxed)
+    }
     pub fn set_mod_wheel_cutoff_add(&self, v: f32) {
         self.state.mod_wheel_cutoff_add.set(v.clamp(0.0, 8000.0));
     }
@@ -1400,6 +1406,7 @@ impl SynthEngineHandle {
         self.set_filter_key_track(p.filter_key_track);
         self.set_vel_amp(p.vel_amp);
         self.set_vel_filter(p.vel_filter);
+        self.set_mono_mode(p.mono_mode);
         self.set_filter_env_amount(p.filter_env_amount);
         self.set_fenv_attack(p.fenv_adsr[0]);
         self.set_fenv_decay(p.fenv_adsr[1]);
@@ -1612,6 +1619,7 @@ impl SynthEngineHandle {
             filter_key_track: self.filter_key_track(),
             vel_amp: self.vel_amp(),
             vel_filter: self.vel_filter(),
+            mono_mode: self.mono_mode(),
             filter_env_amount: self.filter_env_amount(),
             fenv_adsr: [
                 self.fenv_attack(),

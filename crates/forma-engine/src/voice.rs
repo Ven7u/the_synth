@@ -48,6 +48,10 @@ pub struct VoiceAllocator {
     /// sees a real 0→1 edge on same-buffer NoteOff+NoteOn sequences and on
     /// polyphonic retriggers.
     retrigger_countdown: [u8; VOICE_COUNT],
+    /// Mono mode note stack — held notes newest-first. When the top note is
+    /// released the previous note resumes. Max 32 simultaneous held notes.
+    mono_stack: [u8; 32],
+    mono_stack_len: usize,
     /// Arpeggiator internal state. Config is read each tick from
     /// `state.arp` (lock-free atomics).
     arp: ArpState,
@@ -68,6 +72,8 @@ impl VoiceAllocator {
             steal_idx: 0,
             pitch_hold_count: [0; 128],
             retrigger_countdown: [0; VOICE_COUNT],
+            mono_stack: [0u8; 32],
+            mono_stack_len: 0,
             arp: ArpState::new(),
             walker: ScaleWalker::new(),
         }
@@ -150,7 +156,12 @@ impl VoiceAllocator {
                     if state.arp.enabled.load(Ordering::Relaxed) {
                         self.arp.note_on(pitch);
                     } else {
-                        self.trigger_note(state, pitch, velocity);
+                        let mono = state.mono_mode.load(Ordering::Relaxed);
+                        if mono > 0 {
+                            self.mono_note_on(state, pitch, velocity, mono == 2);
+                        } else {
+                            self.trigger_note(state, pitch, velocity);
+                        }
                     }
                 }
                 ControlEvent::NoteOff { pitch, .. } => {
@@ -158,7 +169,12 @@ impl VoiceAllocator {
                         let hold = state.arp.hold.load(Ordering::Relaxed);
                         self.arp.note_off(pitch, hold);
                     } else {
-                        self.release_note(state, pitch);
+                        let mono = state.mono_mode.load(Ordering::Relaxed);
+                        if mono > 0 {
+                            self.mono_note_off(state, pitch, mono == 2);
+                        } else {
+                            self.release_note(state, pitch);
+                        }
                     }
                 }
                 ControlEvent::SetParam { param, value } => {
@@ -292,6 +308,82 @@ impl VoiceAllocator {
                     break;
                 }
             }
+        }
+    }
+
+    // =======================================================================
+    // Mono / legato primitives
+    // =======================================================================
+
+    /// Mono NoteOn — always uses voice slot 0.
+    ///
+    /// Pushes `pitch` onto the held-note stack.
+    /// In legato mode, if the gate is already high the frequency is updated
+    /// silently (no retrigger) so the ADSR keeps running and glide slides in.
+    /// In mono mode the voice is always retriggered.
+    fn mono_note_on(&mut self, state: &AudioState, pitch: u8, velocity: u8, legato: bool) {
+        // Push onto stack (cap at 32; if full, drop the oldest entry).
+        if self.mono_stack_len < self.mono_stack.len() {
+            self.mono_stack[self.mono_stack_len] = pitch;
+            self.mono_stack_len += 1;
+        } else {
+            // Shift left, drop oldest
+            self.mono_stack.copy_within(1.., 0);
+            self.mono_stack[self.mono_stack.len() - 1] = pitch;
+        }
+
+        let gate_high = state.voice_gates[0].value() > 0.5;
+
+        state.voice_freq_targets[0].set(midi_hz(pitch as f64) as f32);
+        state.voice_velocities[0].set(velocity as f32 / 127.0);
+        self.voice_notes[0] = Some(pitch);
+
+        if legato && gate_high {
+            // Legato: slide to new pitch without envelope retrigger.
+        } else {
+            // Mono: always retrigger.
+            let audible = gate_high || state.amp_cursors[0].value() > 0.5;
+            if audible {
+                state.voice_gates[0].set(0.0);
+                self.retrigger_countdown[0] = 4;
+            } else {
+                state.voice_gates[0].set(1.0);
+                self.retrigger_countdown[0] = 0;
+            }
+        }
+    }
+
+    /// Mono NoteOff — removes `pitch` from the stack.
+    ///
+    /// If other notes are still held the previous note resumes (last-note
+    /// priority).  If the stack is empty the voice is released normally.
+    fn mono_note_off(&mut self, state: &AudioState, pitch: u8, legato: bool) {
+        // Remove pitch from stack.
+        if let Some(pos) = self.mono_stack[..self.mono_stack_len]
+            .iter()
+            .rposition(|&p| p == pitch)
+        {
+            self.mono_stack
+                .copy_within(pos + 1..self.mono_stack_len, pos);
+            self.mono_stack_len -= 1;
+        } else {
+            return; // note wasn't in stack (spurious NoteOff)
+        }
+
+        if self.mono_stack_len > 0 {
+            // Resume the most recently held note.
+            let resume = self.mono_stack[self.mono_stack_len - 1];
+            state.voice_freq_targets[0].set(midi_hz(resume as f64) as f32);
+            self.voice_notes[0] = Some(resume);
+            // In legato the gate stays high (smooth glide back).
+            if !legato {
+                state.voice_gates[0].set(0.0);
+                self.retrigger_countdown[0] = 4;
+            }
+        } else {
+            // No more held notes — release.
+            state.voice_gates[0].set(0.0);
+            self.voice_notes[0] = None;
         }
     }
 }
