@@ -213,6 +213,18 @@ impl SynthEngineHandle {
     pub fn filter_key_track(&self) -> f32 {
         self.state.filter_key_track.value()
     }
+    pub fn set_vel_amp(&self, v: f32) {
+        self.state.vel_amp.set(v.clamp(0.0, 1.0));
+    }
+    pub fn vel_amp(&self) -> f32 {
+        self.state.vel_amp.value()
+    }
+    pub fn set_vel_filter(&self, v: f32) {
+        self.state.vel_filter.set(v.clamp(0.0, 1.0));
+    }
+    pub fn vel_filter(&self) -> f32 {
+        self.state.vel_filter.value()
+    }
     pub fn set_mod_wheel_cutoff_add(&self, v: f32) {
         self.state.mod_wheel_cutoff_add.set(v.clamp(0.0, 8000.0));
     }
@@ -1386,6 +1398,8 @@ impl SynthEngineHandle {
         self.set_filter_resonance(if p.filter_enabled { p.filter_q } else { 0.0 });
         self.set_filter_drive(p.filter_drive);
         self.set_filter_key_track(p.filter_key_track);
+        self.set_vel_amp(p.vel_amp);
+        self.set_vel_filter(p.vel_filter);
         self.set_filter_env_amount(p.filter_env_amount);
         self.set_fenv_attack(p.fenv_adsr[0]);
         self.set_fenv_decay(p.fenv_adsr[1]);
@@ -1596,6 +1610,8 @@ impl SynthEngineHandle {
             filter_q: self.filter_resonance(),
             filter_drive: self.filter_drive(),
             filter_key_track: self.filter_key_track(),
+            vel_amp: self.vel_amp(),
+            vel_filter: self.vel_filter(),
             filter_env_amount: self.filter_env_amount(),
             fenv_adsr: [
                 self.fenv_attack(),

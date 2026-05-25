@@ -117,6 +117,12 @@ pub struct Patch {
     #[serde(default)]
     pub filter_key_track: f32,
     pub filter_env_amount: f32,
+    /// How much velocity scales amplitude. 0 = always full, 1 = full velocity range.
+    #[serde(default = "default_vel_amp")]
+    pub vel_amp: f32,
+    /// How much velocity opens the filter (adds up to 8 kHz at 1.0). 0 = off.
+    #[serde(default)]
+    pub vel_filter: f32,
     pub fenv_adsr: [f32; 4],
 
     // Amp
@@ -238,6 +244,9 @@ pub struct Patch {
 }
 
 fn default_filter_drive() -> f32 {
+    1.0
+}
+fn default_vel_amp() -> f32 {
     1.0
 }
 fn default_stereo_width() -> f32 {

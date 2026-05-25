@@ -147,6 +147,8 @@ pub struct AudioState {
     pub voice_freqs: Vec<Shared>,
     pub voice_gates: Vec<Shared>,
     pub voice_velocities: Vec<Shared>, // 0.0..1.0, set on NoteOn
+    pub vel_amp: Shared,               // 0=ignore velocity, 1=full sensitivity
+    pub vel_filter: Shared,            // 0=off, 1=velocity adds up to 8 kHz to cutoff
     /// Per-voice audibility flag, written by `VoiceAllocator::begin_buffer`.
     /// The DSP graph's `GatedVoice` wrapper skips the voice's sub-graph when
     /// this is `false` — the main CPU win at idle and under light load.
@@ -336,6 +338,8 @@ impl AudioState {
             voice_freqs: (0..VOICE_COUNT).map(|_| shared(440.0)).collect(),
             voice_gates: (0..VOICE_COUNT).map(|_| shared(0.0)).collect(),
             voice_velocities: (0..VOICE_COUNT).map(|_| shared(1.0)).collect(),
+            vel_amp: shared(1.0),
+            vel_filter: shared(0.0),
             voice_audible: (0..VOICE_COUNT)
                 .map(|_| Arc::new(AtomicBool::new(false)))
                 .collect(),
@@ -686,8 +690,10 @@ pub fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Sen
         // Filter env sweep: additive in Hz with a fixed max range so the sweep covers
         // musically useful territory regardless of base cutoff.
         // env_amount=1.0 adds up to 12 kHz above base (≈2–3 octaves); at 0.3 it adds ~3.6 kHz.
-        let dyn_cutoff =
-            var(&state.effective_cutoff) + fenv * var(&state.filter_env_amount) * dc(12000.0_f32);
+        // Velocity → filter: adds up to 8 kHz at vel_filter=1.0 and full velocity.
+        let dyn_cutoff = var(&state.effective_cutoff)
+            + fenv * var(&state.filter_env_amount) * dc(12000.0_f32)
+            + var(&state.voice_velocities[vi]) * var(&state.vel_filter) * dc(8000.0_f32);
         let filtered = (driven | dyn_cutoff | var(&state.resonance)) >> moog();
 
         // Amp ADSR envelope (fully live-parametric).
@@ -700,7 +706,11 @@ pub fn build_synth_graph(state: &AudioState, sr: f64) -> Box<dyn AudioUnit + Sen
                 Some(state.amp_cursors[vi].clone()),
                 sr as f32,
             ));
-        filtered * env * var(&state.voice_velocities[vi])
+        // Velocity → amplitude: lerp(1.0, velocity, vel_amp).
+        // vel_amp=0 → always full volume; vel_amp=1 → velocity directly scales output.
+        let vel_scale =
+            dc(1.0) - var(&state.vel_amp) + var(&state.vel_amp) * var(&state.voice_velocities[vi]);
+        filtered * env * vel_scale
     };
 
     // Wrap each voice in a `GatedVoice` so silent voices short-circuit their

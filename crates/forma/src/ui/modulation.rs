@@ -806,6 +806,40 @@ impl SynthApp {
                     {
                         self.engine.set_filter_key_track(key_track);
                     }
+
+                    let mut vel_amp = self.engine.vel_amp();
+                    if super::widgets::knob(
+                        ui,
+                        &mut vel_amp,
+                        0.0..=1.0,
+                        "VEL>AMP",
+                        &self.theme,
+                        false,
+                    )
+                    .on_hover_text(
+                        "Velocity → amplitude. 0 = velocity ignored (always full volume), 1 = full sensitivity.",
+                    )
+                    .changed()
+                    {
+                        self.engine.set_vel_amp(vel_amp);
+                    }
+
+                    let mut vel_filter = self.engine.vel_filter();
+                    if super::widgets::knob(
+                        ui,
+                        &mut vel_filter,
+                        0.0..=1.0,
+                        "VEL>FLT",
+                        &self.theme,
+                        false,
+                    )
+                    .on_hover_text(
+                        "Velocity → filter cutoff. Hard hits open the filter. 0 = off, 1 = adds up to 8 kHz.",
+                    )
+                    .changed()
+                    {
+                        self.engine.set_vel_filter(vel_filter);
+                    }
                 });
             });
         });
