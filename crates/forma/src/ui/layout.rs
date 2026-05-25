@@ -2,11 +2,12 @@ use serde::{Deserialize, Serialize};
 
 // ── Mode / tab enums ─────────────────────────────────────────────────────────
 
-/// Top-level application mode — same patch data, two UI surfaces.
+/// Top-level application mode — same patch data, three UI surfaces.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AppMode {
     #[default]
     Studio,
+    DrumMachine,
     Live,
 }
 

@@ -150,6 +150,7 @@ impl SynthApp {
                                 }
                             }
                         });
+                        self.fx_delay_division = self.fx_delay_division.min(DELAY_DIVISIONS.len() - 1);
                         let synced_time = (beat_sec * DELAY_DIVISIONS[self.fx_delay_division].1).clamp(0.01, 1.0);
                         self.fx_delay_time = synced_time;
                         ui.label(egui::RichText::new(format!("{:.3} s  @{}BPM", synced_time, self.global_bpm)).small().color(Color32::DARK_GRAY))

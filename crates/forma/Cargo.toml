@@ -14,6 +14,11 @@ long_description = "A polyphonic software synthesizer with oscillators, filter, 
 icon = ["assets/icons/icon_512x512@2x.png", "assets/icons/icon_256x256.png", "assets/icons/icon_128x128.png", "assets/icons/icon_32x32.png", "assets/icons/icon_16x16.png"]
 resources = ["assets/patches"]
 
+[features]
+# Enables the multi-track LIVE rig and drum machine UI surfaces.
+# Not yet production-ready — off by default so main branch builds clean.
+live_rig = []
+
 [dependencies]
 # Dipendenze interne
 forma-dsp     = { path = "../forma-dsp" }

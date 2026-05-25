@@ -6,16 +6,18 @@
 mod audio;
 mod patch;
 mod recorder;
+mod scene;
 mod sequencer;
 mod ui;
 
-use audio::AudioEngine;
+use audio::{AudioEngine, DrumEngineAtomics, TrackMixerAtomics, TRACK_COUNT};
 use eframe::egui;
 use forma_control::midi::{MidiEngine, MidiEvent};
 use patch::{default_patches, Patch};
 use sequencer::{spawn_sequencer, ChordKbState, SequencerHandle};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+use ui::drum_machine_ui::DrumMachineState;
 use ui::frame::SynthFrame;
 use ui::layout::{AppMode, StudioTab};
 
@@ -215,8 +217,19 @@ pub(crate) struct SynthApp {
     pub(crate) walker_sync: bool, // per-component sync toggle for scale walker
     pub(crate) seq_sync: bool,  // per-component sync toggle for sequencer
 
-    // Sequencer — handle shared with the dedicated sequencer thread
+    // Sequencer — focused-track handle (shorthand clone of track_seq[focused_track]).
+    // All call sites use this; switch_focused_track swaps it to the new track's handle.
     pub(crate) seq: Arc<SequencerHandle>,
+
+    // Per-track sequencer handles — each runs its own background thread.
+    pub(crate) track_seq: [Arc<SequencerHandle>; TRACK_COUNT],
+
+    // Per-track arp/seq sync flags (the single self.arp_sync/seq_sync/seq_pending_start
+    // hold the focused track's current values and are saved here on focus switch).
+    pub(crate) track_arp_sync: [bool; TRACK_COUNT],
+    pub(crate) track_seq_sync: [bool; TRACK_COUNT],
+    pub(crate) track_seq_pending: [bool; TRACK_COUNT],
+    pub(crate) track_arp_pending: [bool; TRACK_COUNT],
 
     // Sequencer — chord keyboard (live, not threaded)
     pub(crate) chord_kb: ChordKbState,
@@ -233,6 +246,8 @@ pub(crate) struct SynthApp {
 
     /// When bar-quantize is on, Play defers start until the next bar boundary.
     pub(crate) seq_pending_start: bool,
+    /// When bar-quantize is on, Arp enable/RST defers restart until the next bar boundary.
+    pub(crate) arp_pending_start: bool,
 
     // Oscilloscope
     pub(crate) scope_fullscreen: bool,
@@ -307,6 +322,41 @@ pub(crate) struct SynthApp {
     pub(crate) fx_crystal_delay_ms: f32,
     pub(crate) fx_crystal_pitch: u8, // 0=0.5x, 1=1x, 2=2x, 3=4x
 
+    // Multi-track rig — all 4 engine handles + mixer atomics
+    pub(crate) track_engines: [forma_engine::SynthEngineHandle; TRACK_COUNT],
+    pub(crate) track_mixer: [std::sync::Arc<TrackMixerAtomics>; TRACK_COUNT],
+    /// Which track the UI is currently editing (0–3). Track 0 = default.
+    pub(crate) focused_track: usize,
+    /// Per-track name labels.
+    pub(crate) track_names: [String; TRACK_COUNT],
+    /// Last-known patch for each track — used to restore UI mirrors on focus switch.
+    pub(crate) track_patches: [patch::Patch; TRACK_COUNT],
+
+    // Drum machine — UI state + audio engine atomics
+    pub(crate) drums: DrumMachineState,
+    pub(crate) drum_engine: std::sync::Arc<DrumEngineAtomics>,
+
+    // Mixer panel visibility (LIVE mode)
+    pub(crate) show_mixer: bool,
+
+    // Scene management
+    pub(crate) scene_library: Vec<scene::Scene>,
+    pub(crate) scene_name: String,
+    pub(crate) scene_browser_open: bool,
+
+    // Keyboard split (per-track MIDI note range, inclusive)
+    pub(crate) track_key_lo: [u8; TRACK_COUNT],
+    pub(crate) track_key_hi: [u8; TRACK_COUNT],
+    // MIDI channel routing: 0 = omni, 1–16 = specific channel
+    pub(crate) track_midi_ch: [u8; TRACK_COUNT],
+
+    // Scene chain (auto-advance through scenes on bar boundaries)
+    pub(crate) scene_chain: Vec<usize>, // indices into scene_library
+    pub(crate) scene_chain_bars: u32,   // bars per step
+    pub(crate) scene_chain_pos: usize,  // current step index
+    pub(crate) scene_chain_active: bool,
+    pub(crate) scene_chain_elapsed_s: f32,
+
     /// Shared WAV recorder sink — `Some` while recording, `None` otherwise.
     pub(crate) recorder_sink: Arc<Mutex<Option<recorder::Recorder>>>,
 }
@@ -316,10 +366,32 @@ impl SynthApp {
         let mut midi = MidiEngine::new();
         midi.list_ports(); // populate port list at startup
 
-        // Clone the typed engine handle out of the AudioEngine before moving
-        // it into the SynthApp. Any future thread (UI, MIDI, sequencer) that
-        // needs to talk to the engine can further .clone() this.
-        let engine = audio.handle.clone();
+        // Track 0 is the UI's active engine — existing UI code uses self.engine
+        // which always points to the focused track's handle. Phase 2 will add
+        // focus switching; for now track 0 is permanently focused.
+        let engine = audio.handles[0].clone();
+        let track_engines = [
+            audio.handles[0].clone(),
+            audio.handles[1].clone(),
+            audio.handles[2].clone(),
+            audio.handles[3].clone(),
+        ];
+        let track_mixer = [
+            std::sync::Arc::clone(&audio.mixers[0]),
+            std::sync::Arc::clone(&audio.mixers[1]),
+            std::sync::Arc::clone(&audio.mixers[2]),
+            std::sync::Arc::clone(&audio.mixers[3]),
+        ];
+        // Extract drum engine Arc before audio is moved.
+        let drum_engine = std::sync::Arc::clone(&audio.drum);
+
+        // Snapshot each engine's initial patch state (all "Init" on fresh start).
+        let track_patches = [
+            audio.handles[0].snapshot_patch(),
+            audio.handles[1].snapshot_patch(),
+            audio.handles[2].snapshot_patch(),
+            audio.handles[3].snapshot_patch(),
+        ];
 
         // Restore persisted layout (theme + panel visibility).
         let saved = ui::layout::load_layout();
@@ -331,8 +403,15 @@ impl SynthApp {
         let app_mode = saved.app_mode;
         let studio_tab = saved.studio_tab;
 
-        let seq = Arc::new(SequencerHandle::new());
-        spawn_sequencer(Arc::clone(&seq), engine.clone());
+        // One sequencer thread per track — each wired to its own engine clone so
+        // all 4 can run and produce notes independently and simultaneously.
+        let track_seq: [Arc<SequencerHandle>; TRACK_COUNT] = std::array::from_fn(|t| {
+            let handle = Arc::new(SequencerHandle::new());
+            spawn_sequencer(Arc::clone(&handle), track_engines[t].clone());
+            handle
+        });
+        // self.seq is always a clone of the focused track's handle (initially track 0).
+        let seq = Arc::clone(&track_seq[0]);
 
         Self {
             _audio: audio,
@@ -414,7 +493,13 @@ impl SynthApp {
             note_seq_div: 1,  // 1/8 note
             chord_seq_div: 4, // 1 bar
             seq_pending_start: false,
+            arp_pending_start: false,
             seq,
+            track_seq,
+            track_arp_sync: [true; TRACK_COUNT],
+            track_seq_sync: [true; TRACK_COUNT],
+            track_seq_pending: [false; TRACK_COUNT],
+            track_arp_pending: [false; TRACK_COUNT],
             chord_kb: ChordKbState::new(),
             scope_fullscreen: false,
             scope_x_scale: 1.0,
@@ -478,6 +563,25 @@ impl SynthApp {
             fx_crystal_feedback: 0.35,
             fx_crystal_delay_ms: 260.0,
             fx_crystal_pitch: 2,
+            track_engines,
+            track_mixer,
+            focused_track: 0,
+            track_names: ["Lead".into(), "Pad".into(), "Bass".into(), "Keys".into()],
+            track_patches,
+            drums: DrumMachineState::default(),
+            drum_engine,
+            show_mixer: false,
+            scene_library: scene::load_scenes(),
+            scene_name: "Scene 1".into(),
+            scene_browser_open: false,
+            track_key_lo: [0u8; TRACK_COUNT],
+            track_key_hi: [127u8; TRACK_COUNT],
+            track_midi_ch: [0u8; TRACK_COUNT],
+            scene_chain: Vec::new(),
+            scene_chain_bars: 4,
+            scene_chain_pos: 0,
+            scene_chain_active: false,
+            scene_chain_elapsed_s: 0.0,
             recorder_sink,
         }
     }
@@ -520,8 +624,14 @@ impl SynthApp {
     pub(crate) fn schedule_or_restart_arp(&mut self) {
         let playing = self.seq.playing.load(Ordering::Relaxed);
         let bar_quantize = self.seq.bar_quantize.load(Ordering::Relaxed);
-        if self.arp_sync_active() && bar_quantize && playing {
-            self.seq.arp_restart.store(true, Ordering::Relaxed);
+        if self.arp_sync_active() && bar_quantize {
+            if playing {
+                // Sequencer is the clock master — it fires arp restart at next bar boundary.
+                self.seq.arp_restart.store(true, Ordering::Relaxed);
+            } else {
+                // No running sequencer — defer via metro bar-wrap.
+                self.arp_pending_start = true;
+            }
         } else {
             self.engine.arp_restart();
         }
@@ -539,8 +649,13 @@ impl SynthApp {
 
     pub(crate) fn apply_clock_sync(&mut self) {
         let global = self.global_bpm as f32;
+        // Broadcast BPM to all track sequencers — they share the master tempo.
         if self.seq_sync_active() {
-            self.seq.bpm.store(self.global_bpm, Ordering::Relaxed);
+            for t in 0..TRACK_COUNT {
+                self.track_seq[t]
+                    .bpm
+                    .store(self.global_bpm, Ordering::Relaxed);
+            }
         }
         if self.arp_sync_active() && (self.engine.arp_bpm() - global).abs() > f32::EPSILON {
             self.engine.set_arp_bpm(global);
@@ -572,34 +687,105 @@ impl SynthApp {
         }
     }
 
-    /// Push a NoteOn event into the audio thread's control queue.
-    /// `engine.note_on` also records the timestamp used for latency measurement.
+    /// Push a NoteOn from the on-screen keyboard — always routes to the focused
+    /// track only (tracks are independent synths; the piano controls the one you see).
     pub(crate) fn push_note_on(&mut self, midi: u8) {
         self.engine.note_on(midi, self.piano_velocity);
     }
 
-    /// Push a NoteOff event into the audio thread's control queue.
+    /// Route a NoteOn from a hardware MIDI device using per-track channel + split filters.
+    /// In LIVE mode each track acts as an independent synth: hardware MIDI is the only
+    /// path that fans out, and only when a track's channel/range matches.
+    /// `channel`: 0-based MIDI channel (0–15).
+    pub(crate) fn route_note_on(&mut self, midi: u8, channel: u8) {
+        if self.app_mode == crate::ui::layout::AppMode::Live {
+            for t in 0..TRACK_COUNT {
+                let ch_ok = self.track_midi_ch[t] == 0 || self.track_midi_ch[t] == channel + 1;
+                let key_ok = midi >= self.track_key_lo[t] && midi <= self.track_key_hi[t];
+                if ch_ok && key_ok {
+                    self.track_engines[t].note_on(midi, self.piano_velocity);
+                }
+            }
+        } else {
+            self.engine.note_on(midi, self.piano_velocity);
+        }
+    }
+
+    /// Push a NoteOff from the on-screen keyboard — focused track only.
     pub(crate) fn push_note_off(&mut self, midi: u8) {
         self.engine.note_off(midi);
     }
 
     /// Silence all voices, reset all FX tails, and clear all note-tracking state.
+    /// Push DrumMachineState → DrumEngineAtomics and read back current_step.
+    pub(crate) fn tick_drums_sync(&mut self) {
+        let d = &self.drums;
+        let e = &self.drum_engine;
+        e.enabled
+            .store(d.enabled, std::sync::atomic::Ordering::Relaxed);
+        e.set_bpm(self.global_bpm as f32);
+        e.set_swing(d.swing);
+        for ch in 0..audio::DRUM_CHANNELS {
+            let mut pattern: u16 = 0;
+            for step in 0..16 {
+                if d.steps[ch][step] {
+                    pattern |= 1 << step;
+                }
+            }
+            e.step_patterns[ch].store(pattern, std::sync::atomic::Ordering::Relaxed);
+            e.channel_muted[ch].store(d.muted[ch], std::sync::atomic::Ordering::Relaxed);
+            e.set_channel_volume(ch, d.channel_volume[ch]);
+        }
+        self.drums.current_step = e.current_step.load(std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub(crate) fn all_notes_off(&mut self) {
-        // Zero all voice gates — kills currently-playing voices via ADSR release
+        // Silence the focused engine and release held piano notes.
+        // In LIVE mode each track is independent — other tracks' arps/seqs
+        // keep running; only the focused track's keyboard input is cleared.
         self.engine.silence_all_voices();
-        // Send NoteOff for every MIDI note that might be held
         let held: Vec<u8> = self.piano_held_midi.drain().collect();
         for n in held {
-            self.push_note_off(n);
+            self.engine.note_off(n);
         }
-        // Signal sequencer thread to stop; it will NoteOff its prev_notes itself.
-        self.seq.playing.store(false, Ordering::Relaxed);
+        if self.app_mode == crate::ui::layout::AppMode::Live {
+            for t in 0..TRACK_COUNT {
+                self.track_seq[t].playing.store(false, Ordering::Relaxed);
+                self.track_seq[t].current_step.store(0, Ordering::Relaxed);
+            }
+        } else {
+            self.seq.playing.store(false, Ordering::Relaxed);
+        }
         let frozen: Vec<u8> = self.frozen_notes.drain().collect();
         for n in frozen {
-            self.push_note_off(n);
+            self.engine.note_off(n);
         }
         self.chord_kb.held_pad = None;
         self.chord_kb.kb_held.clear();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scene chain tick
+// ---------------------------------------------------------------------------
+
+impl SynthApp {
+    pub(crate) fn tick_scene_chain(&mut self, dt: f32) {
+        if !self.scene_chain_active || self.scene_chain.is_empty() {
+            return;
+        }
+        let seconds_per_bar = 4.0 * 60.0 / (self.global_bpm as f32);
+        let step_duration = seconds_per_bar * self.scene_chain_bars as f32;
+        self.scene_chain_elapsed_s += dt;
+        if self.scene_chain_elapsed_s >= step_duration {
+            self.scene_chain_elapsed_s -= step_duration;
+            self.scene_chain_pos = (self.scene_chain_pos + 1) % self.scene_chain.len();
+            let idx = self.scene_chain[self.scene_chain_pos];
+            if idx < self.scene_library.len() {
+                let scene = self.scene_library[idx].clone();
+                self.load_scene(scene);
+            }
+        }
     }
 }
 
@@ -612,9 +798,13 @@ impl SynthApp {
         let events = self.midi.drain();
         for ev in events {
             match ev {
-                MidiEvent::NoteOn { note, velocity, .. } => {
+                MidiEvent::NoteOn {
+                    note,
+                    velocity,
+                    channel,
+                } => {
                     let _ = velocity;
-                    self.push_note_on(note);
+                    self.route_note_on(note, channel);
                 }
                 MidiEvent::NoteOff { note, .. } => {
                     self.push_note_off(note);
@@ -699,7 +889,10 @@ impl eframe::App for SynthApp {
 
         self.tick_midi();
         self.apply_clock_sync();
+        self.tick_drums_sync();
         self.tick_keyboard_input(ctx);
+        let dt = ctx.input(|i| i.unstable_dt).min(0.1);
+        self.tick_scene_chain(dt);
 
         // Advance metronome phase each frame.
         self.tick_metronome(ctx);
@@ -708,6 +901,7 @@ impl eframe::App for SynthApp {
         self.ui_patch_browser(ctx);
         self.ui_metronome_window(ctx);
         self.ui_scope_fullscreen(ctx);
+        self.ui_scene_browser(ctx);
 
         // ── Zone 1: global bar (top, always visible) ──────────────────────────
         egui::TopBottomPanel::top("global_bar")
@@ -733,85 +927,21 @@ impl eframe::App for SynthApp {
         // ── Zones 2 + 3: central editing area (dock in Studio, placeholder in Live) ──
         egui::CentralPanel::default()
             .frame(SynthFrame::app_bg(&self.theme))
-            .show(ctx, |ui| {
-                match self.app_mode {
-                    AppMode::Studio => {
-                        if self.reset_layout_pending {
-                            self.dock_state = ui::dock::default_dock_state();
-                            self.reset_layout_pending = false;
-                        }
-                        let mut dock_state = std::mem::replace(
-                            &mut self.dock_state,
-                            egui_dock::DockState::new(vec![]),
-                        );
-                        let mut dock_style = egui_dock::Style::from_egui(ui.style());
-                        dock_style.separator.width = 6.0;
-                        dock_style.separator.color_idle = egui::Color32::TRANSPARENT;
-                        dock_style.separator.color_hovered = egui::Color32::from_black_alpha(60);
-                        dock_style.separator.color_dragged = egui::Color32::from_black_alpha(100);
-                        dock_style.dock_area_padding = Some(egui::Margin::same(6i8));
-                        let rm = self.theme.rounding_md as u8;
-                        let r_top = egui::CornerRadius {
-                            nw: rm,
-                            ne: rm,
-                            sw: 0,
-                            se: 0,
-                        };
-                        let r_body = egui::CornerRadius {
-                            nw: 0,
-                            ne: rm,
-                            sw: rm,
-                            se: rm,
-                        };
-                        let bg_app = self.theme.c(&self.theme.bg_app);
-                        let bg_surface = self.theme.c(&self.theme.bg_surface);
-                        let border = self.theme.c(&self.theme.border);
-                        let text_pri = self.theme.c(&self.theme.text_primary);
-                        let text_sec = self.theme.c(&self.theme.text_secondary);
-                        let accent = self.theme.c(&self.theme.accent);
-                        // Tab body: rounded corners + subtle border
-                        dock_style.tab.tab_body.corner_radius = r_body;
-                        dock_style.tab.tab_body.stroke =
-                            egui::Stroke::new(self.theme.stroke_ui, border);
-                        // Tab bar: transparent so the panel background shows through
-                        dock_style.tab_bar.bg_fill = egui::Color32::TRANSPARENT;
-                        dock_style.tab_bar.hline_color = egui::Color32::TRANSPARENT;
-                        dock_style.tab_bar.corner_radius = r_body;
-                        dock_style.tab_bar.height = 28.0;
-                        // Active tab: raised (bg_surface), top-only rounding, accent outline
-                        dock_style.tab.active.corner_radius = r_top;
-                        dock_style.tab.active.bg_fill = bg_surface;
-                        dock_style.tab.active.text_color = text_pri;
-                        dock_style.tab.active.outline_color = accent;
-                        // Focused: same as active with accent text
-                        dock_style.tab.focused.corner_radius = r_top;
-                        dock_style.tab.focused.bg_fill = bg_surface;
-                        dock_style.tab.focused.text_color = accent;
-                        dock_style.tab.focused.outline_color = accent;
-                        // Inactive: transparent, dimmed text
-                        dock_style.tab.inactive.corner_radius = r_top;
-                        dock_style.tab.inactive.bg_fill = egui::Color32::TRANSPARENT;
-                        dock_style.tab.inactive.text_color = text_sec;
-                        dock_style.tab.inactive.outline_color = egui::Color32::TRANSPARENT;
-                        // Hovered: slightly raised
-                        dock_style.tab.hovered.corner_radius = r_top;
-                        dock_style.tab.hovered.bg_fill = bg_surface;
-                        dock_style.tab.hovered.text_color = text_pri;
-                        dock_style.tab.hovered.outline_color = border;
-                        egui_dock::DockArea::new(&mut dock_state)
-                            .style(dock_style)
-                            .show_inside(ui, &mut ui::dock::SynthTabViewer { app: self });
-                        self.dock_state = dock_state;
-                    }
-                    AppMode::Live => {
-                        ui.centered_and_justified(|ui| {
-                            ui.label(
-                                egui::RichText::new("LIVE MODE — coming soon.")
-                                    .size(18.0)
-                                    .color(self.theme.c(&self.theme.text_secondary)),
-                            );
-                        });
-                    }
+            .show(ctx, |ui| match self.app_mode {
+                AppMode::Studio => {
+                    self.ui_synth_dock(ui);
+                }
+                #[cfg(feature = "live_rig")]
+                AppMode::DrumMachine => {
+                    self.ui_drum_machine(ui);
+                }
+                #[cfg(feature = "live_rig")]
+                AppMode::Live => {
+                    self.ui_live_view(ui);
+                }
+                #[cfg(not(feature = "live_rig"))]
+                _ => {
+                    self.ui_synth_dock(ui);
                 }
             });
 
@@ -1116,6 +1246,209 @@ impl SynthApp {
 }
 
 // ---------------------------------------------------------------------------
+// Multi-track focus management
+// ---------------------------------------------------------------------------
+
+impl SynthApp {
+    /// Switch the UI to edit a different track without stopping any notes.
+    /// Saves the current track's UI state, swaps the engine reference, restores
+    /// the new track's UI state.
+    pub(crate) fn switch_focused_track(&mut self, new: usize) {
+        if new >= TRACK_COUNT || new == self.focused_track {
+            return;
+        }
+        let old = self.focused_track;
+
+        // Release any piano-held notes on the old track before switching so they
+        // don't sustain indefinitely (each track is an independent synth).
+        let held: Vec<u8> = self.piano_held_midi.iter().copied().collect();
+        for n in held {
+            self.track_engines[old].note_off(n);
+        }
+
+        // Save current track's patch and sync flags.
+        self.track_patches[old] = self.capture_patch();
+        self.track_arp_sync[old] = self.arp_sync;
+        self.track_seq_sync[old] = self.seq_sync;
+        self.track_seq_pending[old] = self.seq_pending_start;
+        self.track_arp_pending[old] = self.arp_pending_start;
+
+        // Switch engine + sequencer handle to the new track.
+        // The old track's sequencer thread keeps running independently.
+        self.focused_track = new;
+        self.engine = self.track_engines[new].clone();
+        self.seq = Arc::clone(&self.track_seq[new]);
+
+        // Restore new track's sync flags.
+        self.arp_sync = self.track_arp_sync[new];
+        self.seq_sync = self.track_seq_sync[new];
+        self.seq_pending_start = self.track_seq_pending[new];
+        self.arp_pending_start = self.track_arp_pending[new];
+
+        // Restore new track state: sync UI mirrors AND push params to the engine.
+        let p = self.track_patches[new].clone();
+        self.apply_ui_mirrors_only(p);
+        self.engine.apply_patch(&self.track_patches[new]);
+        self.apply_clock_sync();
+    }
+
+    /// Copy all UI-mirror fields from a patch without touching the audio engine
+    /// or stopping notes. Used when switching focused track.
+    pub(crate) fn apply_ui_mirrors_only(&mut self, p: patch::Patch) {
+        self.patch_name = p.name.clone();
+        self.osc_wave = p.osc_wave;
+        self.osc_octave = p.osc_octave;
+        self.osc_detune = p.osc_detune;
+        self.osc_vol = p.osc_vol;
+        self.osc_enabled = p.osc_enabled;
+        self.osc_pulse_width = p.osc_pulse_width;
+        self.osc_pw_enabled = p.osc_pw_enabled;
+        self.osc_unison_enabled = p.osc_unison_enabled;
+        self.osc_unison_count = p.osc_unison_count;
+        self.osc_unison_spread = p.osc_unison_spread;
+        self.hard_sync = p.hard_sync;
+        self.fm_enabled = p.fm_enabled;
+        self.fm_depth = p.fm_depth;
+        self.ring_enabled = p.ring_enabled;
+        self.ring_depth = p.ring_depth;
+        self.lfo_enabled = p.lfo_enabled;
+        self.lfo_rate = p.lfo_rate;
+        self.lfo_depth = p.lfo_depth;
+        self.lfo_shape = p.lfo_shape;
+        self.lfo_dest = p.lfo_dest;
+        self.lfo_sync = p.lfo_sync;
+        self.lfo_division = p.lfo_division;
+        self.lfo2_enabled = p.lfo2_enabled;
+        self.lfo2_rate = p.lfo2_rate;
+        self.lfo2_depth = p.lfo2_depth;
+        self.lfo2_shape = p.lfo2_shape;
+        self.lfo2_dest = p.lfo2_dest;
+        self.pulse_enabled = p.gate_aenv_enabled;
+        self.pulse_pattern = p.gate_aenv_pattern;
+        self.pulse_length = p.gate_aenv_length;
+        self.pulse_division = p.gate_aenv_division;
+        self.pulse_depth = p.gate_aenv_depth;
+        self.lfo1_gate_enabled = p.gate_lfo1_enabled;
+        self.lfo1_gate_pattern = p.gate_lfo1_pattern;
+        self.lfo1_gate_length = p.gate_lfo1_length;
+        self.lfo1_gate_division = p.gate_lfo1_division;
+        self.lfo2_gate_enabled = p.gate_lfo2_enabled;
+        self.lfo2_gate_pattern = p.gate_lfo2_pattern;
+        self.lfo2_gate_length = p.gate_lfo2_length;
+        self.lfo2_gate_division = p.gate_lfo2_division;
+        self.arp_ring_enabled = p.arp_ring_enabled;
+        self.arp_ring_steps = p.arp_ring_steps;
+        self.arp_ring_pattern = p.arp_ring_pattern;
+        self.note_seq_div = p.note_seq_div;
+        self.chord_seq_div = p.chord_seq_div;
+        self.filter_enabled = p.filter_enabled;
+        self.filter_cutoff = p.filter_cutoff;
+        self.filter_q = p.filter_q;
+        self.limiter_enabled = p.limiter_enabled;
+        self.fx_overdrive_on = p.fx_overdrive_on;
+        self.fx_overdrive_drive = p.fx_overdrive_drive;
+        self.fx_overdrive_mix = p.fx_overdrive_mix;
+        self.fx_overdrive_tone = p.fx_overdrive_tone;
+        self.fx_overdrive_asym = p.fx_overdrive_asym;
+        self.fx_distortion_on = p.fx_distortion_on;
+        self.fx_distortion_drive = p.fx_distortion_drive;
+        self.fx_distortion_mix = p.fx_distortion_mix;
+        self.fx_distortion_tone = p.fx_distortion_tone;
+        self.fx_distortion_pre = p.fx_distortion_pre;
+        self.fx_chorus_on = p.fx_chorus_on;
+        self.fx_chorus_rate = p.fx_chorus_rate;
+        self.fx_chorus_depth = p.fx_chorus_depth;
+        self.fx_chorus_mix = p.fx_chorus_mix;
+        self.fx_delay_on = p.fx_delay_on;
+        self.fx_delay_time = p.fx_delay_time;
+        self.fx_delay_feedback = p.fx_delay_feedback;
+        self.fx_delay_mix = p.fx_delay_mix;
+        self.fx_delay_sync = p.fx_delay_sync;
+        self.fx_delay_division = p.fx_delay_division;
+        self.fx_reverb_on = p.fx_reverb_on;
+        self.fx_reverb_size = p.fx_reverb_size;
+        self.fx_reverb_damp = p.fx_reverb_damp;
+        self.fx_reverb_mix = p.fx_reverb_mix;
+        self.fx_reverb_predelay = p.fx_reverb_predelay;
+        self.fx_reverb_type = p.fx_reverb_type;
+        self.stereo_spread = p.stereo_spread;
+        self.stereo_width = p.stereo_width;
+        self.fx_shimmer_on = p.fx_shimmer_on;
+        self.fx_shimmer_size = p.fx_shimmer_size;
+        self.fx_shimmer_damp = p.fx_shimmer_damp;
+        self.fx_shimmer_mix = p.fx_shimmer_mix;
+        self.fx_shimmer_amt = p.fx_shimmer_amt;
+        self.fx_shimmer_width = p.fx_shimmer_width;
+        self.fx_shimmer_spread = p.fx_shimmer_spread;
+        self.fx_shimmer_pitch = p.fx_shimmer_pitch;
+        self.fx_crystal_on = p.fx_crystal_on;
+        self.fx_crystal_mix = p.fx_crystal_mix;
+        self.fx_crystal_grain_ms = p.fx_crystal_grain_ms;
+        self.fx_crystal_scatter = p.fx_crystal_scatter;
+        self.fx_crystal_feedback = p.fx_crystal_feedback;
+        self.fx_crystal_delay_ms = p.fx_crystal_delay_ms;
+        self.fx_crystal_pitch = p.fx_crystal_pitch;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scene management
+// ---------------------------------------------------------------------------
+
+impl SynthApp {
+    /// Snapshot the complete rig state into a `Scene`.
+    pub(crate) fn capture_scene(&self) -> scene::Scene {
+        // Save the current track's live state first (same as patch capture).
+        let mut track_patches = self.track_patches.clone();
+        track_patches[self.focused_track] = self.capture_patch();
+
+        scene::Scene {
+            name: self.scene_name.clone(),
+            global_bpm: self.global_bpm,
+            track_names: self.track_names.clone(),
+            track_patches,
+            track_volumes: std::array::from_fn(|t| self.track_mixer[t].volume()),
+            track_pans: std::array::from_fn(|t| self.track_mixer[t].pan()),
+            track_muted: std::array::from_fn(|t| self.track_mixer[t].muted()),
+            drums: self.drums.clone(),
+            track_key_lo: self.track_key_lo,
+            track_key_hi: self.track_key_hi,
+            track_midi_ch: self.track_midi_ch,
+        }
+    }
+
+    /// Restore a complete rig state from a `Scene`.
+    pub(crate) fn load_scene(&mut self, s: scene::Scene) {
+        self.scene_name = s.name.clone();
+        self.global_bpm = s.global_bpm;
+        self.track_names = s.track_names.clone();
+
+        // Push mixer state to atomics.
+        for t in 0..TRACK_COUNT {
+            self.track_mixer[t].set_volume(s.track_volumes[t]);
+            self.track_mixer[t].set_pan(s.track_pans[t]);
+            self.track_mixer[t].set_muted(s.track_muted[t]);
+        }
+
+        // Push each track's patch to its engine (no notes-off: tracks keep playing).
+        for t in 0..TRACK_COUNT {
+            self.track_engines[t].apply_patch(&s.track_patches[t]);
+        }
+
+        // Store patches and update UI mirrors for the focused track.
+        self.track_patches = s.track_patches.clone();
+        let focused_patch = self.track_patches[self.focused_track].clone();
+        self.apply_ui_mirrors_only(focused_patch);
+        self.apply_clock_sync();
+
+        self.drums = s.drums;
+        self.track_key_lo = s.track_key_lo;
+        self.track_key_hi = s.track_key_hi;
+        self.track_midi_ch = s.track_midi_ch;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Layout B — zone UI methods
 // ---------------------------------------------------------------------------
 
@@ -1123,39 +1456,37 @@ impl SynthApp {
     /// Zone 1: global bar — mode toggle, BPM, patch name, transport, settings.
     fn ui_global_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            // ── Mode toggle ───────────────────────────────────────────────
-            let studio_active = self.app_mode == AppMode::Studio;
-            let live_active = self.app_mode == AppMode::Live;
-
-            let studio_col = if studio_active {
-                self.theme.c(&self.theme.accent)
-            } else {
-                self.theme.c(&self.theme.text_secondary)
-            };
-            let live_col = if live_active {
-                self.theme.c(&self.theme.accent)
-            } else {
-                self.theme.c(&self.theme.text_secondary)
-            };
-
-            if ui
-                .add(egui::SelectableLabel::new(
-                    studio_active,
-                    egui::RichText::new("STUDIO").size(11.0).color(studio_col),
-                ))
-                .clicked()
-            {
-                self.app_mode = AppMode::Studio;
-            }
-            if ui
-                .add(egui::SelectableLabel::new(
-                    live_active,
-                    egui::RichText::new("LIVE").size(11.0).color(live_col),
-                ))
-                .on_hover_text("Live performance view — coming soon.")
-                .clicked()
-            {
-                self.app_mode = AppMode::Live;
+            // ── Mode toggle: STUDIO | DRUM MACHINE | LIVE ─────────────────
+            #[cfg(feature = "live_rig")]
+            let mode_entries: &[(AppMode, &str, &str)] = &[
+                (AppMode::Studio, "STUDIO", "Single-synth deep editing."),
+                (
+                    AppMode::DrumMachine,
+                    "DRUMS",
+                    "Drum machine — step grid + voice editor.",
+                ),
+                (AppMode::Live, "LIVE", "Rig performance view."),
+            ];
+            #[cfg(not(feature = "live_rig"))]
+            let mode_entries: &[(AppMode, &str, &str)] =
+                &[(AppMode::Studio, "STUDIO", "Single-synth deep editing.")];
+            for (mode, label, hover) in mode_entries.iter().copied() {
+                let active = self.app_mode == mode;
+                let col = if active {
+                    self.theme.c(&self.theme.accent)
+                } else {
+                    self.theme.c(&self.theme.text_secondary)
+                };
+                if ui
+                    .add(egui::SelectableLabel::new(
+                        active,
+                        egui::RichText::new(label).size(11.0).color(col),
+                    ))
+                    .on_hover_text(hover)
+                    .clicked()
+                {
+                    self.app_mode = mode;
+                }
             }
 
             ui.separator();
@@ -1224,7 +1555,116 @@ impl SynthApp {
                 }
             });
 
+            // ── BPM display + beat indicator ──────────────────────────────
+            // Clicking opens/closes the metronome window.
+            {
+                let seq_playing = self.seq.playing.load(Ordering::Relaxed);
+                let drums_running = self.drum_engine.enabled.load(Ordering::Relaxed);
+                let metro_active = self.metro_enabled
+                    || self.seq_pending_start
+                    || self.arp_pending_start
+                    || seq_playing
+                    || drums_running;
+                let beat_idx = self.metro_phase as usize;
+                let beat_frac = self.metro_phase.fract() as f32;
+
+                // Accent dot pulses on beat 1; beat dot pulses on beats 2+.
+                let accent_t = if metro_active && beat_idx == 0 {
+                    (1.0_f32 - beat_frac).powf(2.2)
+                } else {
+                    0.0
+                };
+                let beat_t = if metro_active && beat_idx > 0 {
+                    (1.0_f32 - beat_frac).powf(2.2)
+                } else {
+                    0.0
+                };
+
+                const DOT_R: f32 = 3.5;
+                // Fixed layout: 30px BPM text + 5px gap + dot + 4px gap + dot
+                let total_w = 30.0 + 5.0 + DOT_R * 2.0 + 4.0 + DOT_R * 2.0;
+                let (rect, resp) = ui.allocate_exact_size(
+                    egui::Vec2::new(total_w, ui.available_height()),
+                    egui::Sense::click(),
+                );
+                if resp.clicked() {
+                    self.show_metronome = !self.show_metronome;
+                }
+                if resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                resp.on_hover_text("Click to open metronome / time signature settings.");
+
+                if ui.is_rect_visible(rect) {
+                    let painter = ui.painter();
+                    let cy = rect.center().y;
+
+                    // Time signature label (e.g. "4/4")
+                    let sig_col = if self.show_metronome {
+                        self.theme.c(&self.theme.accent)
+                    } else {
+                        self.theme.c(&self.theme.text_secondary)
+                    };
+                    painter.text(
+                        egui::Pos2::new(rect.left() + 15.0, cy),
+                        egui::Align2::CENTER_CENTER,
+                        format!("{}/{}", self.metro_beats, self.metro_denom),
+                        egui::FontId::monospace(10.0),
+                        sig_col,
+                    );
+
+                    // Helper: lerp between two Color32s
+                    let lerp_col = |a: egui::Color32, b: egui::Color32, t: f32| {
+                        let t = t.clamp(0.0, 1.0);
+                        egui::Color32::from_rgb(
+                            (a.r() as f32 + (b.r() as f32 - a.r() as f32) * t) as u8,
+                            (a.g() as f32 + (b.g() as f32 - a.g() as f32) * t) as u8,
+                            (a.b() as f32 + (b.b() as f32 - a.b() as f32) * t) as u8,
+                        )
+                    };
+
+                    // Accent dot (beat 1) — accent colour
+                    let accent_full = self.theme.c(&self.theme.accent);
+                    let accent_dim = egui::Color32::from_rgb(
+                        (accent_full.r() as f32 * 0.18) as u8,
+                        (accent_full.g() as f32 * 0.18) as u8,
+                        (accent_full.b() as f32 * 0.18) as u8,
+                    );
+                    let dot1_x = rect.left() + 30.0 + 5.0 + DOT_R;
+                    painter.circle_filled(
+                        egui::Pos2::new(dot1_x, cy),
+                        DOT_R,
+                        lerp_col(accent_dim, accent_full, accent_t),
+                    );
+
+                    // Beat dot (beats 2+) — cool blue
+                    let beat_full = egui::Color32::from_rgb(100, 170, 220);
+                    let beat_dim = egui::Color32::from_rgb(15, 30, 45);
+                    let dot2_x = dot1_x + DOT_R * 2.0 + 4.0;
+                    painter.circle_filled(
+                        egui::Pos2::new(dot2_x, cy),
+                        DOT_R,
+                        lerp_col(beat_dim, beat_full, beat_t),
+                    );
+                }
+            }
+
             ui.separator();
+
+            // ── Track breadcrumb ──────────────────────────────────────────
+            if self.app_mode != AppMode::DrumMachine {
+                let crumb = format!(
+                    "T{}  {}  ·  {}",
+                    self.focused_track + 1,
+                    self.track_names[self.focused_track],
+                    self.patch_name,
+                );
+                ui.label(
+                    egui::RichText::new(crumb)
+                        .size(11.0)
+                        .color(self.theme.c(&self.theme.text_secondary)),
+                );
+            }
 
             // ── Right-aligned items ───────────────────────────────────────
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1342,6 +1782,20 @@ impl SynthApp {
                     .clicked()
                 {
                     self.patch_browser_open = !self.patch_browser_open;
+                }
+
+                // Scene browser button
+                let scene_col = if self.scene_browser_open {
+                    self.theme.c(&self.theme.accent)
+                } else {
+                    self.theme.c(&self.theme.text_secondary)
+                };
+                if ui
+                    .button(egui::RichText::new("SCENE").size(11.0).color(scene_col))
+                    .on_hover_text("Scene manager — save and load complete rig states.")
+                    .clicked()
+                {
+                    self.scene_browser_open = !self.scene_browser_open;
                 }
 
                 ui.separator();
