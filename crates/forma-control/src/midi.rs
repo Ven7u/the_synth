@@ -24,6 +24,7 @@ pub enum MidiEvent {
     NoteOff { channel: u8, note: u8 },
     CC { channel: u8, cc: u8, value: u8 },
     PitchBend { channel: u8, value: f32 }, // -1.0 … +1.0
+    Aftertouch { channel: u8, value: u8 }, // channel pressure 0–127
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +174,10 @@ fn parse_midi(msg: &[u8]) -> Option<MidiEvent> {
             channel,
             cc: msg[1],
             value: msg[2],
+        }),
+        0xD if msg.len() >= 2 => Some(MidiEvent::Aftertouch {
+            channel,
+            value: msg[1],
         }),
         0xE if msg.len() >= 3 => {
             // Pitch bend: 14-bit value, centre = 0x2000

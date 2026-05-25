@@ -186,6 +186,12 @@ struct TrackProcessor {
     keyed_cutoff: f32,
     last_keyed_freq: f32,
 
+    // Per-buffer mod wheel / aftertouch routing
+    mod_wheel_dest: u8,
+    mod_wheel_depth: f32,
+    aftertouch_dest: u8,
+    aftertouch_depth: f32,
+
     // Gate lane "Pulse" (amp ducker)
     gate_aenv_enabled: bool,
     gate_aenv_pattern: u16,
@@ -262,6 +268,10 @@ impl TrackProcessor {
             lfo2_dt: 0.0,
             keyed_cutoff: 3000.0,
             last_keyed_freq: 261.63,
+            mod_wheel_dest: 1,
+            mod_wheel_depth: 0.5,
+            aftertouch_dest: 1,
+            aftertouch_depth: 0.3,
             gate_aenv_enabled: false,
             gate_aenv_pattern: 0,
             gate_aenv_length: 16,
@@ -391,10 +401,15 @@ impl TrackProcessor {
             gate_lfo2_was_enabled
         );
 
+        // Read mod-wheel / aftertouch routing params once per buffer.
+        self.mod_wheel_dest = self.state.mod_wheel_dest.load(Ordering::Relaxed);
+        self.mod_wheel_depth = self.state.mod_wheel_depth.value();
+        self.aftertouch_dest = self.state.aftertouch_dest.load(Ordering::Relaxed);
+        self.aftertouch_depth = self.state.aftertouch_depth.value();
+
         // Key tracking: find highest sounding voice.
         let key_track = self.state.filter_key_track.value();
-        let base_cutoff = (self.state.cutoff.value() + self.state.mod_wheel_cutoff_add.value())
-            .clamp(80.0, 18000.0);
+        let base_cutoff = self.state.cutoff.value().clamp(80.0, 18000.0);
         if key_track > 0.001 {
             let mut top_freq: f32 = 0.0;
             for vi in 0..VOICE_COUNT {
@@ -448,18 +463,51 @@ impl TrackProcessor {
         }
         let lfo2_raw = lfo_shape_sample(self.lfo2_phase, self.lfo2_shape);
 
+        // Apply mod wheel to LFO depth before the combining loop when dest==LFO Depth.
+        let eff_lfo_depth = if self.mod_wheel_dest == 2 {
+            (self.lfo_depth + self.state.mod_wheel.value() * self.mod_wheel_depth * self.lfo_depth)
+                .min(1.0)
+        } else {
+            self.lfo_depth
+        };
+        let eff_lfo_depth = if self.aftertouch_dest == 2 {
+            (eff_lfo_depth + self.state.aftertouch.value() * self.aftertouch_depth * eff_lfo_depth)
+                .min(1.0)
+        } else {
+            eff_lfo_depth
+        };
+
         // Combine modulation.
         let mut pitch_mod: f32 = 0.0;
         let mut filter_mod: f32 = 0.0;
         let mut amp_mod: f32 = 1.0;
         for (raw, depth, dest) in [
-            (lfo_raw, self.lfo_depth, self.lfo_dest),
+            (lfo_raw, eff_lfo_depth, self.lfo_dest),
             (lfo2_raw, self.lfo2_depth, self.lfo2_dest),
         ] {
             match dest {
                 0 => pitch_mod += raw * depth,
                 2 => amp_mod *= 1.0 - depth * (1.0 - raw) * 0.5,
                 _ => filter_mod += raw * depth,
+            }
+        }
+        // Mod wheel / aftertouch — DC signal routed to filter or amp.
+        for (raw, depth, dest) in [
+            (
+                self.state.mod_wheel.value(),
+                self.mod_wheel_depth,
+                self.mod_wheel_dest,
+            ),
+            (
+                self.state.aftertouch.value(),
+                self.aftertouch_depth,
+                self.aftertouch_dest,
+            ),
+        ] {
+            match dest {
+                1 => filter_mod += raw * depth,
+                3 => amp_mod *= 1.0 - raw * depth * 0.5,
+                _ => {}
             }
         }
         self.state

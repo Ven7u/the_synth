@@ -145,6 +145,12 @@ pub(crate) struct SynthApp {
 
     // Noise — volume lives in engine; no UI mirror.
 
+    // Mod wheel / aftertouch routing (mirrored from patch; runtime raw values are engine-only)
+    pub(crate) mod_wheel_dest: usize, // 0=Off 1=Filter 2=LFO Depth 3=Amp
+    pub(crate) mod_wheel_depth: f32,
+    pub(crate) aftertouch_dest: usize,
+    pub(crate) aftertouch_depth: f32,
+
     // LFO 1
     pub(crate) lfo_enabled: bool,
     pub(crate) lfo_rate: f32,
@@ -447,6 +453,10 @@ impl SynthApp {
             lfo_rate: 2.0,
             lfo_depth: 0.0,
             lfo_shape: 0,
+            mod_wheel_dest: 1,
+            mod_wheel_depth: 0.5,
+            aftertouch_dest: 1,
+            aftertouch_depth: 0.3,
             lfo_dest: 1,
             lfo_sync: false,
             lfo_division: 4,
@@ -845,13 +855,16 @@ impl SynthApp {
                 MidiEvent::NoteOff { note, .. } => {
                     self.push_note_off(note);
                 }
+                MidiEvent::Aftertouch { value, .. } => {
+                    self.engine.set_aftertouch(value as f32 / 127.0);
+                }
                 MidiEvent::CC { cc, value, .. } => {
                     let v = value as f32 / 127.0;
                     match cc {
                         1 => {
-                            // Mod wheel → LFO depth
-                            self.lfo_depth = v;
-                            self.engine.set_lfo_depth(v);
+                            // Mod wheel — routed by mod_wheel_dest in the engine
+                            self.piano_mod_wheel = (v * 5.0).round() as u8;
+                            self.engine.set_mod_wheel(v);
                         }
                         7 => {
                             // Volume → master vol
@@ -1020,6 +1033,10 @@ impl SynthApp {
         p.fm_depth = self.fm_depth;
         p.ring_enabled = self.ring_enabled;
         p.ring_depth = self.ring_depth;
+        p.mod_wheel_dest = self.mod_wheel_dest as u8;
+        p.mod_wheel_depth = self.mod_wheel_depth;
+        p.aftertouch_dest = self.aftertouch_dest as u8;
+        p.aftertouch_depth = self.aftertouch_depth;
         p.lfo_enabled = self.lfo_enabled;
         p.lfo_rate = self.lfo_rate;
         p.lfo_depth = self.lfo_depth;
@@ -1137,6 +1154,10 @@ impl SynthApp {
         self.fm_depth = p.fm_depth;
         self.ring_enabled = p.ring_enabled;
         self.ring_depth = p.ring_depth;
+        self.mod_wheel_dest = p.mod_wheel_dest as usize;
+        self.mod_wheel_depth = p.mod_wheel_depth;
+        self.aftertouch_dest = p.aftertouch_dest as usize;
+        self.aftertouch_depth = p.aftertouch_depth;
         self.lfo_enabled = p.lfo_enabled;
         self.lfo_rate = p.lfo_rate;
         self.lfo_depth = p.lfo_depth;
@@ -1355,6 +1376,10 @@ impl SynthApp {
         self.fm_depth = p.fm_depth;
         self.ring_enabled = p.ring_enabled;
         self.ring_depth = p.ring_depth;
+        self.mod_wheel_dest = p.mod_wheel_dest as usize;
+        self.mod_wheel_depth = p.mod_wheel_depth;
+        self.aftertouch_dest = p.aftertouch_dest as usize;
+        self.aftertouch_depth = p.aftertouch_depth;
         self.lfo_enabled = p.lfo_enabled;
         self.lfo_rate = p.lfo_rate;
         self.lfo_depth = p.lfo_depth;

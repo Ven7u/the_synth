@@ -80,11 +80,17 @@ pub struct AudioState {
     pub noise_vol: Shared, // 0.0..1.0
 
     // Filter
-    pub cutoff: Shared,               // base cutoff Hz (80..18000)
-    pub resonance: Shared,            // Q (0.5..20)
-    pub filter_drive: Shared,         // 1.0..10.0 — input saturation before moog
-    pub filter_key_track: Shared,     // 0.0..1.0 — cutoff follows voice pitch (0=off, 1=full)
-    pub mod_wheel_cutoff_add: Shared, // 0..8000 Hz — modulation wheel additive filter offset
+    pub cutoff: Shared,                 // base cutoff Hz (80..18000)
+    pub resonance: Shared,              // Q (0.5..20)
+    pub filter_drive: Shared,           // 1.0..10.0 — input saturation before moog
+    pub filter_key_track: Shared,       // 0.0..1.0 — cutoff follows voice pitch (0=off, 1=full)
+    pub mod_wheel_cutoff_add: Shared, // legacy — kept for backward compat; set to 0 by TrackProcessor
+    pub mod_wheel: Shared,            // raw 0–1, set from MIDI CC 1 or on-screen strip
+    pub mod_wheel_dest: Arc<AtomicU8>, // 0=Off 1=Filter 2=LFO-Depth 3=Amp
+    pub mod_wheel_depth: Shared,      // 0–1
+    pub aftertouch: Shared,           // channel pressure 0–1
+    pub aftertouch_dest: Arc<AtomicU8>, // 0=Off 1=Filter 2=LFO-Depth 3=Amp
+    pub aftertouch_depth: Shared,     // 0–1
     pub filter_env_amount: Shared,    // 0.0..1.0
     // Filter ADSR
     pub fenv_attack: Shared,
@@ -297,6 +303,12 @@ impl AudioState {
             filter_drive: shared(1.0),
             filter_key_track: shared(0.0),
             mod_wheel_cutoff_add: shared(0.0),
+            mod_wheel: shared(0.0),
+            mod_wheel_dest: Arc::new(AtomicU8::new(1)), // Filter
+            mod_wheel_depth: shared(0.5),
+            aftertouch: shared(0.0),
+            aftertouch_dest: Arc::new(AtomicU8::new(1)), // Filter
+            aftertouch_depth: shared(0.3),
             filter_env_amount: shared(0.3),
             fenv_attack: shared(0.01),
             fenv_decay: shared(0.3),

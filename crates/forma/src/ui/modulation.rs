@@ -710,7 +710,12 @@ impl SynthApp {
                     self.engine.set_filter_resonance(self.filter_q);
                 }
 
-                let mod_offset = self.piano_mod_wheel as f32 / 5.0 * 8000.0;
+                // Show mod wheel filter contribution on the curve only when dest==Filter.
+                let mod_offset = if self.mod_wheel_dest == 1 {
+                    self.piano_mod_wheel as f32 / 5.0 * self.mod_wheel_depth * self.filter_cutoff * 0.5
+                } else {
+                    0.0
+                };
                 let effective_cutoff = (self.filter_cutoff + mod_offset).clamp(80.0, 18000.0);
 
                 if ui.is_rect_visible(rect) {
@@ -740,7 +745,9 @@ impl SynthApp {
                         )
                         .on_hover_text("Cutoff frequency. 80 Hz = dark, 18 kHz = fully open.");
                         if knob_resp.changed() {
-                            // Knob moved: keep mod offset, back-solve base cutoff
+                            // Knob moved: keep mod offset, back-solve base cutoff.
+                            // Approximate back-solve: base ≈ effective / (1 + depth*0.5) when offset
+                            // is additive-relative; for simplicity just subtract the pre-computed offset.
                             self.filter_cutoff = (display_cutoff - mod_offset).clamp(80.0, 18000.0);
                             self.engine.set_filter_cutoff(self.filter_cutoff);
                         }
@@ -839,6 +846,112 @@ impl SynthApp {
                     .changed()
                     {
                         self.engine.set_vel_filter(vel_filter);
+                    }
+                });
+            });
+        });
+    }
+
+    pub fn ui_mod_wheel_panel(&mut self, ui: &mut egui::Ui) {
+        use crate::ui::frame::SynthFrame;
+        let sp_xs = self.theme.sp_xs;
+        SynthFrame::section(&self.theme).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("MOD WHEEL")
+                        .size(12.0)
+                        .strong()
+                        .color(self.theme.c(&self.theme.accent)),
+                );
+            });
+            ui.add_space(sp_xs);
+            ui.horizontal(|ui| {
+                let mut depth = self.mod_wheel_depth;
+                if super::widgets::knob(ui, &mut depth, 0.0..=1.0, "DEPTH", &self.theme, false)
+                    .on_hover_text("How much the mod wheel affects the selected destination.")
+                    .changed()
+                {
+                    self.mod_wheel_depth = depth;
+                    self.engine.set_mod_wheel_depth(depth);
+                }
+                ui.add_space(sp_xs);
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new("→")
+                            .size(10.0)
+                            .color(self.theme.c(&self.theme.text_secondary)),
+                    );
+                    for (d, label, tip) in [
+                        (0usize, "Off", "Mod wheel has no effect."),
+                        (1, "Filter", "Opens the filter as you push the wheel."),
+                        (
+                            2,
+                            "LFO Depth",
+                            "Scales LFO 1 depth — classic vibrato/wah control.",
+                        ),
+                        (3, "Amp", "Reduces amplitude — expression/swell."),
+                    ] {
+                        if ui
+                            .selectable_label(self.mod_wheel_dest == d, label)
+                            .on_hover_text(tip)
+                            .clicked()
+                        {
+                            self.mod_wheel_dest = d;
+                            self.engine.set_mod_wheel_dest(d as u8);
+                        }
+                    }
+                });
+            });
+        });
+    }
+
+    pub fn ui_aftertouch_panel(&mut self, ui: &mut egui::Ui) {
+        use crate::ui::frame::SynthFrame;
+        let sp_xs = self.theme.sp_xs;
+        SynthFrame::section(&self.theme).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("AFTERTOUCH")
+                        .size(12.0)
+                        .strong()
+                        .color(self.theme.c(&self.theme.accent)),
+                );
+            });
+            ui.add_space(sp_xs);
+            ui.horizontal(|ui| {
+                let mut depth = self.aftertouch_depth;
+                if super::widgets::knob(ui, &mut depth, 0.0..=1.0, "DEPTH", &self.theme, false)
+                    .on_hover_text(
+                        "How much channel pressure (aftertouch) affects the selected destination.",
+                    )
+                    .changed()
+                {
+                    self.aftertouch_depth = depth;
+                    self.engine.set_aftertouch_depth(depth);
+                }
+                ui.add_space(sp_xs);
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new("→")
+                            .size(10.0)
+                            .color(self.theme.c(&self.theme.text_secondary)),
+                    );
+                    for (d, label, tip) in [
+                        (0usize, "Off", "Aftertouch has no effect."),
+                        (1, "Filter", "Pressing harder opens the filter."),
+                        (2, "LFO Depth", "Pressing harder increases LFO 1 depth."),
+                        (3, "Amp", "Pressing harder reduces volume — swell effect."),
+                    ] {
+                        if ui
+                            .selectable_label(self.aftertouch_dest == d, label)
+                            .on_hover_text(tip)
+                            .clicked()
+                        {
+                            self.aftertouch_dest = d;
+                            self.engine.set_aftertouch_dest(d as u8);
+                        }
                     }
                 });
             });

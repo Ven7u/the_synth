@@ -126,6 +126,18 @@ pub struct Patch {
     /// Voice mode: 0 = poly, 1 = mono, 2 = legato.
     #[serde(default)]
     pub mono_mode: u8,
+    /// Mod wheel destination: 0=Off, 1=Filter, 2=LFO Depth, 3=Amp.
+    #[serde(default = "default_mod_wheel_dest")]
+    pub mod_wheel_dest: u8,
+    /// Mod wheel depth 0–1.
+    #[serde(default = "default_mod_wheel_depth")]
+    pub mod_wheel_depth: f32,
+    /// Aftertouch destination: 0=Off, 1=Filter, 2=LFO Depth, 3=Amp.
+    #[serde(default = "default_aftertouch_dest")]
+    pub aftertouch_dest: u8,
+    /// Aftertouch depth 0–1.
+    #[serde(default = "default_aftertouch_depth")]
+    pub aftertouch_depth: f32,
     pub fenv_adsr: [f32; 4],
 
     // Amp
@@ -251,6 +263,18 @@ fn default_filter_drive() -> f32 {
 }
 fn default_vel_amp() -> f32 {
     1.0
+}
+fn default_mod_wheel_dest() -> u8 {
+    1
+}
+fn default_mod_wheel_depth() -> f32 {
+    0.5
+}
+fn default_aftertouch_dest() -> u8 {
+    1
+}
+fn default_aftertouch_depth() -> f32 {
+    0.3
 }
 fn default_stereo_width() -> f32 {
     1.0

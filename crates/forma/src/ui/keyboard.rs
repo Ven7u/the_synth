@@ -257,9 +257,7 @@ impl SynthApp {
                     self.engine.set_lfo_pitch_mult(2_f32.powf(semitones / 12.0));
                 }
                 if self.piano_mod_wheel != prev_mod {
-                    // level 0–5 → 0–8000 Hz additive filter offset
-                    let hz = self.piano_mod_wheel as f32 / 5.0 * 8000.0;
-                    self.engine.set_mod_wheel_cutoff_add(hz);
+                    self.engine.set_mod_wheel(self.piano_mod_wheel as f32 / 5.0);
                 }
                 let mut current_held = std::collections::HashSet::<u8>::new();
                 ctx.input(|inp| {

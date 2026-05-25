@@ -235,6 +235,46 @@ impl SynthEngineHandle {
         self.state.mod_wheel_cutoff_add.set(v.clamp(0.0, 8000.0));
     }
 
+    pub fn set_mod_wheel(&self, v: f32) {
+        self.state.mod_wheel.set(v.clamp(0.0, 1.0));
+    }
+    pub fn mod_wheel(&self) -> f32 {
+        self.state.mod_wheel.value()
+    }
+    pub fn set_mod_wheel_dest(&self, d: u8) {
+        self.state.mod_wheel_dest.store(d.min(3), Ordering::Relaxed);
+    }
+    pub fn mod_wheel_dest(&self) -> u8 {
+        self.state.mod_wheel_dest.load(Ordering::Relaxed)
+    }
+    pub fn set_mod_wheel_depth(&self, v: f32) {
+        self.state.mod_wheel_depth.set(v.clamp(0.0, 1.0));
+    }
+    pub fn mod_wheel_depth(&self) -> f32 {
+        self.state.mod_wheel_depth.value()
+    }
+
+    pub fn set_aftertouch(&self, v: f32) {
+        self.state.aftertouch.set(v.clamp(0.0, 1.0));
+    }
+    pub fn aftertouch(&self) -> f32 {
+        self.state.aftertouch.value()
+    }
+    pub fn set_aftertouch_dest(&self, d: u8) {
+        self.state
+            .aftertouch_dest
+            .store(d.min(3), Ordering::Relaxed);
+    }
+    pub fn aftertouch_dest(&self) -> u8 {
+        self.state.aftertouch_dest.load(Ordering::Relaxed)
+    }
+    pub fn set_aftertouch_depth(&self, v: f32) {
+        self.state.aftertouch_depth.set(v.clamp(0.0, 1.0));
+    }
+    pub fn aftertouch_depth(&self) -> f32 {
+        self.state.aftertouch_depth.value()
+    }
+
     pub fn set_filter_env_amount(&self, v: f32) {
         self.state.filter_env_amount.set(v);
     }
@@ -1407,6 +1447,10 @@ impl SynthEngineHandle {
         self.set_vel_amp(p.vel_amp);
         self.set_vel_filter(p.vel_filter);
         self.set_mono_mode(p.mono_mode);
+        self.set_mod_wheel_dest(p.mod_wheel_dest);
+        self.set_mod_wheel_depth(p.mod_wheel_depth);
+        self.set_aftertouch_dest(p.aftertouch_dest);
+        self.set_aftertouch_depth(p.aftertouch_depth);
         self.set_filter_env_amount(p.filter_env_amount);
         self.set_fenv_attack(p.fenv_adsr[0]);
         self.set_fenv_decay(p.fenv_adsr[1]);
@@ -1620,6 +1664,10 @@ impl SynthEngineHandle {
             vel_amp: self.vel_amp(),
             vel_filter: self.vel_filter(),
             mono_mode: self.mono_mode(),
+            mod_wheel_dest: self.mod_wheel_dest(),
+            mod_wheel_depth: self.mod_wheel_depth(),
+            aftertouch_dest: self.aftertouch_dest(),
+            aftertouch_depth: self.aftertouch_depth(),
             filter_env_amount: self.filter_env_amount(),
             fenv_adsr: [
                 self.fenv_attack(),
