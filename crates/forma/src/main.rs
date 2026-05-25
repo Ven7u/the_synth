@@ -763,6 +763,34 @@ impl SynthApp {
         self.chord_kb.held_pad = None;
         self.chord_kb.kb_held.clear();
     }
+
+    /// Full panic stop: silence all voices, halt all transport (seq, arp, walker, drums),
+    /// clear every pending state, keyboard freeze, and flush FX tails.
+    pub(crate) fn stop_all(&mut self) {
+        // Silence voices and clear all keyboard/note state
+        self.all_notes_off();
+
+        // Stop arp and clear its chord
+        self.engine.set_arp_enabled(false);
+        self.engine.chord_hold(&[]);
+        self.arp_pending_start = false;
+        self.kb_freeze = false;
+        self.frozen_notes.clear();
+
+        // Stop walker
+        self.engine.set_walker_enabled(false);
+
+        // Stop drums
+        self.drum_engine.enabled.store(false, Ordering::Relaxed);
+        self.drums.enabled = false;
+
+        // Clear pending bar-quantize starts
+        self.seq_pending_start = false;
+        self.seq.playing.store(false, Ordering::Relaxed);
+
+        // Flush FX tails (delay, reverb, shimmer, etc.)
+        self.engine.reset_fx_tails();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1647,6 +1675,21 @@ impl SynthApp {
                         lerp_col(beat_dim, beat_full, beat_t),
                     );
                 }
+            }
+
+            // ── STOP ─────────────────────────────────────────────────────
+            if ui
+                .add(egui::Button::new(
+                    egui::RichText::new("■")
+                        .size(13.0)
+                        .color(egui::Color32::from_rgb(220, 80, 70)),
+                ))
+                .on_hover_text(
+                    "Panic stop — silence all voices, stop sequencer / arp / walker / drums, clear frozen notes and flush FX tails.",
+                )
+                .clicked()
+            {
+                self.stop_all();
             }
 
             ui.separator();

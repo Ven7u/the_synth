@@ -37,11 +37,28 @@ impl SynthApp {
                             self.arp_pending_start = false;
                         } else {
                             let new_enabled = !enabled;
+                            // Collect frozen notes before all_notes_off drains them.
+                            // When enabling arp while freeze is on, seed the arp chord
+                            // with those notes so the user's frozen chord "passes to" the arp.
+                            let frozen_chord: Vec<u8> = if new_enabled && self.kb_freeze {
+                                self.frozen_notes.iter().copied().collect()
+                            } else {
+                                vec![]
+                            };
                             self.all_notes_off();
                             self.engine.set_arp_enabled(new_enabled);
-                            if new_enabled && self.arp_sync_active() {
-                                self.apply_clock_sync();
-                                self.schedule_or_restart_arp();
+                            if new_enabled {
+                                if self.kb_freeze {
+                                    // Clear freeze — it was consumed by the arp enable
+                                    self.kb_freeze = false;
+                                }
+                                if !frozen_chord.is_empty() {
+                                    self.engine.chord_hold(&frozen_chord);
+                                }
+                                if self.arp_sync_active() {
+                                    self.apply_clock_sync();
+                                    self.schedule_or_restart_arp();
+                                }
                             }
                             if !new_enabled {
                                 self.arp_pending_start = false;
