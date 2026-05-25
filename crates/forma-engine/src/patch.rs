@@ -138,6 +138,16 @@ pub struct Patch {
     /// Aftertouch depth 0–1.
     #[serde(default = "default_aftertouch_depth")]
     pub aftertouch_depth: f32,
+    /// Mod matrix: 4 slots × (source, destination, depth).
+    ///   src  0=Off 1=LFO1 2=LFO2 3=ModWheel 4=Aftertouch
+    ///   dst  0=Off 1=Filter 2=Amp 3=Pitch
+    ///   depth -1..+1
+    #[serde(default)]
+    pub mat_src: [u8; 4],
+    #[serde(default)]
+    pub mat_dst: [u8; 4],
+    #[serde(default)]
+    pub mat_depth: [f32; 4],
     pub fenv_adsr: [f32; 4],
 
     // Amp

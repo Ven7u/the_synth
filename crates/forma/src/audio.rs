@@ -192,6 +192,11 @@ struct TrackProcessor {
     aftertouch_dest: u8,
     aftertouch_depth: f32,
 
+    // Per-buffer mod matrix (4 slots)
+    mat_src: [u8; 4],
+    mat_dst: [u8; 4],
+    mat_depth: [f32; 4],
+
     // Gate lane "Pulse" (amp ducker)
     gate_aenv_enabled: bool,
     gate_aenv_pattern: u16,
@@ -272,6 +277,9 @@ impl TrackProcessor {
             mod_wheel_depth: 0.5,
             aftertouch_dest: 1,
             aftertouch_depth: 0.3,
+            mat_src: [0u8; 4],
+            mat_dst: [0u8; 4],
+            mat_depth: [0.0f32; 4],
             gate_aenv_enabled: false,
             gate_aenv_pattern: 0,
             gate_aenv_length: 16,
@@ -406,6 +414,11 @@ impl TrackProcessor {
         self.mod_wheel_depth = self.state.mod_wheel_depth.value();
         self.aftertouch_dest = self.state.aftertouch_dest.load(Ordering::Relaxed);
         self.aftertouch_depth = self.state.aftertouch_depth.value();
+        for i in 0..4 {
+            self.mat_src[i] = self.state.mat_src[i].load(Ordering::Relaxed);
+            self.mat_dst[i] = self.state.mat_dst[i].load(Ordering::Relaxed);
+            self.mat_depth[i] = self.state.mat_depth[i].value();
+        }
 
         // Key tracking: find highest sounding voice.
         let key_track = self.state.filter_key_track.value();
@@ -507,6 +520,26 @@ impl TrackProcessor {
             match dest {
                 1 => filter_mod += raw * depth,
                 3 => amp_mod *= 1.0 - raw * depth * 0.5,
+                _ => {}
+            }
+        }
+
+        // Mod matrix — 4 free-routing slots.
+        let mw_raw = self.state.mod_wheel.value();
+        let at_raw = self.state.aftertouch.value();
+        for i in 0..4 {
+            let sig = match self.mat_src[i] {
+                1 => lfo_raw,
+                2 => lfo2_raw,
+                3 => mw_raw,
+                4 => at_raw,
+                _ => continue,
+            };
+            let d = self.mat_depth[i];
+            match self.mat_dst[i] {
+                1 => filter_mod += sig * d,
+                2 => amp_mod = (amp_mod - sig * d * 0.5).max(0.0),
+                3 => pitch_mod += sig * d,
                 _ => {}
             }
         }

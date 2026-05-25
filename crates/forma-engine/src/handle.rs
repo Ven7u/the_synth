@@ -275,6 +275,37 @@ impl SynthEngineHandle {
         self.state.aftertouch_depth.value()
     }
 
+    pub fn set_mat_src(&self, slot: usize, src: u8) {
+        if let Some(s) = self.state.mat_src.get(slot) {
+            s.store(src.min(4), Ordering::Relaxed);
+        }
+    }
+    pub fn mat_src(&self, slot: usize) -> u8 {
+        self.state
+            .mat_src
+            .get(slot)
+            .map_or(0, |s| s.load(Ordering::Relaxed))
+    }
+    pub fn set_mat_dst(&self, slot: usize, dst: u8) {
+        if let Some(d) = self.state.mat_dst.get(slot) {
+            d.store(dst.min(3), Ordering::Relaxed);
+        }
+    }
+    pub fn mat_dst(&self, slot: usize) -> u8 {
+        self.state
+            .mat_dst
+            .get(slot)
+            .map_or(0, |d| d.load(Ordering::Relaxed))
+    }
+    pub fn set_mat_depth(&self, slot: usize, v: f32) {
+        if let Some(d) = self.state.mat_depth.get(slot) {
+            d.set(v.clamp(-1.0, 1.0));
+        }
+    }
+    pub fn mat_depth(&self, slot: usize) -> f32 {
+        self.state.mat_depth.get(slot).map_or(0.0, |d| d.value())
+    }
+
     pub fn set_filter_env_amount(&self, v: f32) {
         self.state.filter_env_amount.set(v);
     }
@@ -1451,6 +1482,11 @@ impl SynthEngineHandle {
         self.set_mod_wheel_depth(p.mod_wheel_depth);
         self.set_aftertouch_dest(p.aftertouch_dest);
         self.set_aftertouch_depth(p.aftertouch_depth);
+        for i in 0..4 {
+            self.set_mat_src(i, p.mat_src[i]);
+            self.set_mat_dst(i, p.mat_dst[i]);
+            self.set_mat_depth(i, p.mat_depth[i]);
+        }
         self.set_filter_env_amount(p.filter_env_amount);
         self.set_fenv_attack(p.fenv_adsr[0]);
         self.set_fenv_decay(p.fenv_adsr[1]);
@@ -1668,6 +1704,9 @@ impl SynthEngineHandle {
             mod_wheel_depth: self.mod_wheel_depth(),
             aftertouch_dest: self.aftertouch_dest(),
             aftertouch_depth: self.aftertouch_depth(),
+            mat_src: std::array::from_fn(|i| self.mat_src(i)),
+            mat_dst: std::array::from_fn(|i| self.mat_dst(i)),
+            mat_depth: std::array::from_fn(|i| self.mat_depth(i)),
             filter_env_amount: self.filter_env_amount(),
             fenv_adsr: [
                 self.fenv_attack(),

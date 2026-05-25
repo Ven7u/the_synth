@@ -180,6 +180,7 @@ impl<'a> TabViewer for SynthTabViewer<'a> {
                         self.app.ui_mod_wheel_panel(&mut cols[0]);
                         self.app.ui_aftertouch_panel(&mut cols[1]);
                     });
+                    self.app.ui_mod_matrix_panel(ui);
                 });
             }
             Tab::Filter => {

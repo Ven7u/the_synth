@@ -852,6 +852,96 @@ impl SynthApp {
         });
     }
 
+    pub fn ui_mod_matrix_panel(&mut self, ui: &mut egui::Ui) {
+        use crate::ui::frame::SynthFrame;
+        const SOURCES: &[&str] = &["Off", "LFO 1", "LFO 2", "Mod Wheel", "Aftertouch"];
+        const DESTS: &[&str] = &["Off", "Filter", "Amp", "Pitch"];
+
+        SynthFrame::section(&self.theme).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(
+                RichText::new("MOD MATRIX")
+                    .size(12.0)
+                    .strong()
+                    .color(self.theme.c(&self.theme.accent)),
+            );
+            ui.add_space(self.theme.sp_xs);
+
+            egui::Grid::new("mod_matrix_grid")
+                .num_columns(4)
+                .spacing([8.0, 4.0])
+                .show(ui, |ui| {
+                    // Header
+                    for label in ["#", "SOURCE", "→ DEST", "DEPTH"] {
+                        ui.label(
+                            RichText::new(label)
+                                .size(9.0)
+                                .color(self.theme.c(&self.theme.text_secondary)),
+                        );
+                    }
+                    ui.end_row();
+
+                    for slot in 0..4 {
+                        // Row number
+                        ui.label(
+                            RichText::new(format!("{}", slot + 1))
+                                .size(10.0)
+                                .color(self.theme.c(&self.theme.text_disabled)),
+                        );
+
+                        // Source combo
+                        egui::ComboBox::from_id_salt(format!("mat_src_{slot}"))
+                            .selected_text(SOURCES[self.mat_src[slot].min(4)])
+                            .width(90.0)
+                            .show_ui(ui, |ui| {
+                                for (i, label) in SOURCES.iter().enumerate() {
+                                    if ui
+                                        .selectable_label(self.mat_src[slot] == i, *label)
+                                        .clicked()
+                                    {
+                                        self.mat_src[slot] = i;
+                                        self.engine.set_mat_src(slot, i as u8);
+                                    }
+                                }
+                            });
+
+                        // Dest combo
+                        egui::ComboBox::from_id_salt(format!("mat_dst_{slot}"))
+                            .selected_text(DESTS[self.mat_dst[slot].min(3)])
+                            .width(70.0)
+                            .show_ui(ui, |ui| {
+                                for (i, label) in DESTS.iter().enumerate() {
+                                    if ui
+                                        .selectable_label(self.mat_dst[slot] == i, *label)
+                                        .clicked()
+                                    {
+                                        self.mat_dst[slot] = i;
+                                        self.engine.set_mat_dst(slot, i as u8);
+                                    }
+                                }
+                            });
+
+                        // Depth drag
+                        let mut d = self.mat_depth[slot];
+                        let active = self.mat_src[slot] != 0 && self.mat_dst[slot] != 0;
+                        let resp = ui.add_enabled(
+                            active,
+                            egui::DragValue::new(&mut d)
+                                .range(-1.0_f32..=1.0)
+                                .speed(0.01)
+                                .fixed_decimals(2),
+                        );
+                        if resp.changed() {
+                            self.mat_depth[slot] = d;
+                            self.engine.set_mat_depth(slot, d);
+                        }
+
+                        ui.end_row();
+                    }
+                });
+        });
+    }
+
     pub fn ui_mod_wheel_panel(&mut self, ui: &mut egui::Ui) {
         use crate::ui::frame::SynthFrame;
         let sp_xs = self.theme.sp_xs;

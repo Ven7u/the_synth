@@ -91,7 +91,14 @@ pub struct AudioState {
     pub aftertouch: Shared,           // channel pressure 0–1
     pub aftertouch_dest: Arc<AtomicU8>, // 0=Off 1=Filter 2=LFO-Depth 3=Amp
     pub aftertouch_depth: Shared,     // 0–1
-    pub filter_env_amount: Shared,    // 0.0..1.0
+    // Mod matrix — 4 free-routing slots. Each slot: source signal × depth → destination.
+    //   src:  0=Off 1=LFO1 2=LFO2 3=ModWheel 4=Aftertouch
+    //   dst:  0=Off 1=Filter 2=Amp 3=Pitch
+    //   depth: −1.0..+1.0 (negative = inverse modulation)
+    pub mat_src: [Arc<AtomicU8>; 4],
+    pub mat_dst: [Arc<AtomicU8>; 4],
+    pub mat_depth: [Shared; 4],
+    pub filter_env_amount: Shared, // 0.0..1.0
     // Filter ADSR
     pub fenv_attack: Shared,
     pub fenv_decay: Shared,
@@ -309,6 +316,9 @@ impl AudioState {
             aftertouch: shared(0.0),
             aftertouch_dest: Arc::new(AtomicU8::new(1)), // Filter
             aftertouch_depth: shared(0.3),
+            mat_src: std::array::from_fn(|_| Arc::new(AtomicU8::new(0))),
+            mat_dst: std::array::from_fn(|_| Arc::new(AtomicU8::new(0))),
+            mat_depth: std::array::from_fn(|_| shared(0.0)),
             filter_env_amount: shared(0.3),
             fenv_attack: shared(0.01),
             fenv_decay: shared(0.3),

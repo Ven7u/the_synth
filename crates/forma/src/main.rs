@@ -151,6 +151,11 @@ pub(crate) struct SynthApp {
     pub(crate) aftertouch_dest: usize,
     pub(crate) aftertouch_depth: f32,
 
+    // Mod matrix — 4 free-routing slots
+    pub(crate) mat_src: [usize; 4], // 0=Off 1=LFO1 2=LFO2 3=ModWheel 4=Aftertouch
+    pub(crate) mat_dst: [usize; 4], // 0=Off 1=Filter 2=Amp 3=Pitch
+    pub(crate) mat_depth: [f32; 4], // -1..+1
+
     // LFO 1
     pub(crate) lfo_enabled: bool,
     pub(crate) lfo_rate: f32,
@@ -457,6 +462,9 @@ impl SynthApp {
             mod_wheel_depth: 0.5,
             aftertouch_dest: 1,
             aftertouch_depth: 0.3,
+            mat_src: [0; 4],
+            mat_dst: [0; 4],
+            mat_depth: [0.0; 4],
             lfo_dest: 1,
             lfo_sync: false,
             lfo_division: 4,
@@ -1037,6 +1045,11 @@ impl SynthApp {
         p.mod_wheel_depth = self.mod_wheel_depth;
         p.aftertouch_dest = self.aftertouch_dest as u8;
         p.aftertouch_depth = self.aftertouch_depth;
+        for i in 0..4 {
+            p.mat_src[i] = self.mat_src[i] as u8;
+            p.mat_dst[i] = self.mat_dst[i] as u8;
+            p.mat_depth[i] = self.mat_depth[i];
+        }
         p.lfo_enabled = self.lfo_enabled;
         p.lfo_rate = self.lfo_rate;
         p.lfo_depth = self.lfo_depth;
@@ -1158,6 +1171,11 @@ impl SynthApp {
         self.mod_wheel_depth = p.mod_wheel_depth;
         self.aftertouch_dest = p.aftertouch_dest as usize;
         self.aftertouch_depth = p.aftertouch_depth;
+        for i in 0..4 {
+            self.mat_src[i] = p.mat_src[i] as usize;
+            self.mat_dst[i] = p.mat_dst[i] as usize;
+            self.mat_depth[i] = p.mat_depth[i];
+        }
         self.lfo_enabled = p.lfo_enabled;
         self.lfo_rate = p.lfo_rate;
         self.lfo_depth = p.lfo_depth;
@@ -1380,6 +1398,11 @@ impl SynthApp {
         self.mod_wheel_depth = p.mod_wheel_depth;
         self.aftertouch_dest = p.aftertouch_dest as usize;
         self.aftertouch_depth = p.aftertouch_depth;
+        for i in 0..4 {
+            self.mat_src[i] = p.mat_src[i] as usize;
+            self.mat_dst[i] = p.mat_dst[i] as usize;
+            self.mat_depth[i] = p.mat_depth[i];
+        }
         self.lfo_enabled = p.lfo_enabled;
         self.lfo_rate = p.lfo_rate;
         self.lfo_depth = p.lfo_depth;
