@@ -1,46 +1,102 @@
 {
-  "name": "Still Water",
-  "category": "Ambient",
-  "synth_model": "theSynth",
-  "osc_wave": [0, 0, 0],
-  "osc_octave": [0, 1, 0],
-  "osc_detune": [0.0, 3.0, 0.0],
-  "osc_vol": [0.5, 0.5, 0.0],
-  "osc_enabled": [true, true, false],
-  "osc_pulse_width": [0.5, 0.5, 0.5],
-  "osc_pw_enabled": [false, false, false],
-  "osc_unison_enabled": [true, true, false],
-  "osc_unison_count": [8, 5, 2],
-  "osc_unison_spread": [28.0, 20.0, 20.0],
-  "hard_sync": false,
-  "fm_enabled": false,
-  "fm_depth": 0.0,
-  "ring_enabled": false,
-  "ring_depth": 0.0,
-  "noise_vol": 0.0,
-  "lfo_enabled": true,
-  "lfo_rate": 0.04,
-  "lfo_depth": 0.05,
-  "lfo_shape": 0,
-  "lfo_dest": 2,
-  "filter_enabled": true,
-  "filter_cutoff": 1200.0,
-  "filter_q": 0.06,
-  "filter_env_amount": 0.12,
-  "fenv_adsr": [7.0, 3.0, 0.80, 12.0],
-  "amp_adsr": [8.0, 2.0, 0.90, 14.0],
-  "glide_time": 0.6,
-  "master_vol": 0.40,
-  "fx_chorus_on": true,
-  "fx_chorus_rate": 0.08,
-  "fx_chorus_depth": 0.010,
-  "fx_chorus_mix": 0.30,
-  "fx_delay_on": false,
-  "fx_delay_time": 0.6,
-  "fx_delay_feedback": 0.3,
-  "fx_delay_mix": 0.2,
-  "fx_reverb_on": true,
-  "fx_reverb_size": 0.98,
-  "fx_reverb_damp": 0.12,
-  "fx_reverb_mix": 0.82
+    "name": "Still Water",
+    "category": "Ambient",
+    "synth_model": "theSynth",
+    "osc_wave": [
+        0,
+        0,
+        0
+    ],
+    "osc_octave": [
+        0,
+        1,
+        0
+    ],
+    "osc_detune": [
+        0.0,
+        3.0,
+        0.0
+    ],
+    "osc_vol": [
+        0.5,
+        0.5,
+        0.0
+    ],
+    "osc_enabled": [
+        true,
+        true,
+        false
+    ],
+    "osc_pulse_width": [
+        0.5,
+        0.5,
+        0.5
+    ],
+    "osc_pw_enabled": [
+        false,
+        false,
+        false
+    ],
+    "osc_unison_enabled": [
+        true,
+        true,
+        false
+    ],
+    "osc_unison_count": [
+        8,
+        5,
+        2
+    ],
+    "osc_unison_spread": [
+        28.0,
+        20.0,
+        20.0
+    ],
+    "hard_sync": false,
+    "fm_enabled": false,
+    "fm_depth": 0.0,
+    "ring_enabled": false,
+    "ring_depth": 0.0,
+    "noise_vol": 0.0,
+    "lfo_enabled": true,
+    "lfo_rate": 0.04,
+    "lfo_depth": 0.05,
+    "lfo_shape": 0,
+    "lfo_dest": 2,
+    "filter_enabled": true,
+    "filter_cutoff": 1200.0,
+    "filter_q": 0.06,
+    "filter_env_amount": 0.12,
+    "fenv_adsr": [
+        7.0,
+        3.0,
+        0.8,
+        12.0
+    ],
+    "amp_adsr": [
+        8.0,
+        2.0,
+        0.9,
+        14.0
+    ],
+    "glide_time": 0.6,
+    "master_vol": 0.4,
+    "fx_chorus_on": true,
+    "fx_chorus_rate": 0.08,
+    "fx_chorus_depth": 0.01,
+    "fx_chorus_mix": 0.3,
+    "fx_delay_on": false,
+    "fx_delay_time": 0.6,
+    "fx_delay_feedback": 0.3,
+    "fx_delay_mix": 0.2,
+    "fx_reverb_on": true,
+    "fx_reverb_size": 0.98,
+    "fx_reverb_damp": 0.12,
+    "fx_reverb_mix": 0.82,
+    "tags": [
+        "drone",
+        "soft",
+        "long-release",
+        "evolving"
+    ]
 }

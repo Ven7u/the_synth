@@ -55,6 +55,12 @@ pub struct LayoutState {
     /// Active studio tab. Defaults to Voice for existing saved files.
     #[serde(default)]
     pub studio_tab: StudioTab,
+    /// Starred patch names.
+    #[serde(default)]
+    pub patch_favorites: Vec<String>,
+    /// Recently loaded patch names, newest first (capped at 12).
+    #[serde(default)]
+    pub patch_recent: Vec<String>,
 }
 
 /// Serializable mirror of PanelVisibility.
@@ -76,6 +82,8 @@ impl Default for LayoutState {
             theme_name: "Midnight".into(),
             app_mode: AppMode::Studio,
             studio_tab: StudioTab::Voice,
+            patch_favorites: Vec::new(),
+            patch_recent: Vec::new(),
             panels: PanelVisibilityState {
                 oscillators: true,
                 modulation: true,

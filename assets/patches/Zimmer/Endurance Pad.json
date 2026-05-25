@@ -1,46 +1,100 @@
 {
-  "name": "Endurance Pad",
-  "category": "Zimmer",
-  "synth_model": "theSynth",
-  "osc_wave": [0, 1, 0],
-  "osc_octave": [0, 1, 0],
-  "osc_detune": [0.0, 5.0, 0.0],
-  "osc_vol": [0.50, 0.40, 0.0],
-  "osc_enabled": [true, true, false],
-  "osc_pulse_width": [0.5, 0.5, 0.5],
-  "osc_pw_enabled": [false, true, false],
-  "osc_unison_enabled": [true, true, false],
-  "osc_unison_count": [5, 4, 2],
-  "osc_unison_spread": [20.0, 16.0, 20.0],
-  "hard_sync": false,
-  "fm_enabled": false,
-  "fm_depth": 0.0,
-  "ring_enabled": false,
-  "ring_depth": 0.0,
-  "noise_vol": 0.005,
-  "lfo_enabled": true,
-  "lfo_rate": 0.05,
-  "lfo_depth": 0.04,
-  "lfo_shape": 0,
-  "lfo_dest": 2,
-  "filter_enabled": true,
-  "filter_cutoff": 1800.0,
-  "filter_q": 0.10,
-  "filter_env_amount": 0.25,
-  "fenv_adsr": [5.5, 2.5, 0.78, 10.0],
-  "amp_adsr": [6.5, 2.0, 0.82, 14.0],
-  "glide_time": 0.40,
-  "master_vol": 0.46,
-  "fx_chorus_on": true,
-  "fx_chorus_rate": 0.09,
-  "fx_chorus_depth": 0.012,
-  "fx_chorus_mix": 0.28,
-  "fx_delay_on": true,
-  "fx_delay_time": 0.60,
-  "fx_delay_feedback": 0.40,
-  "fx_delay_mix": 0.20,
-  "fx_reverb_on": true,
-  "fx_reverb_size": 0.96,
-  "fx_reverb_damp": 0.16,
-  "fx_reverb_mix": 0.74
+    "name": "Endurance Pad",
+    "category": "Pad",
+    "synth_model": "theSynth",
+    "osc_wave": [
+        0,
+        1,
+        0
+    ],
+    "osc_octave": [
+        0,
+        1,
+        0
+    ],
+    "osc_detune": [
+        0.0,
+        5.0,
+        0.0
+    ],
+    "osc_vol": [
+        0.5,
+        0.4,
+        0.0
+    ],
+    "osc_enabled": [
+        true,
+        true,
+        false
+    ],
+    "osc_pulse_width": [
+        0.5,
+        0.5,
+        0.5
+    ],
+    "osc_pw_enabled": [
+        false,
+        true,
+        false
+    ],
+    "osc_unison_enabled": [
+        true,
+        true,
+        false
+    ],
+    "osc_unison_count": [
+        5,
+        4,
+        2
+    ],
+    "osc_unison_spread": [
+        20.0,
+        16.0,
+        20.0
+    ],
+    "hard_sync": false,
+    "fm_enabled": false,
+    "fm_depth": 0.0,
+    "ring_enabled": false,
+    "ring_depth": 0.0,
+    "noise_vol": 0.005,
+    "lfo_enabled": true,
+    "lfo_rate": 0.05,
+    "lfo_depth": 0.04,
+    "lfo_shape": 0,
+    "lfo_dest": 2,
+    "filter_enabled": true,
+    "filter_cutoff": 1800.0,
+    "filter_q": 0.1,
+    "filter_env_amount": 0.25,
+    "fenv_adsr": [
+        5.5,
+        2.5,
+        0.78,
+        10.0
+    ],
+    "amp_adsr": [
+        6.5,
+        2.0,
+        0.82,
+        14.0
+    ],
+    "glide_time": 0.4,
+    "master_vol": 0.46,
+    "fx_chorus_on": true,
+    "fx_chorus_rate": 0.09,
+    "fx_chorus_depth": 0.012,
+    "fx_chorus_mix": 0.28,
+    "fx_delay_on": true,
+    "fx_delay_time": 0.6,
+    "fx_delay_feedback": 0.4,
+    "fx_delay_mix": 0.2,
+    "fx_reverb_on": true,
+    "fx_reverb_size": 0.96,
+    "fx_reverb_damp": 0.16,
+    "fx_reverb_mix": 0.74,
+    "tags": [
+        "zimmer",
+        "long-release"
+    ]
 }

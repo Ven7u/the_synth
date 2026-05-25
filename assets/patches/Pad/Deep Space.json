@@ -1,34 +1,91 @@
 {
-  "name": "Deep Space",
-  "category": "Pad",
-  "synth_model": "theSynth",
-  "osc_wave": [0, 1, 0],
-  "osc_octave": [0, -1, 0],
-  "osc_detune": [0.0, 6.0, 0.0],
-  "osc_vol": [0.4, 0.25, 0.0],
-  "osc_enabled": [true, true, false],
-  "osc_pulse_width": [0.5, 0.5, 0.5],
-  "osc_pw_enabled": [false, false, false],
-  "osc_unison_enabled": [true, true, false],
-  "osc_unison_count": [6, 4, 2],
-  "osc_unison_spread": [35.0, 25.0, 20.0],
-  "hard_sync": false,
-  "fm_enabled": false,
-  "fm_depth": 0.0,
-  "ring_enabled": false,
-  "ring_depth": 0.0,
-  "noise_vol": 0.08,
-  "lfo_enabled": true,
-  "lfo_rate": 0.15,
-  "lfo_depth": 0.2,
-  "lfo_shape": 0,
-  "lfo_dest": 1,
-  "filter_enabled": true,
-  "filter_cutoff": 800.0,
-  "filter_q": 0.1,
-  "filter_env_amount": 0.15,
-  "fenv_adsr": [2.0, 1.0, 0.7, 3.5],
-  "amp_adsr": [1.5, 0.8, 0.8, 3.5],
-  "glide_time": 0.0,
-  "master_vol": 0.42
+    "name": "Deep Space",
+    "category": "Pad",
+    "synth_model": "theSynth",
+    "osc_wave": [
+        0,
+        1,
+        0
+    ],
+    "osc_octave": [
+        0,
+        -1,
+        0
+    ],
+    "osc_detune": [
+        0.0,
+        6.0,
+        0.0
+    ],
+    "osc_vol": [
+        0.4,
+        0.25,
+        0.0
+    ],
+    "osc_enabled": [
+        true,
+        true,
+        false
+    ],
+    "osc_pulse_width": [
+        0.5,
+        0.5,
+        0.5
+    ],
+    "osc_pw_enabled": [
+        false,
+        false,
+        false
+    ],
+    "osc_unison_enabled": [
+        true,
+        true,
+        false
+    ],
+    "osc_unison_count": [
+        6,
+        4,
+        2
+    ],
+    "osc_unison_spread": [
+        35.0,
+        25.0,
+        20.0
+    ],
+    "hard_sync": false,
+    "fm_enabled": false,
+    "fm_depth": 0.0,
+    "ring_enabled": false,
+    "ring_depth": 0.0,
+    "noise_vol": 0.08,
+    "lfo_enabled": true,
+    "lfo_rate": 0.15,
+    "lfo_depth": 0.2,
+    "lfo_shape": 0,
+    "lfo_dest": 1,
+    "filter_enabled": true,
+    "filter_cutoff": 800.0,
+    "filter_q": 0.1,
+    "filter_env_amount": 0.15,
+    "fenv_adsr": [
+        2.0,
+        1.0,
+        0.7,
+        3.5
+    ],
+    "amp_adsr": [
+        1.5,
+        0.8,
+        0.8,
+        3.5
+    ],
+    "glide_time": 0.0,
+    "master_vol": 0.42,
+    "tags": [
+        "dark",
+        "evolving",
+        "drone",
+        "analog",
+        "long-release"
+    ]
 }

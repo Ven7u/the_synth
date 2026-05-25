@@ -264,7 +264,11 @@ pub(crate) struct SynthApp {
     pub(crate) patch_browser_open: bool,
     pub(crate) patch_browser_category: String,
     pub(crate) patch_browser_model: String,
-    pub(crate) patch_load_fx: bool, // if false, loading a patch leaves the FX chain untouched
+    pub(crate) patch_load_fx: bool,
+    pub(crate) patch_search: String,
+    pub(crate) patch_active_tags: std::collections::HashSet<String>,
+    pub(crate) patch_favorites: std::collections::HashSet<String>,
+    pub(crate) patch_recent: Vec<String>,
 
     // Metronome
     pub(crate) show_metronome: bool,
@@ -514,6 +518,10 @@ impl SynthApp {
             patch_browser_category: "All".into(),
             patch_browser_model: "All".into(),
             patch_load_fx: false,
+            patch_search: String::new(),
+            patch_active_tags: std::collections::HashSet::new(),
+            patch_favorites: saved.patch_favorites.into_iter().collect(),
+            patch_recent: saved.patch_recent,
             show_metronome: false,
             metro_enabled: false,
             metro_beats: 4,
@@ -897,6 +905,8 @@ impl eframe::App for SynthApp {
             panels: self.panels.to_state(),
             app_mode: self.app_mode,
             studio_tab: self.studio_tab,
+            patch_favorites: self.patch_favorites.iter().cloned().collect(),
+            patch_recent: self.patch_recent.clone(),
         };
         ui::layout::save_layout(&state);
     }
@@ -1094,6 +1104,12 @@ impl SynthApp {
     }
 
     pub(crate) fn apply_patch(&mut self, p: Patch) {
+        // Record in recents (deduplicate, keep newest first, cap at 12)
+        let rname = p.name.clone();
+        self.patch_recent.retain(|n| n != &rname);
+        self.patch_recent.insert(0, rname);
+        self.patch_recent.truncate(12);
+
         // Silence all voices before changing parameters to prevent Moog filter blowup.
         self.all_notes_off();
         // Clear FX tail buffers so old reverb/delay from the previous patch does not

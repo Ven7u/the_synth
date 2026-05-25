@@ -28,6 +28,10 @@ pub struct Patch {
     pub category: String,
     #[serde(default)]
     pub synth_model: String,
+    /// Free-form labels: character (warm, dark, evolving…), timbre (analog, fm, bell…),
+    /// attribution (eno, pink-floyd…). A patch can carry any number.
+    #[serde(default)]
+    pub tags: Vec<String>,
 
     // OSC bank (3 oscillators)
     pub osc_wave: [usize; 3],

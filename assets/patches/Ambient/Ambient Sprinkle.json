@@ -1,46 +1,100 @@
 {
-  "name": "Ambient Sprinkle",
-  "category": "Ambient",
-  "synth_model": "theSynth",
-  "osc_wave": [0, 0, 0],
-  "osc_octave": [1, 2, 0],
-  "osc_detune": [0.0, 3.5, 0.0],
-  "osc_vol": [0.55, 0.45, 0.0],
-  "osc_enabled": [true, true, false],
-  "osc_pulse_width": [0.5, 0.5, 0.5],
-  "osc_pw_enabled": [false, false, false],
-  "osc_unison_enabled": [false, false, false],
-  "osc_unison_count": [2, 2, 2],
-  "osc_unison_spread": [12.0, 10.0, 20.0],
-  "hard_sync": false,
-  "fm_enabled": true,
-  "fm_depth": 0.22,
-  "ring_enabled": false,
-  "ring_depth": 0.0,
-  "noise_vol": 0.0,
-  "lfo_enabled": false,
-  "lfo_rate": 2.0,
-  "lfo_depth": 0.0,
-  "lfo_shape": 0,
-  "lfo_dest": 1,
-  "filter_enabled": true,
-  "filter_cutoff": 8500.0,
-  "filter_q": 0.15,
-  "filter_env_amount": 0.55,
-  "fenv_adsr": [0.001, 0.5, 0.05, 0.8],
-  "amp_adsr": [0.001, 0.7, 0.0, 1.2],
-  "glide_time": 0.0,
-  "master_vol": 0.42,
-  "fx_chorus_on": false,
-  "fx_chorus_rate": 0.3,
-  "fx_chorus_depth": 0.01,
-  "fx_chorus_mix": 0.2,
-  "fx_delay_on": true,
-  "fx_delay_time": 0.38,
-  "fx_delay_feedback": 0.42,
-  "fx_delay_mix": 0.38,
-  "fx_reverb_on": true,
-  "fx_reverb_size": 0.92,
-  "fx_reverb_damp": 0.28,
-  "fx_reverb_mix": 0.65
+    "name": "Ambient Sprinkle",
+    "category": "Ambient",
+    "synth_model": "theSynth",
+    "osc_wave": [
+        0,
+        0,
+        0
+    ],
+    "osc_octave": [
+        1,
+        2,
+        0
+    ],
+    "osc_detune": [
+        0.0,
+        3.5,
+        0.0
+    ],
+    "osc_vol": [
+        0.55,
+        0.45,
+        0.0
+    ],
+    "osc_enabled": [
+        true,
+        true,
+        false
+    ],
+    "osc_pulse_width": [
+        0.5,
+        0.5,
+        0.5
+    ],
+    "osc_pw_enabled": [
+        false,
+        false,
+        false
+    ],
+    "osc_unison_enabled": [
+        false,
+        false,
+        false
+    ],
+    "osc_unison_count": [
+        2,
+        2,
+        2
+    ],
+    "osc_unison_spread": [
+        12.0,
+        10.0,
+        20.0
+    ],
+    "hard_sync": false,
+    "fm_enabled": true,
+    "fm_depth": 0.22,
+    "ring_enabled": false,
+    "ring_depth": 0.0,
+    "noise_vol": 0.0,
+    "lfo_enabled": false,
+    "lfo_rate": 2.0,
+    "lfo_depth": 0.0,
+    "lfo_shape": 0,
+    "lfo_dest": 1,
+    "filter_enabled": true,
+    "filter_cutoff": 8500.0,
+    "filter_q": 0.15,
+    "filter_env_amount": 0.55,
+    "fenv_adsr": [
+        0.001,
+        0.5,
+        0.05,
+        0.8
+    ],
+    "amp_adsr": [
+        0.001,
+        0.7,
+        0.0,
+        1.2
+    ],
+    "glide_time": 0.0,
+    "master_vol": 0.42,
+    "fx_chorus_on": false,
+    "fx_chorus_rate": 0.3,
+    "fx_chorus_depth": 0.01,
+    "fx_chorus_mix": 0.2,
+    "fx_delay_on": true,
+    "fx_delay_time": 0.38,
+    "fx_delay_feedback": 0.42,
+    "fx_delay_mix": 0.38,
+    "fx_reverb_on": true,
+    "fx_reverb_size": 0.92,
+    "fx_reverb_damp": 0.28,
+    "fx_reverb_mix": 0.65,
+    "tags": [
+        "long-release",
+        "evolving"
+    ]
 }

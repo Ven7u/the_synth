@@ -1544,6 +1544,7 @@ impl SynthEngineHandle {
             name: String::new(),
             category: String::new(),
             synth_model: String::new(),
+            tags: Vec::new(),
 
             osc_wave,
             osc_octave,

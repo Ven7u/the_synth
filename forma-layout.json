@@ -11,5 +11,7 @@
     "midi": true
   },
   "app_mode": "Studio",
-  "studio_tab": "Voice"
+  "studio_tab": "Voice",
+  "patch_favorites": [],
+  "patch_recent": []
 }

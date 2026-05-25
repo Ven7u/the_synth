@@ -210,7 +210,7 @@ impl SynthApp {
                 for m in prev {
                     self.push_note_off(m);
                 }
-            } else {
+            } else if !ctx.memory(|m| m.focused().is_some()) {
                 // Z/X = octave, C/V = velocity, 1/2 = pitch bend, 3–8 = mod wheel → filter
                 let prev_pitch_bend = self.piano_pitch_bend;
                 let prev_mod = self.piano_mod_wheel;
@@ -297,6 +297,16 @@ impl SynthApp {
                     }
                 }
                 self.piano_held_midi = current_held;
+            } else {
+                // A text widget has focus — release any notes that were held before focus was taken.
+                let held: Vec<u8> = self.piano_held_midi.drain().collect();
+                for midi in held {
+                    if self.kb_freeze {
+                        self.frozen_notes.insert(midi);
+                    } else {
+                        self.push_note_off(midi);
+                    }
+                }
             }
         }
     }
