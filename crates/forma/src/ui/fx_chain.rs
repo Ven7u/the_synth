@@ -2,6 +2,9 @@ use crate::SynthApp;
 use eframe::egui;
 use egui::Color32;
 
+/// Phaser stage options shown in the UI.
+const PHASER_STAGE_OPTIONS: &[(usize, &str)] = &[(4, "4"), (6, "6"), (8, "8")];
+
 /// Delay note divisions: (label, beats relative to a quarter-note pulse).
 pub const DELAY_DIVISIONS: &[(&str, f32)] = &[
     ("1/1", 4.0),
@@ -314,6 +317,165 @@ impl SynthApp {
                         if self.fx_crystal_on { self.fx_crystal_mix } else { 0.0 });
                 });
             });
+            // ---- Bit Crusher ----
+            ui.group(|ui| {
+                ui.set_min_width(120.0);
+                ui.vertical(|ui| {
+                    let col_bc = self.theme.c(&self.theme.fx_distortion);
+                    let on = &mut self.fx_bitcrush_on;
+                    let label = egui::RichText::new("BIT CRUSH").small().strong()
+                        .color(if *on { col_bc } else { Color32::GRAY });
+                    if ui.button(label)
+                        .on_hover_text("Toggle bit crusher / sample-rate reducer.")
+                        .clicked()
+                    {
+                        *on = !*on;
+                        self.engine.set_fx_bitcrush_mix(if *on { self.fx_bitcrush_mix } else { 0.0 });
+                    }
+                    ui.add(
+                        egui::Slider::new(&mut self.fx_bitcrush_bits, 1.0_f32..=16.0)
+                            .text("Bits")
+                            .clamp_to_range(true)
+                            .custom_formatter(|v, _| format!("{:.1}", v)),
+                    )
+                    .on_hover_text("Bit depth: 16 = CD quality, 8 = classic lo-fi, 4 = extreme crunch, 1 = 1-bit noise.");
+                    ui.add(
+                        egui::Slider::new(&mut self.fx_bitcrush_rate, 1.0_f32..=32.0)
+                            .text("S/R Div")
+                            .clamp_to_range(true)
+                            .custom_formatter(|v, _| format!("÷{:.0}", v)),
+                    )
+                    .on_hover_text("Sample-rate divisor: 1 = no decimation, 32 = extreme aliasing crunch.");
+                    ui.add(
+                        egui::Slider::new(&mut self.fx_bitcrush_mix, 0.0_f32..=1.0)
+                            .text("Mix")
+                            .clamp_to_range(true),
+                    )
+                    .on_hover_text("Wet/dry mix.");
+                    self.engine.set_fx_bitcrush_bits(self.fx_bitcrush_bits);
+                    self.engine.set_fx_bitcrush_rate(self.fx_bitcrush_rate);
+                    if self.fx_bitcrush_on {
+                        self.engine.set_fx_bitcrush_mix(self.fx_bitcrush_mix);
+                    }
+                });
+            });
+
+            // ---- Tape Saturation ----
+            ui.group(|ui| {
+                ui.set_min_width(120.0);
+                ui.vertical(|ui| {
+                    let col_tape = self.theme.c(&self.theme.fx_overdrive);
+                    let on = &mut self.fx_tape_on;
+                    let label = egui::RichText::new("TAPE SAT").small().strong()
+                        .color(if *on { col_tape } else { Color32::GRAY });
+                    if ui.button(label)
+                        .on_hover_text("Toggle tape saturation (warm harmonic saturation with head-bump warmth).")
+                        .clicked()
+                    {
+                        *on = !*on;
+                        self.engine.set_fx_tape_mix(if *on { self.fx_tape_mix } else { 0.0 });
+                    }
+                    ui.add(
+                        egui::Slider::new(&mut self.fx_tape_drive, 0.0_f32..=1.0)
+                            .text("Drive")
+                            .clamp_to_range(true),
+                    )
+                    .on_hover_text("How hard the tape head is driven. Higher = more saturation and harmonic content.");
+                    ui.add(
+                        egui::Slider::new(&mut self.fx_tape_tone, 0.0_f32..=1.0)
+                            .text("Tone")
+                            .clamp_to_range(true),
+                    )
+                    .on_hover_text("Post-saturation bandwidth: 0 = vintage dark (2 kHz rolloff), 1 = modern full bandwidth.");
+                    ui.add(
+                        egui::Slider::new(&mut self.fx_tape_bias, 0.0_f32..=1.0)
+                            .text("Bias")
+                            .clamp_to_range(true),
+                    )
+                    .on_hover_text("Tape bias: adds even harmonics (2nd harmonic content) for a warmer, slightly asymmetric character.");
+                    ui.add(
+                        egui::Slider::new(&mut self.fx_tape_mix, 0.0_f32..=1.0)
+                            .text("Mix")
+                            .clamp_to_range(true),
+                    )
+                    .on_hover_text("Wet/dry mix.");
+                    self.engine.set_fx_tape_drive(self.fx_tape_drive);
+                    self.engine.set_fx_tape_tone(self.fx_tape_tone);
+                    self.engine.set_fx_tape_bias(self.fx_tape_bias);
+                    if self.fx_tape_on {
+                        self.engine.set_fx_tape_mix(self.fx_tape_mix);
+                    }
+                });
+            });
+
+            // ---- Phaser ----
+            ui.group(|ui| {
+                ui.set_min_width(130.0);
+                ui.vertical(|ui| {
+                    let col_ph = self.theme.c(&self.theme.fx_chorus);
+                    let on = &mut self.fx_phaser_on;
+                    let label = egui::RichText::new("PHASER").small().strong()
+                        .color(if *on { col_ph } else { Color32::GRAY });
+                    if ui.button(label)
+                        .on_hover_text("Toggle phaser (all-pass filter chain with stereo-decorrelated LFO).")
+                        .clicked()
+                    {
+                        *on = !*on;
+                        self.engine.set_fx_phaser_mix(if *on { self.fx_phaser_mix } else { 0.0 });
+                    }
+                    ui.add(
+                        egui::Slider::new(&mut self.fx_phaser_rate, 0.05_f32..=10.0)
+                            .text("Rate")
+                            .suffix(" Hz")
+                            .clamp_to_range(true),
+                    )
+                    .on_hover_text("LFO rate in Hz — how fast the notch sweep moves.");
+                    ui.add(
+                        egui::Slider::new(&mut self.fx_phaser_depth, 0.0_f32..=1.0)
+                            .text("Depth")
+                            .clamp_to_range(true),
+                    )
+                    .on_hover_text("LFO modulation depth — how wide the notch sweeps.");
+                    ui.add(
+                        egui::Slider::new(&mut self.fx_phaser_center, 100.0_f32..=8000.0)
+                            .text("Center")
+                            .suffix(" Hz")
+                            .clamp_to_range(true)
+                            .logarithmic(true),
+                    )
+                    .on_hover_text("Center frequency of the all-pass notch sweep.");
+                    ui.add(
+                        egui::Slider::new(&mut self.fx_phaser_feedback, -0.9_f32..=0.9)
+                            .text("Feedback")
+                            .clamp_to_range(true),
+                    )
+                    .on_hover_text("Feedback amount. Positive = bright resonance, negative = darker hollow character.");
+                    // Stages selector
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Stages:").small());
+                        for &(n, lbl) in PHASER_STAGE_OPTIONS {
+                            if ui.selectable_label(self.fx_phaser_stages == n, lbl).clicked() {
+                                self.fx_phaser_stages = n;
+                                self.engine.set_fx_phaser_stages(n as u8);
+                            }
+                        }
+                    });
+                    ui.add(
+                        egui::Slider::new(&mut self.fx_phaser_mix, 0.0_f32..=1.0)
+                            .text("Mix")
+                            .clamp_to_range(true),
+                    )
+                    .on_hover_text("Wet/dry mix.");
+                    self.engine.set_fx_phaser_rate(self.fx_phaser_rate);
+                    self.engine.set_fx_phaser_depth(self.fx_phaser_depth);
+                    self.engine.set_fx_phaser_center(self.fx_phaser_center);
+                    self.engine.set_fx_phaser_feedback(self.fx_phaser_feedback);
+                    if self.fx_phaser_on {
+                        self.engine.set_fx_phaser_mix(self.fx_phaser_mix);
+                    }
+                });
+            });
+
             // ---- Stereo Width ----
             ui.group(|ui| {
                 ui.set_min_width(120.0);

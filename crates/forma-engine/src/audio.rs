@@ -244,6 +244,25 @@ pub struct AudioState {
     pub fx_shimmer: ShimmerShared,
     // Crystallizer (granular pitch-shift delay)
     pub fx_crystal: CrystallizerShared,
+
+    // Bit crusher / sample-rate reducer
+    pub fx_bitcrush_bits: Shared, // 1.0..16.0 bits
+    pub fx_bitcrush_rate: Shared, // 1.0..32.0  sample-rate divisor
+    pub fx_bitcrush_mix: Shared,
+
+    // Tape saturation
+    pub fx_tape_drive: Shared, // 0.0..1.0
+    pub fx_tape_tone: Shared,  // 0.0..1.0  (post bandwidth: 0=dark, 1=full)
+    pub fx_tape_bias: Shared,  // 0.0..1.0  (even-harmonic content)
+    pub fx_tape_mix: Shared,
+
+    // Phaser (8-stage all-pass, stereo-decorrelated LFO)
+    pub fx_phaser_rate: Shared,          // 0.05..10.0 Hz
+    pub fx_phaser_depth: Shared,         // 0.0..1.0
+    pub fx_phaser_feedback: Shared,      // -0.9..0.9
+    pub fx_phaser_center: Shared,        // 100..8000 Hz
+    pub fx_phaser_stages: Arc<AtomicU8>, // 4 or 8
+    pub fx_phaser_mix: Shared,
 }
 
 impl AudioState {
@@ -409,6 +428,19 @@ impl AudioState {
             stereo_width: shared(1.0),
             fx_shimmer: ShimmerShared::new(),
             fx_crystal: CrystallizerShared::new(),
+            fx_bitcrush_bits: shared(16.0),
+            fx_bitcrush_rate: shared(1.0),
+            fx_bitcrush_mix: shared(0.0),
+            fx_tape_drive: shared(0.5),
+            fx_tape_tone: shared(0.7),
+            fx_tape_bias: shared(0.2),
+            fx_tape_mix: shared(0.0),
+            fx_phaser_rate: shared(0.5),
+            fx_phaser_depth: shared(0.7),
+            fx_phaser_feedback: shared(0.5),
+            fx_phaser_center: shared(1200.0),
+            fx_phaser_stages: Arc::new(AtomicU8::new(8)),
+            fx_phaser_mix: shared(0.0),
         }
     }
 }
@@ -856,6 +888,32 @@ struct FxChain {
     crys_delay: SmoothedParam,
     crys_mix: SmoothedParam,
     crys_pitch: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    // Bit crusher
+    bc_bits: SmoothedParam,
+    bc_rate: Shared,
+    bc_mix: SmoothedParam,
+    bc_hold: f32,    // last held sample (decimation)
+    bc_counter: f32, // counts samples until next hold update
+    // Tape saturation
+    tape_drive: SmoothedParam,
+    tape_tone: Shared,
+    tape_bias: Shared,
+    tape_mix: SmoothedParam,
+    tape_lp_z: f32, // post-sat LP filter state
+    tape_hp_z: f32, // pre-sat HP filter state (pre-emphasis)
+    tape_hb_z: f32, // head-bump LP state (low-shelf warmth)
+    // Phaser
+    ph_rate: Shared,
+    ph_depth: Shared,
+    ph_feedback: Shared,
+    ph_center: Shared,
+    ph_stages: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    ph_mix: SmoothedParam,
+    ph_phase: f32,          // LFO phase 0..1
+    ph_ap_l: [[f32; 2]; 8], // [stage][v_prev, unused] — per-stage state L
+    ph_ap_r: [[f32; 2]; 8], // same for R (90° offset LFO)
+    ph_fb_l: f32,           // feedback memory L
+    ph_fb_r: f32,           // feedback memory R
     // Internal state
     cho_phase: f32,
     del_buf: Vec<f32>,
@@ -925,6 +983,29 @@ impl FxChain {
             crys_delay: SmoothedParam::new(state.fx_crystal.delay_ms.clone(), REV_TAU, sr),
             crys_mix: SmoothedParam::new(state.fx_crystal.mix.clone(), MIX_TAU, sr),
             crys_pitch: std::sync::Arc::clone(&state.fx_crystal.pitch),
+            bc_bits: SmoothedParam::new(state.fx_bitcrush_bits.clone(), MIX_TAU, sr),
+            bc_rate: state.fx_bitcrush_rate.clone(),
+            bc_mix: SmoothedParam::new(state.fx_bitcrush_mix.clone(), MIX_TAU, sr),
+            bc_hold: 0.0,
+            bc_counter: 0.0,
+            tape_drive: SmoothedParam::new(state.fx_tape_drive.clone(), MIX_TAU, sr),
+            tape_tone: state.fx_tape_tone.clone(),
+            tape_bias: state.fx_tape_bias.clone(),
+            tape_mix: SmoothedParam::new(state.fx_tape_mix.clone(), MIX_TAU, sr),
+            tape_lp_z: 0.0,
+            tape_hp_z: 0.0,
+            tape_hb_z: 0.0,
+            ph_rate: state.fx_phaser_rate.clone(),
+            ph_depth: state.fx_phaser_depth.clone(),
+            ph_feedback: state.fx_phaser_feedback.clone(),
+            ph_center: state.fx_phaser_center.clone(),
+            ph_stages: std::sync::Arc::clone(&state.fx_phaser_stages),
+            ph_mix: SmoothedParam::new(state.fx_phaser_mix.clone(), MIX_TAU, sr),
+            ph_phase: 0.0,
+            ph_ap_l: [[0.0; 2]; 8],
+            ph_ap_r: [[0.0; 2]; 8],
+            ph_fb_l: 0.0,
+            ph_fb_r: 0.0,
             cho_phase: 0.0,
             del_buf: vec![0.0f32; buf_len],
             del_pos: 0,
@@ -978,6 +1059,21 @@ impl AudioNode for FxChain {
         self.crys_feedback.reset();
         self.crys_delay.reset();
         self.crys_mix.reset();
+        self.bc_bits.reset();
+        self.bc_mix.reset();
+        self.bc_hold = 0.0;
+        self.bc_counter = 0.0;
+        self.tape_drive.reset();
+        self.tape_mix.reset();
+        self.tape_lp_z = 0.0;
+        self.tape_hp_z = 0.0;
+        self.tape_hb_z = 0.0;
+        self.ph_mix.reset();
+        self.ph_phase = 0.0;
+        self.ph_ap_l = [[0.0; 2]; 8];
+        self.ph_ap_r = [[0.0; 2]; 8];
+        self.ph_fb_l = 0.0;
+        self.ph_fb_r = 0.0;
         self.rev_l.reset();
         self.rev_r.reset();
         self.shim_l.reset();
@@ -1013,6 +1109,11 @@ impl AudioNode for FxChain {
         self.crys_feedback.set_sample_rate(self.sr);
         self.crys_delay.set_sample_rate(self.sr);
         self.crys_mix.set_sample_rate(self.sr);
+        self.bc_bits.set_sample_rate(self.sr);
+        self.bc_mix.set_sample_rate(self.sr);
+        self.tape_drive.set_sample_rate(self.sr);
+        self.tape_mix.set_sample_rate(self.sr);
+        self.ph_mix.set_sample_rate(self.sr);
         self.rev_l.set_sample_rate(self.sr);
         self.rev_r.set_sample_rate(self.sr);
         self.shim_l.set_sample_rate(self.sr);
@@ -1042,6 +1143,26 @@ impl AudioNode for FxChain {
 
         let dry = input[0];
 
+        // ── Bit crusher / sample-rate reducer ──────────────────────────────
+        let bc_mix = self.bc_mix.next();
+        let bc_wet = if bc_mix > 0.0001 {
+            let bits = self.bc_bits.next().clamp(1.0, 16.0);
+            let rate_div = self.bc_rate.value().clamp(1.0, 32.0);
+            // Sample-rate decimation: hold the sample for rate_div samples.
+            self.bc_counter += 1.0;
+            if self.bc_counter >= rate_div {
+                self.bc_counter = 0.0;
+                // Bit-depth quantization.
+                let steps = (2.0_f32.powf(bits - 1.0)).max(1.0);
+                self.bc_hold = (dry * steps).round() / steps;
+            }
+            self.bc_hold
+        } else {
+            dry
+        };
+        let bc_theta = bc_mix * std::f32::consts::FRAC_PI_2;
+        let s0 = bc_theta.cos() * dry + bc_theta.sin() * bc_wet;
+
         // ── Overdrive (tanh soft clip) ──────────────────────────────────────
         let od_drive = self.od_drive.next().max(1.0);
         let od_mix = self.od_mix.next();
@@ -1050,7 +1171,7 @@ impl AudioNode for FxChain {
         let od_wet = if od_mix > 0.0001 {
             // Asymmetric bias: scaled to match the driven signal level so it
             // actually shifts the clipping point. bias up to ±2.0 in tanh space.
-            let driven_signal = dry * od_drive * 5.0;
+            let driven_signal = s0 * od_drive * 5.0;
             let bias = od_asym * 2.0;
             let clipped = (driven_signal + bias).tanh() - bias.tanh();
             // Post-clipper tone LP: 0 = 400 Hz (dark/muffled), 1 = 8 kHz (bright).
@@ -1064,7 +1185,7 @@ impl AudioNode for FxChain {
         };
         // Equal-power crossfade: cos(θ)·dry + sin(θ)·wet where θ = mix·π/2
         let od_theta = od_mix * std::f32::consts::FRAC_PI_2;
-        let s1 = od_theta.cos() * dry + od_theta.sin() * od_wet;
+        let s1 = od_theta.cos() * s0 + od_theta.sin() * od_wet;
 
         // ── Distortion (hard clip) ──────────────────────────────────────────
         let dist_drive = self.dist_drive.next().max(1.0);
@@ -1091,10 +1212,49 @@ impl AudioNode for FxChain {
         let dist_theta = dist_mix * std::f32::consts::FRAC_PI_2;
         let s2 = dist_theta.cos() * s1 + dist_theta.sin() * dist_wet;
 
+        // ── Tape saturation ─────────────────────────────────────────────────
+        // Algorithm: pre-emphasis HP → tanh saturation + even harmonic bias →
+        // de-emphasis LP (bandwidth limiting) → head-bump low shelf warmth.
+        // Inspired by Airwindows ToTape; simplified for real-time per-sample use.
+        let tape_mix = self.tape_mix.next();
+        let tape_wet = if tape_mix > 0.0001 {
+            let drive = self.tape_drive.next().clamp(0.0, 1.0);
+            let tone = self.tape_tone.value().clamp(0.0, 1.0);
+            let bias = self.tape_bias.value().clamp(0.0, 1.0);
+
+            // Pre-emphasis: gentle HP at 120 Hz (tape sees sharp transients).
+            let hp_coeff = (-std::f32::consts::TAU * 120.0 / self.sr).exp();
+            self.tape_hp_z = (1.0 - hp_coeff) * s2 + hp_coeff * self.tape_hp_z;
+            let pre_emphasized = s2 + drive * 0.4 * (s2 - self.tape_hp_z);
+
+            // Saturation: normalized tanh + even harmonic (asymmetric bias).
+            let d = 1.0 + drive * 3.5;
+            let d_tanh = d.tanh();
+            let biased = pre_emphasized + bias * 0.12 * pre_emphasized * pre_emphasized.abs();
+            let saturated = (biased * d).tanh() / d_tanh;
+
+            // De-emphasis LP: simulates tape bandwidth limiting.
+            // tone=1 → 22 kHz (transparent), tone=0 → 2 kHz (vintage tape warmth).
+            let lp_fc = 2000.0_f32 * (22000.0_f32 / 2000.0).powf(tone);
+            let lp_coeff = (-std::f32::consts::TAU * lp_fc / self.sr).exp();
+            self.tape_lp_z = (1.0 - lp_coeff) * saturated + lp_coeff * self.tape_lp_z;
+            let de_emphasized = self.tape_lp_z;
+
+            // Head bump: adds low shelf warmth around 80 Hz (the signature tape
+            // resonance from the head gap and reproduce electronics).
+            let hb_coeff = (-std::f32::consts::TAU * 80.0 / self.sr).exp();
+            self.tape_hb_z = (1.0 - hb_coeff) * de_emphasized + hb_coeff * self.tape_hb_z;
+            de_emphasized + drive * 0.25 * self.tape_hb_z
+        } else {
+            s2
+        };
+        let tape_theta = tape_mix * std::f32::consts::FRAC_PI_2;
+        let s3 = tape_theta.cos() * s2 + tape_theta.sin() * tape_wet;
+
         // ── Chorus (LFO-modulated short delay) ─────────────────────────────
         let cho_mix = self.cho_mix.next();
         let buf_len = self.del_buf.len();
-        self.del_buf[self.del_pos] = s2;
+        self.del_buf[self.del_pos] = s3;
 
         let cho_wet = if cho_mix > 0.0001 {
             let rate = self.cho_rate.value();
@@ -1107,10 +1267,71 @@ impl AudioNode for FxChain {
             let i1 = (i0 + 1) % buf_len;
             self.del_buf[i0] * (1.0 - read.fract()) + self.del_buf[i1] * read.fract()
         } else {
-            s2
+            s3
         };
         let cho_theta = cho_mix * std::f32::consts::FRAC_PI_2;
-        let s3 = cho_theta.cos() * s2 + cho_theta.sin() * cho_wet;
+        let s4 = cho_theta.cos() * s3 + cho_theta.sin() * cho_wet;
+
+        // ── Phaser (8-stage all-pass, stereo-decorrelated LFO) ─────────────
+        // Two independent all-pass chains (L=0°, R=90°) give a lush stereo
+        // spread. Their mid sum feeds the delay/reverb chain; their side
+        // difference is injected into the final stereo output.
+        let ph_mix = self.ph_mix.next();
+        let (ph_wet_l, ph_wet_r) = if ph_mix > 0.0001 {
+            let rate = self.ph_rate.value();
+            let depth = self.ph_depth.value().clamp(0.0, 0.95);
+            let feedback = self.ph_feedback.value().clamp(-0.95, 0.95);
+            let center = self.ph_center.value().clamp(60.0, 8000.0);
+            let n_stages = self.ph_stages.load(std::sync::atomic::Ordering::Relaxed) as usize;
+            let n = n_stages.clamp(2, 8);
+
+            self.ph_phase = (self.ph_phase + rate / self.sr).fract();
+            let lfo_l = (self.ph_phase * std::f32::consts::TAU).sin();
+            // R channel: 90° offset for stereo width.
+            let lfo_r = ((self.ph_phase + 0.25) * std::f32::consts::TAU).sin();
+
+            // Helper: first-order all-pass coefficient for a given frequency.
+            // Uses the Schroeder form: v[n] = x - a*v[n-1], y = a*v + v[n-1].
+            let ap_coeff = |fc: f32| -> f32 {
+                let w = (std::f32::consts::PI * fc / self.sr).tan();
+                (w - 1.0) / (w + 1.0)
+            };
+
+            let fc_l = (center * (1.0 + depth * lfo_l)).clamp(60.0, self.sr * 0.49);
+            let fc_r = (center * (1.0 + depth * lfo_r)).clamp(60.0, self.sr * 0.49);
+            let a_l = ap_coeff(fc_l);
+            let a_r = ap_coeff(fc_r);
+
+            // Run L chain with feedback.
+            let mut sig_l = s4 + self.ph_fb_l * feedback;
+            for i in 0..n {
+                let v_prev = self.ph_ap_l[i][0];
+                let v = sig_l - a_l * v_prev;
+                let y = a_l * v + v_prev;
+                self.ph_ap_l[i][0] = v;
+                sig_l = y;
+            }
+            self.ph_fb_l = sig_l;
+
+            // Run R chain with feedback.
+            let mut sig_r = s4 + self.ph_fb_r * feedback;
+            for i in 0..n {
+                let v_prev = self.ph_ap_r[i][0];
+                let v = sig_r - a_r * v_prev;
+                let y = a_r * v + v_prev;
+                self.ph_ap_r[i][0] = v;
+                sig_r = y;
+            }
+            self.ph_fb_r = sig_r;
+
+            (sig_l, sig_r)
+        } else {
+            (s4, s4)
+        };
+        // Mid sum feeds the rest of the mono chain (delay, reverb process it).
+        let ph_mid = (ph_wet_l + ph_wet_r) * 0.5;
+        let ph_theta = ph_mix * std::f32::consts::FRAC_PI_2;
+        let s5 = ph_theta.cos() * s4 + ph_theta.sin() * ph_mid;
 
         // ── Delay ──────────────────────────────────────────────────────────
         let del_mix = self.del_mix.next();
@@ -1131,18 +1352,13 @@ impl AudioNode for FxChain {
             let i1 = (i0 + 1) % buf_len;
             let delayed =
                 self.del_buf[i0] * (1.0 - read_f.fract()) + self.del_buf[i1] * read_f.fract();
-            // tanh saturation prevents runaway: at feedback=0.95 an unsaturated
-            // buffer converges to 20× input, which overwhelms the reverb that follows.
-            self.del_buf[self.del_pos] = (s3 + delayed * del_feedback).tanh();
+            self.del_buf[self.del_pos] = (s5 + delayed * del_feedback).tanh();
             delayed
         } else {
             0.0
         };
-        // Additive model: dry stays at full level, echo is added on top.
-        let s4_raw = s3 + del_mix * del_wet;
-        // Guard against NaN/Inf before they enter reverb buffers — once poisoned,
-        // reverb buffers never recover until app restart.
-        let s4 = if s4_raw.is_finite() { s4_raw } else { 0.0 };
+        let s6_raw = s5 + del_mix * del_wet;
+        let s6 = if s6_raw.is_finite() { s6_raw } else { 0.0 };
 
         self.del_pos = (self.del_pos + 1) % buf_len;
 
@@ -1156,9 +1372,9 @@ impl AudioNode for FxChain {
         let pre_secs = self.rev_predelay.value().clamp(0.0, 0.1);
         let pre_len = self.rev_pre_buf.len();
         let pre_samples = std::cmp::min((pre_secs * self.sr) as usize, pre_len.saturating_sub(1));
-        self.rev_pre_buf[self.rev_pre_pos] = s4;
+        self.rev_pre_buf[self.rev_pre_pos] = s6;
         let read_pos = (self.rev_pre_pos + pre_len - pre_samples) % pre_len;
-        let s4_predelayed = self.rev_pre_buf[read_pos];
+        let s6_predelayed = self.rev_pre_buf[read_pos];
         self.rev_pre_pos = (self.rev_pre_pos + 1) % pre_len;
 
         // ── Reverb (stereo-decorrelated) ────────────────────────────────────
@@ -1173,9 +1389,9 @@ impl AudioNode for FxChain {
             let damp_r = (rev_damp - damp_spread).clamp(0.0, 1.0);
             (
                 self.rev_l
-                    .tick(s4_predelayed, size_l, damp_l, 0.0, 0, rev_type),
+                    .tick(s6_predelayed, size_l, damp_l, 0.0, 0, rev_type),
                 self.rev_r
-                    .tick(s4_predelayed, size_r, damp_r, 0.0, 0, rev_type),
+                    .tick(s6_predelayed, size_r, damp_r, 0.0, 0, rev_type),
             )
         } else {
             (0.0, 0.0)
@@ -1194,9 +1410,9 @@ impl AudioNode for FxChain {
             let damp_r = (shim_damp - damp_spread).clamp(0.0, 1.0);
             (
                 self.shim_l
-                    .tick(s4, size_l, damp_l, shim_amt, shim_pitch, rev_type),
+                    .tick(s6, size_l, damp_l, shim_amt, shim_pitch, rev_type),
                 self.shim_r
-                    .tick(s4, size_r, damp_r, shim_amt, shim_pitch, rev_type),
+                    .tick(s6, size_r, damp_r, shim_amt, shim_pitch, rev_type),
             )
         } else {
             (0.0, 0.0)
@@ -1212,7 +1428,7 @@ impl AudioNode for FxChain {
         let (crys_wet_l, crys_wet_r) = if crys_mix > 0.0001 {
             (
                 self.crys_l.tick(
-                    s4,
+                    s6,
                     crys_grain * 0.92,
                     (crys_scatter + 0.05).clamp(0.0, 1.0),
                     crys_feedback,
@@ -1220,7 +1436,7 @@ impl AudioNode for FxChain {
                     crys_pitch,
                 ),
                 self.crys_r.tick(
-                    s4,
+                    s6,
                     crys_grain * 1.08,
                     (crys_scatter - 0.05).clamp(0.0, 1.0),
                     crys_feedback,
@@ -1235,7 +1451,7 @@ impl AudioNode for FxChain {
         // Equal-power wet balance: cos(θ)·dry so total energy stays constant
         // when wet is increased. θ = total_wet · π/2.
         let wet_total = (rev_mix + shim_mix + crys_mix).clamp(0.0, 1.0);
-        let dry_bal = s4 * (wet_total * std::f32::consts::FRAC_PI_2).cos();
+        let dry_bal = s6 * (wet_total * std::f32::consts::FRAC_PI_2).cos();
 
         // Wet side gain: sin(θ) completes the equal-power pair with cos(θ) dry.
         let wet_gain = (wet_total * std::f32::consts::FRAC_PI_2).sin();
@@ -1269,9 +1485,13 @@ impl AudioNode for FxChain {
         let dry_r = self.haas_buf[i0] * (1.0 - frac) + self.haas_buf[i1] * frac;
         self.haas_pos = (self.haas_pos + 1) % haas_len;
 
+        // Phaser stereo side: inject the L-R difference into the final output
+        // to restore the stereo width lost when taking the mid-sum above.
+        let ph_side = ph_theta.sin() * (ph_wet_l - ph_wet_r) * 0.5;
+
         let crys_theta = crys_mix * std::f32::consts::FRAC_PI_2;
-        let raw_l = dry_bal + wet_wide_l + crys_theta.sin() * crys_wet_l;
-        let raw_r = dry_r + wet_wide_r + crys_theta.sin() * crys_wet_r;
+        let raw_l = dry_bal + wet_wide_l + crys_theta.sin() * crys_wet_l + ph_side;
+        let raw_r = dry_r + wet_wide_r + crys_theta.sin() * crys_wet_r - ph_side;
 
         // M/S width on final output
         let width = self.stereo_width.next().clamp(0.0, 2.0);

@@ -266,6 +266,44 @@ pub struct Patch {
     pub note_seq_div: u8,
     #[serde(default = "default_chord_seq_div")]
     pub chord_seq_div: u8,
+
+    // Bit crusher
+    #[serde(default)]
+    pub fx_bitcrush_on: bool,
+    #[serde(default = "default_bitcrush_bits")]
+    pub fx_bitcrush_bits: f32,
+    #[serde(default = "default_bitcrush_rate")]
+    pub fx_bitcrush_rate: f32,
+    #[serde(default)]
+    pub fx_bitcrush_mix: f32,
+
+    // Tape saturation
+    #[serde(default)]
+    pub fx_tape_on: bool,
+    #[serde(default = "default_tape_drive")]
+    pub fx_tape_drive: f32,
+    #[serde(default = "default_tape_tone")]
+    pub fx_tape_tone: f32,
+    #[serde(default = "default_tape_bias")]
+    pub fx_tape_bias: f32,
+    #[serde(default)]
+    pub fx_tape_mix: f32,
+
+    // Phaser
+    #[serde(default)]
+    pub fx_phaser_on: bool,
+    #[serde(default = "default_phaser_rate")]
+    pub fx_phaser_rate: f32,
+    #[serde(default = "default_phaser_depth")]
+    pub fx_phaser_depth: f32,
+    #[serde(default = "default_phaser_feedback")]
+    pub fx_phaser_feedback: f32,
+    #[serde(default = "default_phaser_center")]
+    pub fx_phaser_center: f32,
+    #[serde(default = "default_phaser_stages")]
+    pub fx_phaser_stages: u8,
+    #[serde(default)]
+    pub fx_phaser_mix: f32,
 }
 
 fn default_filter_drive() -> f32 {
@@ -395,6 +433,36 @@ fn default_note_seq_div() -> u8 {
 fn default_chord_seq_div() -> u8 {
     4 // 1 bar
 }
+fn default_bitcrush_bits() -> f32 {
+    16.0
+}
+fn default_bitcrush_rate() -> f32 {
+    1.0
+}
+fn default_tape_drive() -> f32 {
+    0.5
+}
+fn default_tape_tone() -> f32 {
+    0.7
+}
+fn default_tape_bias() -> f32 {
+    0.2
+}
+fn default_phaser_rate() -> f32 {
+    0.5
+}
+fn default_phaser_depth() -> f32 {
+    0.7
+}
+fn default_phaser_feedback() -> f32 {
+    0.5
+}
+fn default_phaser_center() -> f32 {
+    1200.0
+}
+fn default_phaser_stages() -> u8 {
+    8
+}
 
 impl Default for Patch {
     fn default() -> Self {
@@ -516,6 +584,22 @@ impl Default for Patch {
             arp_ring_pattern: default_arp_ring_pattern(),
             note_seq_div: default_note_seq_div(),
             chord_seq_div: default_chord_seq_div(),
+            fx_bitcrush_on: false,
+            fx_bitcrush_bits: default_bitcrush_bits(),
+            fx_bitcrush_rate: default_bitcrush_rate(),
+            fx_bitcrush_mix: 0.0,
+            fx_tape_on: false,
+            fx_tape_drive: default_tape_drive(),
+            fx_tape_tone: default_tape_tone(),
+            fx_tape_bias: default_tape_bias(),
+            fx_tape_mix: 0.0,
+            fx_phaser_on: false,
+            fx_phaser_rate: default_phaser_rate(),
+            fx_phaser_depth: default_phaser_depth(),
+            fx_phaser_feedback: default_phaser_feedback(),
+            fx_phaser_center: default_phaser_center(),
+            fx_phaser_stages: default_phaser_stages(),
+            fx_phaser_mix: 0.0,
         }
     }
 }

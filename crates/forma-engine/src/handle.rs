@@ -868,6 +868,95 @@ impl SynthEngineHandle {
         self.state.fx_crystal.pitch.load(Ordering::Relaxed)
     }
 
+    // -- Bit crusher --
+
+    pub fn set_fx_bitcrush_bits(&self, v: f32) {
+        self.state.fx_bitcrush_bits.set(v.clamp(1.0, 16.0));
+    }
+    pub fn fx_bitcrush_bits(&self) -> f32 {
+        self.state.fx_bitcrush_bits.value()
+    }
+    pub fn set_fx_bitcrush_rate(&self, v: f32) {
+        self.state.fx_bitcrush_rate.set(v.clamp(1.0, 32.0));
+    }
+    pub fn fx_bitcrush_rate(&self) -> f32 {
+        self.state.fx_bitcrush_rate.value()
+    }
+    pub fn set_fx_bitcrush_mix(&self, v: f32) {
+        self.state.fx_bitcrush_mix.set(v.clamp(0.0, 1.0));
+    }
+    pub fn fx_bitcrush_mix(&self) -> f32 {
+        self.state.fx_bitcrush_mix.value()
+    }
+
+    // -- Tape saturation --
+
+    pub fn set_fx_tape_drive(&self, v: f32) {
+        self.state.fx_tape_drive.set(v.clamp(0.0, 1.0));
+    }
+    pub fn fx_tape_drive(&self) -> f32 {
+        self.state.fx_tape_drive.value()
+    }
+    pub fn set_fx_tape_tone(&self, v: f32) {
+        self.state.fx_tape_tone.set(v.clamp(0.0, 1.0));
+    }
+    pub fn fx_tape_tone(&self) -> f32 {
+        self.state.fx_tape_tone.value()
+    }
+    pub fn set_fx_tape_bias(&self, v: f32) {
+        self.state.fx_tape_bias.set(v.clamp(0.0, 1.0));
+    }
+    pub fn fx_tape_bias(&self) -> f32 {
+        self.state.fx_tape_bias.value()
+    }
+    pub fn set_fx_tape_mix(&self, v: f32) {
+        self.state.fx_tape_mix.set(v.clamp(0.0, 1.0));
+    }
+    pub fn fx_tape_mix(&self) -> f32 {
+        self.state.fx_tape_mix.value()
+    }
+
+    // -- Phaser --
+
+    pub fn set_fx_phaser_rate(&self, v: f32) {
+        self.state.fx_phaser_rate.set(v.clamp(0.05, 10.0));
+    }
+    pub fn fx_phaser_rate(&self) -> f32 {
+        self.state.fx_phaser_rate.value()
+    }
+    pub fn set_fx_phaser_depth(&self, v: f32) {
+        self.state.fx_phaser_depth.set(v.clamp(0.0, 1.0));
+    }
+    pub fn fx_phaser_depth(&self) -> f32 {
+        self.state.fx_phaser_depth.value()
+    }
+    pub fn set_fx_phaser_feedback(&self, v: f32) {
+        self.state.fx_phaser_feedback.set(v.clamp(-0.9, 0.9));
+    }
+    pub fn fx_phaser_feedback(&self) -> f32 {
+        self.state.fx_phaser_feedback.value()
+    }
+    pub fn set_fx_phaser_center(&self, v: f32) {
+        self.state.fx_phaser_center.set(v.clamp(100.0, 8000.0));
+    }
+    pub fn fx_phaser_center(&self) -> f32 {
+        self.state.fx_phaser_center.value()
+    }
+    pub fn set_fx_phaser_stages(&self, v: u8) {
+        self.state
+            .fx_phaser_stages
+            .store(v.clamp(2, 8), Ordering::Relaxed);
+    }
+    pub fn fx_phaser_stages(&self) -> u8 {
+        self.state.fx_phaser_stages.load(Ordering::Relaxed)
+    }
+    pub fn set_fx_phaser_mix(&self, v: f32) {
+        self.state.fx_phaser_mix.set(v.clamp(0.0, 1.0));
+    }
+    pub fn fx_phaser_mix(&self) -> f32 {
+        self.state.fx_phaser_mix.value()
+    }
+
     // -- Arpeggiator --
 
     pub fn set_arp_enabled(&self, on: bool) {
@@ -1606,6 +1695,29 @@ impl SynthEngineHandle {
             0.0
         });
         self.set_crystal_pitch(p.fx_crystal_pitch);
+
+        // Bit crusher
+        self.set_fx_bitcrush_bits(p.fx_bitcrush_bits);
+        self.set_fx_bitcrush_rate(p.fx_bitcrush_rate);
+        self.set_fx_bitcrush_mix(if p.fx_bitcrush_on {
+            p.fx_bitcrush_mix
+        } else {
+            0.0
+        });
+
+        // Tape saturation
+        self.set_fx_tape_drive(p.fx_tape_drive);
+        self.set_fx_tape_tone(p.fx_tape_tone);
+        self.set_fx_tape_bias(p.fx_tape_bias);
+        self.set_fx_tape_mix(if p.fx_tape_on { p.fx_tape_mix } else { 0.0 });
+
+        // Phaser
+        self.set_fx_phaser_rate(p.fx_phaser_rate);
+        self.set_fx_phaser_depth(p.fx_phaser_depth);
+        self.set_fx_phaser_feedback(p.fx_phaser_feedback);
+        self.set_fx_phaser_center(p.fx_phaser_center);
+        self.set_fx_phaser_stages(p.fx_phaser_stages);
+        self.set_fx_phaser_mix(if p.fx_phaser_on { p.fx_phaser_mix } else { 0.0 });
     }
 
     /// Read engine state into a fresh `Patch`. Metadata fields (`name`,
@@ -1779,6 +1891,25 @@ impl SynthEngineHandle {
 
             note_seq_div: 1,  // 1/8 note default; UI overrides on save
             chord_seq_div: 4, // 1 bar default; UI overrides on save
+
+            fx_bitcrush_on: self.fx_bitcrush_mix() > 0.0,
+            fx_bitcrush_bits: self.fx_bitcrush_bits(),
+            fx_bitcrush_rate: self.fx_bitcrush_rate(),
+            fx_bitcrush_mix: self.fx_bitcrush_mix(),
+
+            fx_tape_on: self.fx_tape_mix() > 0.0,
+            fx_tape_drive: self.fx_tape_drive(),
+            fx_tape_tone: self.fx_tape_tone(),
+            fx_tape_bias: self.fx_tape_bias(),
+            fx_tape_mix: self.fx_tape_mix(),
+
+            fx_phaser_on: self.fx_phaser_mix() > 0.0,
+            fx_phaser_rate: self.fx_phaser_rate(),
+            fx_phaser_depth: self.fx_phaser_depth(),
+            fx_phaser_feedback: self.fx_phaser_feedback(),
+            fx_phaser_center: self.fx_phaser_center(),
+            fx_phaser_stages: self.fx_phaser_stages(),
+            fx_phaser_mix: self.fx_phaser_mix(),
         }
     }
 }

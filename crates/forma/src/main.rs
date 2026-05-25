@@ -375,6 +375,28 @@ pub(crate) struct SynthApp {
     /// Shared WAV recorder sink — `Some` while recording, `None` otherwise.
     pub(crate) recorder_sink: Arc<Mutex<Option<recorder::Recorder>>>,
 
+    // Bit crusher
+    pub(crate) fx_bitcrush_on: bool,
+    pub(crate) fx_bitcrush_bits: f32,
+    pub(crate) fx_bitcrush_rate: f32,
+    pub(crate) fx_bitcrush_mix: f32,
+
+    // Tape saturation
+    pub(crate) fx_tape_on: bool,
+    pub(crate) fx_tape_drive: f32,
+    pub(crate) fx_tape_tone: f32,
+    pub(crate) fx_tape_bias: f32,
+    pub(crate) fx_tape_mix: f32,
+
+    // Phaser
+    pub(crate) fx_phaser_on: bool,
+    pub(crate) fx_phaser_rate: f32,
+    pub(crate) fx_phaser_depth: f32,
+    pub(crate) fx_phaser_feedback: f32,
+    pub(crate) fx_phaser_center: f32,
+    pub(crate) fx_phaser_stages: usize,
+    pub(crate) fx_phaser_mix: f32,
+
     // A/B patch comparison
     pub(crate) ab_slot_a: Option<Patch>,
     pub(crate) ab_slot_b: Option<Patch>,
@@ -623,6 +645,22 @@ impl SynthApp {
             scene_chain_active: false,
             scene_chain_elapsed_s: 0.0,
             recorder_sink,
+            fx_bitcrush_on: false,
+            fx_bitcrush_bits: 16.0,
+            fx_bitcrush_rate: 1.0,
+            fx_bitcrush_mix: 0.5,
+            fx_tape_on: false,
+            fx_tape_drive: 0.5,
+            fx_tape_tone: 0.7,
+            fx_tape_bias: 0.2,
+            fx_tape_mix: 0.5,
+            fx_phaser_on: false,
+            fx_phaser_rate: 0.5,
+            fx_phaser_depth: 0.7,
+            fx_phaser_feedback: 0.5,
+            fx_phaser_center: 1200.0,
+            fx_phaser_stages: 8,
+            fx_phaser_mix: 0.5,
             ab_slot_a: None,
             ab_slot_b: None,
             ab_active: 0,
@@ -1360,6 +1398,22 @@ impl SynthApp {
         p.fx_crystal_feedback = self.fx_crystal_feedback;
         p.fx_crystal_delay_ms = self.fx_crystal_delay_ms;
         p.fx_crystal_pitch = self.fx_crystal_pitch;
+        p.fx_bitcrush_on = self.fx_bitcrush_on;
+        p.fx_bitcrush_bits = self.fx_bitcrush_bits;
+        p.fx_bitcrush_rate = self.fx_bitcrush_rate;
+        p.fx_bitcrush_mix = self.fx_bitcrush_mix;
+        p.fx_tape_on = self.fx_tape_on;
+        p.fx_tape_drive = self.fx_tape_drive;
+        p.fx_tape_tone = self.fx_tape_tone;
+        p.fx_tape_bias = self.fx_tape_bias;
+        p.fx_tape_mix = self.fx_tape_mix;
+        p.fx_phaser_on = self.fx_phaser_on;
+        p.fx_phaser_rate = self.fx_phaser_rate;
+        p.fx_phaser_depth = self.fx_phaser_depth;
+        p.fx_phaser_feedback = self.fx_phaser_feedback;
+        p.fx_phaser_center = self.fx_phaser_center;
+        p.fx_phaser_stages = self.fx_phaser_stages as u8;
+        p.fx_phaser_mix = self.fx_phaser_mix;
         p
     }
 
@@ -1491,6 +1545,22 @@ impl SynthApp {
             self.fx_crystal_feedback = p.fx_crystal_feedback;
             self.fx_crystal_delay_ms = p.fx_crystal_delay_ms;
             self.fx_crystal_pitch = p.fx_crystal_pitch;
+            self.fx_bitcrush_on = p.fx_bitcrush_on;
+            self.fx_bitcrush_bits = p.fx_bitcrush_bits;
+            self.fx_bitcrush_rate = p.fx_bitcrush_rate;
+            self.fx_bitcrush_mix = p.fx_bitcrush_mix;
+            self.fx_tape_on = p.fx_tape_on;
+            self.fx_tape_drive = p.fx_tape_drive;
+            self.fx_tape_tone = p.fx_tape_tone;
+            self.fx_tape_bias = p.fx_tape_bias;
+            self.fx_tape_mix = p.fx_tape_mix;
+            self.fx_phaser_on = p.fx_phaser_on;
+            self.fx_phaser_rate = p.fx_phaser_rate;
+            self.fx_phaser_depth = p.fx_phaser_depth;
+            self.fx_phaser_feedback = p.fx_phaser_feedback;
+            self.fx_phaser_center = p.fx_phaser_center;
+            self.fx_phaser_stages = p.fx_phaser_stages as usize;
+            self.fx_phaser_mix = p.fx_phaser_mix;
         }
 
         // -- Push engine state through the typed handle.
@@ -1548,6 +1618,22 @@ impl SynthApp {
             core.fx_crystal_feedback = self.fx_crystal_feedback;
             core.fx_crystal_delay_ms = self.fx_crystal_delay_ms;
             core.fx_crystal_pitch = self.fx_crystal_pitch;
+            core.fx_bitcrush_on = self.fx_bitcrush_on;
+            core.fx_bitcrush_bits = self.fx_bitcrush_bits;
+            core.fx_bitcrush_rate = self.fx_bitcrush_rate;
+            core.fx_bitcrush_mix = self.fx_bitcrush_mix;
+            core.fx_tape_on = self.fx_tape_on;
+            core.fx_tape_drive = self.fx_tape_drive;
+            core.fx_tape_tone = self.fx_tape_tone;
+            core.fx_tape_bias = self.fx_tape_bias;
+            core.fx_tape_mix = self.fx_tape_mix;
+            core.fx_phaser_on = self.fx_phaser_on;
+            core.fx_phaser_rate = self.fx_phaser_rate;
+            core.fx_phaser_depth = self.fx_phaser_depth;
+            core.fx_phaser_feedback = self.fx_phaser_feedback;
+            core.fx_phaser_center = self.fx_phaser_center;
+            core.fx_phaser_stages = self.fx_phaser_stages as u8;
+            core.fx_phaser_mix = self.fx_phaser_mix;
             self.engine.apply_patch(&core);
         }
 
@@ -2460,6 +2546,27 @@ impl SynthApp {
                 self.fx_crystal_on = !on;
                 self.engine
                     .set_crystal_mix(if !on { self.fx_crystal_mix } else { 0.0 });
+            });
+
+            let on = self.fx_bitcrush_on;
+            fx_chip!(ui, "CRUSH", on, self.theme.fx_distortion, {
+                self.fx_bitcrush_on = !on;
+                self.engine
+                    .set_fx_bitcrush_mix(if !on { self.fx_bitcrush_mix } else { 0.0 });
+            });
+
+            let on = self.fx_tape_on;
+            fx_chip!(ui, "TAPE", on, self.theme.fx_overdrive, {
+                self.fx_tape_on = !on;
+                self.engine
+                    .set_fx_tape_mix(if !on { self.fx_tape_mix } else { 0.0 });
+            });
+
+            let on = self.fx_phaser_on;
+            fx_chip!(ui, "PHASE", on, self.theme.fx_chorus, {
+                self.fx_phaser_on = !on;
+                self.engine
+                    .set_fx_phaser_mix(if !on { self.fx_phaser_mix } else { 0.0 });
             });
         });
     }
