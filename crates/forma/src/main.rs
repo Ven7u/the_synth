@@ -857,6 +857,167 @@ impl SynthApp {
 }
 
 // ---------------------------------------------------------------------------
+// Patch randomizer
+// ---------------------------------------------------------------------------
+
+/// Tiny LCG for unseeded patch randomization — no external crate needed.
+struct Lcg(u64);
+
+impl Lcg {
+    fn new() -> Self {
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos() as u64)
+            .unwrap_or(12345)
+            ^ 0xDEAD_BEEF_CAFE_1337;
+        Self(seed)
+    }
+
+    /// Returns a value in [0, 1).
+    fn next_f32(&mut self) -> f32 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        ((self.0 >> 33) as f32) / (u32::MAX as f32)
+    }
+
+    /// Returns a value in [lo, hi].
+    fn range(&mut self, lo: f32, hi: f32) -> f32 {
+        lo + self.next_f32() * (hi - lo)
+    }
+
+    /// Returns true with the given probability (0–1).
+    fn chance(&mut self, p: f32) -> bool {
+        self.next_f32() < p
+    }
+
+    /// Returns a random usize in 0..n.
+    fn pick(&mut self, n: usize) -> usize {
+        (self.next_f32() * n as f32) as usize
+    }
+}
+
+/// Build a musically biased random patch. FX are left off so the core
+/// sound is always audible; the caller can enable them afterwards.
+fn random_patch() -> Patch {
+    let mut r = Lcg::new();
+    let mut p = Patch::default();
+    p.name = "Random".into();
+    p.category = "User".into();
+
+    // ── Oscillators ───────────────────────────────────────────────────────────
+    // Always enable at least 1; 2 oscs most common, 3 is rare.
+    let n_osc = if r.chance(0.15) {
+        3
+    } else if r.chance(0.55) {
+        2
+    } else {
+        1
+    };
+    for i in 0..3 {
+        p.osc_enabled[i] = i < n_osc;
+        p.osc_wave[i] = r.pick(4); // 0=sine 1=saw 2=square 3=tri
+        p.osc_octave[i] = r.pick(5) as i32 - 2; // -2..+2
+        p.osc_detune[i] = r.range(-25.0, 25.0);
+        p.osc_vol[i] = r.range(0.25, 0.75);
+        p.osc_pulse_width[i] = r.range(0.2, 0.8);
+        p.osc_pw_enabled[i] = p.osc_wave[i] == 2 && r.chance(0.5); // only for square
+        p.osc_unison_enabled[i] = r.chance(0.25);
+        p.osc_unison_count[i] = r.pick(3) + 2; // 2..4
+        p.osc_unison_spread[i] = r.range(5.0, 40.0);
+    }
+    p.noise_vol = if r.chance(0.15) {
+        r.range(0.05, 0.3)
+    } else {
+        0.0
+    };
+
+    // ── Filter ────────────────────────────────────────────────────────────────
+    p.filter_enabled = true;
+    // Bias toward mid-range — extreme values sound harsh.
+    p.filter_cutoff = r.range(200.0, 6000.0);
+    p.filter_q = r.range(0.05, 0.7);
+    p.filter_env_amount = r.range(-0.3, 1.0);
+    p.filter_drive = r.range(0.0, 0.5);
+    p.filter_key_track = if r.chance(0.4) {
+        r.range(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    // ── Filter envelope ───────────────────────────────────────────────────────
+    p.fenv_adsr[0] = r.range(0.001, 0.4); // attack
+    p.fenv_adsr[1] = r.range(0.05, 0.8); // decay
+    p.fenv_adsr[2] = r.range(0.0, 0.9); // sustain
+    p.fenv_adsr[3] = r.range(0.05, 1.0); // release
+
+    // ── Amp envelope ─────────────────────────────────────────────────────────
+    p.amp_adsr[0] = r.range(0.001, 0.3); // attack — keep it playable
+    p.amp_adsr[1] = r.range(0.05, 0.6); // decay
+    p.amp_adsr[2] = r.range(0.3, 1.0); // sustain — stay audible
+    p.amp_adsr[3] = r.range(0.05, 1.5); // release
+
+    // ── LFO 1 ────────────────────────────────────────────────────────────────
+    p.lfo_enabled = r.chance(0.6);
+    p.lfo_rate = r.range(0.1, 8.0);
+    p.lfo_depth = if p.lfo_enabled {
+        r.range(0.05, 0.5)
+    } else {
+        0.0
+    };
+    p.lfo_shape = r.pick(3); // 0=sin 1=tri 2=saw
+    p.lfo_dest = r.pick(3); // 0=pitch 1=filter 2=amp
+
+    // ── LFO 2 ────────────────────────────────────────────────────────────────
+    p.lfo2_enabled = r.chance(0.3);
+    p.lfo2_rate = r.range(0.05, 4.0);
+    p.lfo2_depth = if p.lfo2_enabled {
+        r.range(0.05, 0.4)
+    } else {
+        0.0
+    };
+    p.lfo2_shape = r.pick(3);
+    p.lfo2_dest = r.pick(3);
+
+    // ── FM / Ring mod ────────────────────────────────────────────────────────
+    p.fm_enabled = n_osc >= 2 && r.chance(0.2);
+    p.fm_depth = r.range(0.1, 1.0);
+    p.ring_enabled = n_osc >= 2 && r.chance(0.15);
+    p.ring_depth = r.range(0.2, 1.0);
+
+    // ── Global ────────────────────────────────────────────────────────────────
+    p.master_vol = 0.7;
+    p.global_vol = 0.9;
+    p.glide_time = if r.chance(0.2) {
+        r.range(0.02, 0.3)
+    } else {
+        0.0
+    };
+    p.limiter_enabled = true;
+
+    // ── Mod routing — random but conservative ────────────────────────────────
+    p.mod_wheel_dest = r.pick(3) as u8 + 1; // 1=Filter 2=LFO Depth 3=Amp
+    p.mod_wheel_depth = r.range(0.3, 0.8);
+    p.aftertouch_dest = if r.chance(0.5) {
+        r.pick(3) as u8 + 1
+    } else {
+        0
+    };
+    p.aftertouch_depth = r.range(0.2, 0.6);
+
+    // ── FX — off by default so it's always audible ───────────────────────────
+    // (Shallow reverb on 40% of patches to add space without chaos)
+    p.fx_reverb_on = r.chance(0.4);
+    p.fx_reverb_size = r.range(0.2, 0.6);
+    p.fx_reverb_damp = r.range(0.3, 0.8);
+    p.fx_reverb_mix = r.range(0.1, 0.35);
+    p.stereo_width = 1.0;
+
+    p
+}
+
+// ---------------------------------------------------------------------------
 // MIDI learn persistence helpers
 // ---------------------------------------------------------------------------
 
@@ -1841,6 +2002,26 @@ impl SynthApp {
 
                     // ── Patch ──────────────────────────────────────────────
                     ui.label(egui::RichText::new("PATCH").small().weak());
+                    if ui
+                        .button("Randomize Patch")
+                        .on_hover_text("Generate a random patch and apply it immediately.")
+                        .clicked()
+                    {
+                        let p = random_patch();
+                        self.apply_patch(p);
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Init Patch")
+                        .on_hover_text("Reset all parameters to the default Init state.")
+                        .clicked()
+                    {
+                        let mut p = Patch::default();
+                        p.name = "Init".into();
+                        self.apply_patch(p);
+                        ui.close_menu();
+                    }
+                    ui.separator();
                     if ui.button("New Patch").clicked() {
                         self.patch_name = "Init".into();
                         ui.close_menu();
