@@ -375,6 +375,12 @@ pub(crate) struct SynthApp {
     /// Shared WAV recorder sink — `Some` while recording, `None` otherwise.
     pub(crate) recorder_sink: Arc<Mutex<Option<recorder::Recorder>>>,
 
+    // A/B patch comparison
+    pub(crate) ab_slot_a: Option<Patch>,
+    pub(crate) ab_slot_b: Option<Patch>,
+    /// 0 = neither active (no compare), 1 = A active, 2 = B active.
+    pub(crate) ab_active: u8,
+
     // MIDI learn
     pub(crate) midi_bindings: std::collections::HashMap<u8, forma_control::ParamId>,
     pub(crate) midi_learn_open: bool,
@@ -617,6 +623,9 @@ impl SynthApp {
             scene_chain_active: false,
             scene_chain_elapsed_s: 0.0,
             recorder_sink,
+            ab_slot_a: None,
+            ab_slot_b: None,
+            ab_active: 0,
             midi_bindings: load_midi_bindings(),
             midi_learn_open: false,
             midi_learn_param: None,
@@ -2116,6 +2125,108 @@ impl SynthApp {
                     .clicked()
                 {
                     self.show_metronome = !self.show_metronome;
+                }
+
+                // A/B patch comparison menu
+                {
+                    let bar_label = match self.ab_active {
+                        1 => "A",
+                        2 => "B",
+                        _ => "A/B",
+                    };
+                    let bar_col = if self.ab_active > 0 {
+                        self.theme.c(&self.theme.accent)
+                    } else {
+                        self.theme.c(&self.theme.text_secondary)
+                    };
+                    ui.menu_button(
+                        egui::RichText::new(bar_label).size(11.0).color(bar_col),
+                        |ui| {
+                            ui.set_min_width(160.0);
+                            ui.label(egui::RichText::new("A/B COMPARE").small().weak());
+
+                            if ui
+                                .button("Snapshot → A")
+                                .on_hover_text("Save current patch to slot A.")
+                                .clicked()
+                            {
+                                self.ab_slot_a = Some(self.capture_patch());
+                                self.ab_active = 1;
+                                ui.close_menu();
+                            }
+                            if ui
+                                .button("Snapshot → B")
+                                .on_hover_text("Save current patch to slot B.")
+                                .clicked()
+                            {
+                                self.ab_slot_b = Some(self.capture_patch());
+                                self.ab_active = 2;
+                                ui.close_menu();
+                            }
+
+                            ui.separator();
+
+                            let a_label = if self.ab_active == 1 { "● Recall A" } else { "  Recall A" };
+                            ui.add_enabled_ui(self.ab_slot_a.is_some(), |ui| {
+                                if ui.button(a_label).clicked() {
+                                    if let Some(p) = self.ab_slot_a.clone() {
+                                        self.apply_patch(p);
+                                        self.ab_active = 1;
+                                    }
+                                    ui.close_menu();
+                                }
+                            });
+
+                            let b_label = if self.ab_active == 2 { "● Recall B" } else { "  Recall B" };
+                            ui.add_enabled_ui(self.ab_slot_b.is_some(), |ui| {
+                                if ui.button(b_label).clicked() {
+                                    if let Some(p) = self.ab_slot_b.clone() {
+                                        self.apply_patch(p);
+                                        self.ab_active = 2;
+                                    }
+                                    ui.close_menu();
+                                }
+                            });
+
+                            let both = self.ab_slot_a.is_some() && self.ab_slot_b.is_some();
+                            ui.add_enabled_ui(both, |ui| {
+                                if ui
+                                    .button("Toggle A ↔ B")
+                                    .on_hover_text("Switch between A and B instantly.")
+                                    .clicked()
+                                {
+                                    let next = if self.ab_active == 1 { 2u8 } else { 1 };
+                                    let p = if next == 1 {
+                                        self.ab_slot_a.clone()
+                                    } else {
+                                        self.ab_slot_b.clone()
+                                    };
+                                    if let Some(p) = p {
+                                        self.apply_patch(p);
+                                        self.ab_active = next;
+                                    }
+                                    ui.close_menu();
+                                }
+                            });
+
+                            ui.separator();
+
+                            if ui
+                                .button("Clear")
+                                .on_hover_text("Discard both A and B snapshots.")
+                                .clicked()
+                            {
+                                self.ab_slot_a = None;
+                                self.ab_slot_b = None;
+                                self.ab_active = 0;
+                                ui.close_menu();
+                            }
+                        },
+                    )
+                    .response
+                    .on_hover_text(
+                        "A/B Compare — snapshot two patches and switch between them while playing.",
+                    );
                 }
 
                 // MIDI learn button
