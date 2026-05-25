@@ -1,0 +1,110 @@
+{
+    "name": "Ghost Protocol",
+    "category": "Pad",
+    "synth_model": "theSynth",
+    "osc_wave": [
+        2,
+        0,
+        0
+    ],
+    "osc_octave": [
+        0,
+        -1,
+        1
+    ],
+    "osc_detune": [
+        0.0,
+        0.0,
+        5.0
+    ],
+    "osc_vol": [
+        0.4,
+        0.42,
+        0.2
+    ],
+    "osc_enabled": [
+        true,
+        true,
+        true
+    ],
+    "osc_pulse_width": [
+        0.18,
+        0.5,
+        0.5
+    ],
+    "osc_pw_enabled": [
+        true,
+        false,
+        false
+    ],
+    "osc_unison_enabled": [
+        true,
+        false,
+        false
+    ],
+    "osc_unison_count": [
+        4,
+        2,
+        2
+    ],
+    "osc_unison_spread": [
+        15.0,
+        20.0,
+        20.0
+    ],
+    "hard_sync": false,
+    "fm_enabled": false,
+    "fm_depth": 0.0,
+    "ring_enabled": false,
+    "ring_depth": 0.0,
+    "noise_vol": 0.012,
+    "lfo_enabled": true,
+    "lfo_rate": 0.09,
+    "lfo_depth": 0.22,
+    "lfo_shape": 0,
+    "lfo_dest": 1,
+    "lfo_sync": false,
+    "lfo_division": 4,
+    "lfo2_enabled": true,
+    "lfo2_rate": 0.05,
+    "lfo2_depth": 0.18,
+    "lfo2_shape": 1,
+    "lfo2_dest": 2,
+    "filter_enabled": true,
+    "filter_cutoff": 320.0,
+    "filter_q": 0.28,
+    "filter_env_amount": 0.55,
+    "fenv_adsr": [
+        7.0,
+        5.0,
+        0.45,
+        11.0
+    ],
+    "amp_adsr": [
+        8.0,
+        4.0,
+        0.6,
+        14.0
+    ],
+    "glide_time": 0.55,
+    "master_vol": 0.42,
+    "fx_chorus_on": true,
+    "fx_chorus_rate": 0.07,
+    "fx_chorus_depth": 0.015,
+    "fx_chorus_mix": 0.38,
+    "fx_reverb_on": true,
+    "fx_reverb_size": 0.97,
+    "fx_reverb_damp": 0.15,
+    "fx_reverb_mix": 0.76,
+    "fx_reverb_predelay": 0.065,
+    "stereo_spread": 0.009,
+    "stereo_width": 1.5,
+    "tags": [
+        "dark",
+        "cold",
+        "digital",
+        "long-release",
+        "lush",
+        "cinematic"
+    ]
+}

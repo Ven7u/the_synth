@@ -1,0 +1,114 @@
+{
+    "name": "Ascension",
+    "category": "Pad",
+    "synth_model": "theSynth",
+    "osc_wave": [
+        0,
+        0,
+        1
+    ],
+    "osc_octave": [
+        0,
+        1,
+        0
+    ],
+    "osc_detune": [
+        0.0,
+        3.0,
+        -2.0
+    ],
+    "osc_vol": [
+        0.55,
+        0.3,
+        0.25
+    ],
+    "osc_enabled": [
+        true,
+        true,
+        true
+    ],
+    "osc_pulse_width": [
+        0.5,
+        0.5,
+        0.5
+    ],
+    "osc_pw_enabled": [
+        false,
+        false,
+        false
+    ],
+    "osc_unison_enabled": [
+        true,
+        false,
+        false
+    ],
+    "osc_unison_count": [
+        5,
+        2,
+        2
+    ],
+    "osc_unison_spread": [
+        24.0,
+        20.0,
+        20.0
+    ],
+    "hard_sync": false,
+    "fm_enabled": false,
+    "fm_depth": 0.0,
+    "ring_enabled": false,
+    "ring_depth": 0.0,
+    "noise_vol": 0.001,
+    "lfo_enabled": true,
+    "lfo_rate": 0.2,
+    "lfo_depth": 0.1,
+    "lfo_shape": 0,
+    "lfo_dest": 1,
+    "lfo_sync": false,
+    "lfo_division": 4,
+    "lfo2_enabled": true,
+    "lfo2_rate": 0.35,
+    "lfo2_depth": 0.06,
+    "lfo2_shape": 0,
+    "lfo2_dest": 2,
+    "filter_enabled": true,
+    "filter_cutoff": 3500.0,
+    "filter_q": 0.05,
+    "filter_env_amount": 0.15,
+    "fenv_adsr": [
+        2.0,
+        1.5,
+        0.85,
+        5.0
+    ],
+    "amp_adsr": [
+        3.0,
+        1.0,
+        0.92,
+        8.0
+    ],
+    "glide_time": 0.25,
+    "master_vol": 0.44,
+    "fx_chorus_on": true,
+    "fx_chorus_rate": 0.2,
+    "fx_chorus_depth": 0.009,
+    "fx_chorus_mix": 0.22,
+    "fx_reverb_on": true,
+    "fx_reverb_size": 0.92,
+    "fx_reverb_damp": 0.15,
+    "fx_reverb_mix": 0.6,
+    "fx_reverb_predelay": 0.035,
+    "fx_shimmer_on": true,
+    "fx_shimmer_size": 0.88,
+    "fx_shimmer_damp": 0.3,
+    "fx_shimmer_amt": 0.45,
+    "fx_shimmer_width": 1.45,
+    "fx_shimmer_spread": 0.14,
+    "fx_shimmer_mix": 0.25,
+    "stereo_spread": 0.005,
+    "stereo_width": 1.45,
+    "tags": [
+        "long-release",
+        "lush",
+        "cinematic"
+    ]
+}

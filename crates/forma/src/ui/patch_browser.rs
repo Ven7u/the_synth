@@ -38,6 +38,8 @@ const TIMBRE_TAGS: &[&str] = &[
     "short-attack",
 ];
 
+const GENRE_TAGS: &[&str] = &["electronic", "synthwave", "rock", "cinematic"];
+
 // ---------------------------------------------------------------------------
 
 impl SynthApp {
@@ -224,6 +226,7 @@ impl SynthApp {
         tag_group(ui, "Inspired By │", INSPIRED_BY_TAGS);
         tag_group(ui, "Character   │", CHARACTER_TAGS);
         tag_group(ui, "Timbre      │", TIMBRE_TAGS);
+        tag_group(ui, "Genre       │", GENRE_TAGS);
 
         ui.separator();
 

@@ -1,0 +1,107 @@
+{
+    "name": "Titan Rising",
+    "category": "Pad",
+    "synth_model": "theSynth",
+    "osc_wave": [
+        1,
+        0,
+        0
+    ],
+    "osc_octave": [
+        0,
+        -1,
+        0
+    ],
+    "osc_detune": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "osc_vol": [
+        0.55,
+        0.4,
+        0.0
+    ],
+    "osc_enabled": [
+        true,
+        true,
+        false
+    ],
+    "osc_pulse_width": [
+        0.5,
+        0.5,
+        0.5
+    ],
+    "osc_pw_enabled": [
+        false,
+        false,
+        false
+    ],
+    "osc_unison_enabled": [
+        true,
+        false,
+        false
+    ],
+    "osc_unison_count": [
+        5,
+        2,
+        2
+    ],
+    "osc_unison_spread": [
+        22.0,
+        20.0,
+        20.0
+    ],
+    "hard_sync": false,
+    "fm_enabled": false,
+    "fm_depth": 0.0,
+    "ring_enabled": false,
+    "ring_depth": 0.0,
+    "noise_vol": 0.003,
+    "lfo_enabled": true,
+    "lfo_rate": 0.25,
+    "lfo_depth": 0.06,
+    "lfo_shape": 0,
+    "lfo_dest": 1,
+    "lfo_sync": false,
+    "lfo_division": 4,
+    "lfo2_enabled": true,
+    "lfo2_rate": 0.18,
+    "lfo2_depth": 0.08,
+    "lfo2_shape": 0,
+    "lfo2_dest": 2,
+    "filter_enabled": true,
+    "filter_cutoff": 900.0,
+    "filter_q": 0.08,
+    "filter_env_amount": 0.35,
+    "fenv_adsr": [
+        4.0,
+        3.0,
+        0.7,
+        8.0
+    ],
+    "amp_adsr": [
+        5.0,
+        2.0,
+        0.8,
+        12.0
+    ],
+    "glide_time": 0.35,
+    "master_vol": 0.48,
+    "fx_chorus_on": true,
+    "fx_chorus_rate": 0.12,
+    "fx_chorus_depth": 0.01,
+    "fx_chorus_mix": 0.3,
+    "fx_reverb_on": true,
+    "fx_reverb_size": 0.94,
+    "fx_reverb_damp": 0.2,
+    "fx_reverb_mix": 0.65,
+    "fx_reverb_predelay": 0.045,
+    "stereo_spread": 0.006,
+    "stereo_width": 1.3,
+    "tags": [
+        "long-release",
+        "lush",
+        "cinematic"
+    ]
+}

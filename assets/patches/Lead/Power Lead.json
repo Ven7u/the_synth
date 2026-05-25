@@ -1,0 +1,112 @@
+{
+    "name": "Power Lead",
+    "category": "Lead",
+    "synth_model": "theSynth",
+    "osc_wave": [
+        1,
+        2,
+        0
+    ],
+    "osc_octave": [
+        0,
+        0,
+        0
+    ],
+    "osc_detune": [
+        0.0,
+        4.0,
+        0.0
+    ],
+    "osc_vol": [
+        0.7,
+        0.45,
+        0.0
+    ],
+    "osc_enabled": [
+        true,
+        true,
+        false
+    ],
+    "osc_pulse_width": [
+        0.5,
+        0.5,
+        0.5
+    ],
+    "osc_pw_enabled": [
+        false,
+        false,
+        false
+    ],
+    "osc_unison_enabled": [
+        false,
+        false,
+        false
+    ],
+    "osc_unison_count": [
+        2,
+        2,
+        2
+    ],
+    "osc_unison_spread": [
+        20.0,
+        20.0,
+        20.0
+    ],
+    "hard_sync": false,
+    "fm_enabled": false,
+    "fm_depth": 0.0,
+    "ring_enabled": false,
+    "ring_depth": 0.0,
+    "noise_vol": 0.0,
+    "lfo_enabled": true,
+    "lfo_rate": 5.5,
+    "lfo_depth": 0.2,
+    "lfo_shape": 0,
+    "lfo_dest": 0,
+    "filter_enabled": true,
+    "filter_cutoff": 5000.0,
+    "filter_q": 0.2,
+    "filter_env_amount": 0.3,
+    "fenv_adsr": [
+        0.01,
+        0.2,
+        0.5,
+        0.2
+    ],
+    "amp_adsr": [
+        0.01,
+        0.08,
+        0.85,
+        0.22
+    ],
+    "glide_time": 0.05,
+    "master_vol": 0.48,
+    "fx_overdrive_on": true,
+    "fx_overdrive_drive": 5.5,
+    "fx_overdrive_mix": 0.7,
+    "fx_overdrive_tone": 0.72,
+    "fx_overdrive_asym": 0.35,
+    "fx_distortion_on": false,
+    "fx_distortion_drive": 8.0,
+    "fx_distortion_mix": 0.0,
+    "fx_distortion_tone": 0.8,
+    "fx_distortion_pre": 0.0,
+    "fx_chorus_on": false,
+    "fx_chorus_rate": 0.8,
+    "fx_chorus_depth": 0.008,
+    "fx_chorus_mix": 0.0,
+    "fx_delay_on": true,
+    "fx_delay_time": 0.25,
+    "fx_delay_feedback": 0.3,
+    "fx_delay_mix": 0.22,
+    "fx_reverb_on": true,
+    "fx_reverb_size": 0.45,
+    "fx_reverb_damp": 0.55,
+    "fx_reverb_mix": 0.25,
+    "tags": [
+        "aggressive",
+        "bright",
+        "analog",
+        "rock"
+    ]
+}

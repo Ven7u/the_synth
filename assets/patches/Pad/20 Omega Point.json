@@ -1,0 +1,114 @@
+{
+    "name": "Omega Point",
+    "category": "Pad",
+    "synth_model": "theSynth",
+    "osc_wave": [
+        0,
+        1,
+        0
+    ],
+    "osc_octave": [
+        -1,
+        0,
+        1
+    ],
+    "osc_detune": [
+        0.0,
+        5.0,
+        -5.0
+    ],
+    "osc_vol": [
+        0.42,
+        0.48,
+        0.22
+    ],
+    "osc_enabled": [
+        true,
+        true,
+        true
+    ],
+    "osc_pulse_width": [
+        0.5,
+        0.5,
+        0.5
+    ],
+    "osc_pw_enabled": [
+        false,
+        false,
+        false
+    ],
+    "osc_unison_enabled": [
+        true,
+        true,
+        true
+    ],
+    "osc_unison_count": [
+        5,
+        4,
+        3
+    ],
+    "osc_unison_spread": [
+        22.0,
+        20.0,
+        16.0
+    ],
+    "hard_sync": false,
+    "fm_enabled": true,
+    "fm_depth": 0.18,
+    "ring_enabled": false,
+    "ring_depth": 0.0,
+    "noise_vol": 0.005,
+    "lfo_enabled": true,
+    "lfo_rate": 0.06,
+    "lfo_depth": 0.22,
+    "lfo_shape": 0,
+    "lfo_dest": 1,
+    "lfo_sync": false,
+    "lfo_division": 4,
+    "lfo2_enabled": true,
+    "lfo2_rate": 0.09,
+    "lfo2_depth": 0.16,
+    "lfo2_shape": 0,
+    "lfo2_dest": 2,
+    "filter_enabled": true,
+    "filter_cutoff": 600.0,
+    "filter_q": 0.15,
+    "filter_env_amount": 0.55,
+    "fenv_adsr": [
+        8.0,
+        6.0,
+        0.52,
+        12.0
+    ],
+    "amp_adsr": [
+        9.0,
+        4.0,
+        0.65,
+        15.0
+    ],
+    "glide_time": 0.65,
+    "master_vol": 0.46,
+    "fx_chorus_on": true,
+    "fx_chorus_rate": 0.07,
+    "fx_chorus_depth": 0.016,
+    "fx_chorus_mix": 0.38,
+    "fx_reverb_on": true,
+    "fx_reverb_size": 0.99,
+    "fx_reverb_damp": 0.08,
+    "fx_reverb_mix": 0.8,
+    "fx_reverb_predelay": 0.085,
+    "fx_shimmer_on": true,
+    "fx_shimmer_size": 0.96,
+    "fx_shimmer_damp": 0.22,
+    "fx_shimmer_amt": 0.55,
+    "fx_shimmer_width": 1.75,
+    "fx_shimmer_spread": 0.24,
+    "fx_shimmer_mix": 0.42,
+    "stereo_spread": 0.011,
+    "stereo_width": 1.7,
+    "tags": [
+        "long-release",
+        "lush",
+        "cinematic"
+    ]
+}

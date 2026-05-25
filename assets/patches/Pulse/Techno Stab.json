@@ -1,0 +1,113 @@
+{
+    "name": "Techno Stab",
+    "category": "Pulse",
+    "synth_model": "theSynth",
+    "osc_wave": [
+        2,
+        1,
+        0
+    ],
+    "osc_octave": [
+        0,
+        -1,
+        0
+    ],
+    "osc_detune": [
+        0.0,
+        3.0,
+        0.0
+    ],
+    "osc_vol": [
+        0.7,
+        0.4,
+        0.0
+    ],
+    "osc_enabled": [
+        true,
+        true,
+        false
+    ],
+    "osc_pulse_width": [
+        0.5,
+        0.5,
+        0.5
+    ],
+    "osc_pw_enabled": [
+        false,
+        false,
+        false
+    ],
+    "osc_unison_enabled": [
+        false,
+        false,
+        false
+    ],
+    "osc_unison_count": [
+        2,
+        2,
+        2
+    ],
+    "osc_unison_spread": [
+        20.0,
+        20.0,
+        20.0
+    ],
+    "hard_sync": false,
+    "fm_enabled": false,
+    "fm_depth": 0.0,
+    "ring_enabled": false,
+    "ring_depth": 0.0,
+    "noise_vol": 0.0,
+    "lfo_enabled": false,
+    "lfo_rate": 2.0,
+    "lfo_depth": 0.0,
+    "lfo_shape": 0,
+    "lfo_dest": 1,
+    "filter_enabled": true,
+    "filter_cutoff": 2500.0,
+    "filter_q": 0.45,
+    "filter_env_amount": 0.8,
+    "fenv_adsr": [
+        0.001,
+        0.12,
+        0.0,
+        0.08
+    ],
+    "amp_adsr": [
+        0.001,
+        0.04,
+        0.0,
+        0.06
+    ],
+    "glide_time": 0.0,
+    "master_vol": 0.5,
+    "fx_overdrive_on": true,
+    "fx_overdrive_drive": 3.0,
+    "fx_overdrive_mix": 0.2,
+    "fx_overdrive_tone": 0.9,
+    "fx_overdrive_asym": 0.0,
+    "fx_distortion_on": false,
+    "fx_distortion_drive": 8.0,
+    "fx_distortion_mix": 0.0,
+    "fx_distortion_tone": 0.8,
+    "fx_distortion_pre": 0.0,
+    "fx_chorus_on": false,
+    "fx_chorus_rate": 0.8,
+    "fx_chorus_depth": 0.008,
+    "fx_chorus_mix": 0.0,
+    "fx_delay_on": true,
+    "fx_delay_time": 0.1875,
+    "fx_delay_feedback": 0.22,
+    "fx_delay_mix": 0.22,
+    "fx_reverb_on": true,
+    "fx_reverb_size": 0.3,
+    "fx_reverb_damp": 0.7,
+    "fx_reverb_mix": 0.18,
+    "tags": [
+        "short-attack",
+        "rhythmic",
+        "digital",
+        "aggressive",
+        "electronic"
+    ]
+}
