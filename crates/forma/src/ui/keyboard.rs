@@ -141,6 +141,7 @@ impl SynthApp {
             for &pad in &current_pads {
                 if !self.chord_kb.kb_held.contains(&pad) {
                     let (row, col) = pad;
+                    self.seq_record_chord_pad(row, col);
                     if self.kb_freeze {
                         let frozen: Vec<u8> = self.frozen_notes.drain().collect();
                         for n in frozen {
@@ -587,6 +588,7 @@ impl SynthApp {
                             }
                         } else {
                             if resp.is_pointer_button_down_on() && !is_held_mouse {
+                                self.seq_record_chord_pad(row, col);
                                 if self.kb_freeze {
                                     let frozen: Vec<u8> = self.frozen_notes.drain().collect();
                                     for n in frozen {

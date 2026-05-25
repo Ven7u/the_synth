@@ -233,6 +233,8 @@ impl PadConfig {
 pub struct NoteSeqState {
     pub steps: [bool; 24],
     pub notes: [u8; 24],
+    pub velocities: [u8; 24],
+    pub probabilities: [u8; 24],
     pub length: usize,
     pub drag_accum: [f32; 24],
 }
@@ -264,6 +266,8 @@ impl NoteSeqState {
         Self {
             steps,
             notes,
+            velocities: [100u8; 24],
+            probabilities: [100u8; 24],
             length: 8,
             drag_accum: [0.0; 24],
         }
@@ -276,7 +280,11 @@ impl NoteSeqState {
 
 pub struct ChordSeqState {
     pub steps: [bool; 24],
-    pub degrees: [usize; 24], // 0–6 diatonic degree per step
+    pub degrees: [usize; 24],         // 0–6 diatonic degree per step
+    pub chord_types: [ChordType; 24], // per-step chord voicing
+    pub octave_offsets: [i32; 24],    // per-step octave shift (−2 to +2)
+    pub velocities: [u8; 24],
+    pub probabilities: [u8; 24],
     pub length: usize,
     pub drag_accum: [f32; 24],
     pub root: u8, // 0=C … 11=B
@@ -300,6 +308,10 @@ impl ChordSeqState {
                 a
             },
             degrees,
+            chord_types: [ChordType::Triad; 24],
+            octave_offsets: [0i32; 24],
+            velocities: [100u8; 24],
+            probabilities: [100u8; 24],
             length: 8,
             drag_accum: [0.0; 24],
             root: 0, // C
@@ -308,10 +320,35 @@ impl ChordSeqState {
         }
     }
 
-    /// Notes for step i.
-    pub fn step_notes(&self, i: usize) -> [u8; 3] {
-        chord_notes(self.root, self.scale, self.degrees[i], self.octave)
+    /// Notes for step i, using per-step chord type and octave offset.
+    pub fn step_notes(&self, i: usize) -> Vec<u8> {
+        chord_notes_typed(
+            self.root,
+            self.scale,
+            self.degrees[i],
+            self.octave + self.octave_offsets[i],
+            self.chord_types[i],
+        )
     }
+}
+
+/// Map a MIDI note to the closest scale degree (0–6) within the given root + scale.
+pub fn note_to_scale_degree(midi: u8, root: u8, scale: ScaleType) -> usize {
+    let intervals = scale_intervals(scale);
+    let note_class = (midi % 12) as i32;
+    let root_class = (root % 12) as i32;
+    let mut best = 0;
+    let mut best_dist = 12i32;
+    for (deg, &iv) in intervals.iter().enumerate() {
+        let sc = (root_class + iv as i32) % 12;
+        let d = (note_class - sc).abs();
+        let d = d.min(12 - d);
+        if d < best_dist {
+            best_dist = d;
+            best = deg;
+        }
+    }
+    best
 }
 
 // ---------------------------------------------------------------------------
@@ -468,6 +505,14 @@ pub struct SequencerHandle {
     pub note_div: Arc<AtomicU8>,
     /// Clock division index for ChordSeq (index into SeqClockDiv::LABELS). Default: 4 (1 bar).
     pub chord_div: Arc<AtomicU8>,
+    /// Step-entry / live-overdub recording active.
+    pub recording: Arc<AtomicBool>,
+    /// Step cursor used during step-entry recording (sequencer stopped).
+    pub rec_step: Arc<AtomicUsize>,
+    /// Timing humanization amount 0–100. Each step fires up to ±(humanize% × step_dur/2) ms off-grid.
+    pub humanize: Arc<AtomicU8>,
+    /// Gate length 1–100 (% of step duration notes are held). 100 = hold until next step.
+    pub gate: Arc<AtomicU8>,
 }
 
 impl SequencerHandle {
@@ -484,8 +529,27 @@ impl SequencerHandle {
             walker_restart: Arc::new(AtomicBool::new(false)),
             note_div: Arc::new(AtomicU8::new(1)),
             chord_div: Arc::new(AtomicU8::new(4)),
+            recording: Arc::new(AtomicBool::new(false)),
+            rec_step: Arc::new(AtomicUsize::new(0)),
+            humanize: Arc::new(AtomicU8::new(0)),
+            gate: Arc::new(AtomicU8::new(90)),
         }
     }
+}
+
+/// Euclidean rhythm: distribute `hits` onsets evenly across `steps`, rotated by `offset`.
+/// Uses Bresenham integer distribution (equivalent to Bjorklund for most hit counts).
+pub fn bjorklund(hits: usize, steps: usize, offset: usize) -> Vec<bool> {
+    let mut pattern = vec![false; steps];
+    if steps == 0 || hits == 0 {
+        return pattern;
+    }
+    let hits = hits.min(steps);
+    for k in 0..hits {
+        let pos = (k * steps / hits + offset) % steps;
+        pattern[pos] = true;
+    }
+    pattern
 }
 
 /// Spawn the sequencer on a dedicated thread.
@@ -506,6 +570,8 @@ pub fn spawn_sequencer(
             let mut was_playing = false;
             let mut first_tick = true;
             let mut next_tick = Instant::now();
+            // Cheap LCG for per-step probability rolls.
+            let mut lcg: u32 = 0xdeadbeef;
 
             loop {
                 let playing = handle.playing.load(Ordering::Relaxed);
@@ -528,14 +594,42 @@ pub fn spawn_sequencer(
                     was_playing = true;
                 }
 
-                // Capped sleep: wake every 50 ms so stopping is responsive even with
-                // very long step durations (e.g. 64 bars = ~128 s at 120 BPM).
+                let bpm = handle.bpm.load(Ordering::Relaxed).max(1);
+                let mode_now = SeqMode::from_u8(handle.mode.load(Ordering::Relaxed));
+                let div_idx = match mode_now {
+                    SeqMode::NoteSeq => handle.note_div.load(Ordering::Relaxed),
+                    SeqMode::ChordSeq => handle.chord_div.load(Ordering::Relaxed),
+                    SeqMode::ChordKb => 1,
+                };
+                let step_ms = SeqClockDiv::step_dur_ms(div_idx, bpm).max(1);
+                let step_dur = Duration::from_millis(step_ms);
+
+                // Humanization: compute a random ±offset, capped at 45% of step duration.
+                let humanize = handle.humanize.load(Ordering::Relaxed) as i64;
+                let fire_tick = if humanize > 0 {
+                    lcg = lcg.wrapping_mul(1664525).wrapping_add(1013904223);
+                    // Map LCG to signed [-1, +1] range, then scale.
+                    let r = ((lcg >> 16) as i16) as i64; // -32768..32767
+                    let max_offset_ms = step_ms as i64 * humanize * 45 / (100 * 100);
+                    let offset_ms = r * max_offset_ms / 32768;
+                    if offset_ms >= 0 {
+                        next_tick + Duration::from_millis(offset_ms as u64)
+                    } else {
+                        next_tick
+                            .checked_sub(Duration::from_millis((-offset_ms) as u64))
+                            .unwrap_or(next_tick)
+                    }
+                } else {
+                    next_tick
+                };
+
+                // Capped sleep to fire_tick so stopping is always responsive.
                 loop {
                     let now = Instant::now();
-                    if now >= next_tick {
+                    if now >= fire_tick {
                         break;
                     }
-                    let remaining = next_tick - now;
+                    let remaining = fire_tick - now;
                     std::thread::sleep(remaining.min(Duration::from_millis(50)));
                     if !handle.playing.load(Ordering::Relaxed) {
                         break;
@@ -547,15 +641,6 @@ pub fn spawn_sequencer(
                     continue;
                 }
 
-                let bpm = handle.bpm.load(Ordering::Relaxed).max(1);
-                let mode_now = SeqMode::from_u8(handle.mode.load(Ordering::Relaxed));
-                let div_idx = match mode_now {
-                    SeqMode::NoteSeq => handle.note_div.load(Ordering::Relaxed),
-                    SeqMode::ChordSeq => handle.chord_div.load(Ordering::Relaxed),
-                    SeqMode::ChordKb => 1,
-                };
-                let step_ms = SeqClockDiv::step_dur_ms(div_idx, bpm).max(1);
-                let step_dur = Duration::from_millis(step_ms);
                 next_tick += step_dur;
 
                 // NoteOff previous notes.
@@ -591,14 +676,25 @@ pub fn spawn_sequencer(
                     }
                 }
 
-                // Collect notes for this step.
-                let notes_to_play: Vec<u8> = match mode {
+                // Roll probability for this step.
+                lcg = lcg.wrapping_mul(1664525).wrapping_add(1013904223);
+                let rand_pct = (lcg >> 25) as u8; // 0–127 mapped to 0–100 below
+
+                // Collect notes (note, velocity) for this step.
+                let notes_to_play: Vec<(u8, u8)> = match mode {
                     SeqMode::NoteSeq => handle
                         .note_seq
                         .lock()
                         .map(|ns| {
                             if ns.steps[current] {
-                                vec![ns.notes[current]]
+                                let prob = ns.probabilities[current];
+                                let passes =
+                                    prob >= 100 || (rand_pct as u32 * 100 / 127 < prob as u32);
+                                if passes {
+                                    vec![(ns.notes[current], ns.velocities[current])]
+                                } else {
+                                    vec![]
+                                }
                             } else {
                                 vec![]
                             }
@@ -609,7 +705,18 @@ pub fn spawn_sequencer(
                         .lock()
                         .map(|cs| {
                             if cs.steps[current] {
-                                cs.step_notes(current).to_vec()
+                                let prob = cs.probabilities[current];
+                                let passes =
+                                    prob >= 100 || (rand_pct as u32 * 100 / 127 < prob as u32);
+                                if passes {
+                                    let vel = cs.velocities[current];
+                                    cs.step_notes(current)
+                                        .into_iter()
+                                        .map(|n| (n, vel))
+                                        .collect()
+                                } else {
+                                    vec![]
+                                }
                             } else {
                                 vec![]
                             }
@@ -618,13 +725,38 @@ pub fn spawn_sequencer(
                     SeqMode::ChordKb => vec![],
                 };
 
-                // Send NoteOns. The audio thread's VoiceAllocator guarantees a
-                // clean attack even when NoteOff + NoteOn for the same pitch
-                // arrive in the same buffer, so no inter-event delay is needed.
-                // `engine.note_on` also writes the latency-measurement timestamp.
-                for m in notes_to_play {
-                    engine.note_on(m, 100);
-                    prev_notes.push(m);
+                // Send NoteOns. Record the actual fire timestamp AFTER sending so
+                // gate timing is relative to when notes truly started, not the
+                // scheduled fire_tick (which may already be slightly in the past).
+                let mut this_step_notes: Vec<u8> = Vec::new();
+                for (m, vel) in notes_to_play {
+                    engine.note_on(m, vel);
+                    this_step_notes.push(m);
+                }
+                let note_on_time = Instant::now();
+
+                // Gate: if gate < 100%, fire note_off early inside the step,
+                // then let the outer sleep carry us to the next step naturally.
+                // Minimum 15 ms so very short gates still produce an audible transient
+                // even at large audio buffer sizes (~11 ms at 44100/512).
+                let gate = handle.gate.load(Ordering::Relaxed).max(1) as u64;
+                if gate < 100 && !this_step_notes.is_empty() {
+                    let gate_ms = (step_ms * gate / 100).max(15);
+                    let gate_off = note_on_time + Duration::from_millis(gate_ms);
+                    loop {
+                        let now = Instant::now();
+                        if now >= gate_off {
+                            break;
+                        }
+                        std::thread::sleep((gate_off - now).min(Duration::from_millis(10)));
+                    }
+                    for m in this_step_notes.drain(..) {
+                        engine.note_off(m);
+                    }
+                    // prev_notes stays empty — notes already silenced.
+                } else {
+                    // Gate 100% (or rest): carry notes forward, turn off at next step.
+                    prev_notes = this_step_notes;
                 }
             }
         })

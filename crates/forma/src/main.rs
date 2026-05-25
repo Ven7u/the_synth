@@ -257,6 +257,10 @@ pub(crate) struct SynthApp {
 
     /// When bar-quantize is on, Play defers start until the next bar boundary.
     pub(crate) seq_pending_start: bool,
+    /// Euclidean generator popup state.
+    pub(crate) seq_euclid_open: bool,
+    pub(crate) seq_euclid_hits: usize,
+    pub(crate) seq_euclid_offset: usize,
     /// When bar-quantize is on, Arp enable/RST defers restart until the next bar boundary.
     pub(crate) arp_pending_start: bool,
 
@@ -552,6 +556,9 @@ impl SynthApp {
             chord_seq_div: 4, // 1 bar
             seq_pending_start: false,
             arp_pending_start: false,
+            seq_euclid_open: false,
+            seq_euclid_hits: 4,
+            seq_euclid_offset: 0,
             seq,
             track_seq,
             track_arp_sync: [true; TRACK_COUNT],
@@ -776,6 +783,7 @@ impl SynthApp {
     /// Push a NoteOn from the on-screen keyboard — always routes to the focused
     /// track only (tracks are independent synths; the piano controls the one you see).
     pub(crate) fn push_note_on(&mut self, midi: u8) {
+        self.seq_record_note(midi);
         self.engine.note_on(midi, self.piano_velocity);
     }
 
@@ -784,6 +792,7 @@ impl SynthApp {
     /// path that fans out, and only when a track's channel/range matches.
     /// `channel`: 0-based MIDI channel (0–15).
     pub(crate) fn route_note_on(&mut self, midi: u8, channel: u8) {
+        self.seq_record_note(midi);
         if self.app_mode == crate::ui::layout::AppMode::Live {
             for t in 0..TRACK_COUNT {
                 let ch_ok = self.track_midi_ch[t] == 0 || self.track_midi_ch[t] == channel + 1;
@@ -795,6 +804,139 @@ impl SynthApp {
         } else {
             self.engine.note_on(midi, self.piano_velocity);
         }
+    }
+
+    /// Intercept a note for sequencer recording (step-entry or live overdub).
+    /// NoteSeq: writes the MIDI note directly. ChordSeq: maps to nearest scale degree.
+    fn seq_record_note(&mut self, midi: u8) {
+        use sequencer::{note_to_scale_degree, SeqMode};
+        if !self.seq.recording.load(Ordering::Relaxed) {
+            return;
+        }
+        let playing = self.seq.playing.load(Ordering::Relaxed);
+        match SeqMode::from_u8(self.seq.mode.load(Ordering::Relaxed)) {
+            SeqMode::NoteSeq => {
+                if playing {
+                    let cur = self.seq.current_step.load(Ordering::Relaxed);
+                    let mut ns = self.seq.note_seq.lock().unwrap();
+                    ns.notes[cur] = midi;
+                    ns.steps[cur] = true;
+                } else {
+                    let len = self.seq.note_seq.lock().unwrap().length;
+                    let rec = self.seq.rec_step.load(Ordering::Relaxed);
+                    if rec < len {
+                        {
+                            let mut ns = self.seq.note_seq.lock().unwrap();
+                            ns.notes[rec] = midi;
+                            ns.steps[rec] = true;
+                        }
+                        let next = (rec + 1) % len;
+                        self.seq.rec_step.store(next, Ordering::Relaxed);
+                        if next == 0 {
+                            self.seq.recording.store(false, Ordering::Relaxed);
+                        }
+                    }
+                }
+            }
+            // ChordSeq recording is driven by chord-keyboard pad presses, not piano keys.
+            SeqMode::ChordSeq | SeqMode::ChordKb => {}
+        }
+    }
+
+    /// Advance rec_step by one (insert a rest) during step-entry recording.
+    pub(crate) fn seq_record_rest(&mut self) {
+        use sequencer::SeqMode;
+        if !self.seq.recording.load(Ordering::Relaxed) {
+            return;
+        }
+        if self.seq.playing.load(Ordering::Relaxed) {
+            return;
+        }
+        match SeqMode::from_u8(self.seq.mode.load(Ordering::Relaxed)) {
+            SeqMode::NoteSeq => {
+                let len = self.seq.note_seq.lock().unwrap().length;
+                let rec = self.seq.rec_step.load(Ordering::Relaxed);
+                if rec < len {
+                    self.seq.note_seq.lock().unwrap().steps[rec] = false;
+                    let next = (rec + 1) % len;
+                    self.seq.rec_step.store(next, Ordering::Relaxed);
+                    if next == 0 {
+                        self.seq.recording.store(false, Ordering::Relaxed);
+                    }
+                }
+            }
+            SeqMode::ChordSeq => {
+                let len = self.seq.chord_seq.lock().unwrap().length;
+                let rec = self.seq.rec_step.load(Ordering::Relaxed);
+                if rec < len {
+                    self.seq.chord_seq.lock().unwrap().steps[rec] = false;
+                    let next = (rec + 1) % len;
+                    self.seq.rec_step.store(next, Ordering::Relaxed);
+                    if next == 0 {
+                        self.seq.recording.store(false, Ordering::Relaxed);
+                    }
+                }
+            }
+            SeqMode::ChordKb => {}
+        }
+    }
+
+    /// Record a chord keyboard pad press into the chord sequencer.
+    /// `col` = scale degree (0–6), `row` = pad row (for chord type lookup).
+    /// Called from both mouse and keyboard pad-press sites in keyboard.rs.
+    pub(crate) fn seq_record_chord_pad(&mut self, row: usize, col: usize) {
+        use sequencer::SeqMode;
+        if !self.seq.recording.load(Ordering::Relaxed) {
+            return;
+        }
+        if SeqMode::from_u8(self.seq.mode.load(Ordering::Relaxed)) != SeqMode::ChordSeq {
+            return;
+        }
+        let chord_type = self.chord_kb.pads[row][col].chord_type;
+        let degree = col; // chord keyboard column = scale degree I–VII
+        let playing = self.seq.playing.load(Ordering::Relaxed);
+        if playing {
+            let cur = self.seq.current_step.load(Ordering::Relaxed);
+            let mut cs = self.seq.chord_seq.lock().unwrap();
+            cs.degrees[cur] = degree;
+            cs.chord_types[cur] = chord_type;
+            cs.steps[cur] = true;
+        } else {
+            let len = self.seq.chord_seq.lock().unwrap().length;
+            let rec = self.seq.rec_step.load(Ordering::Relaxed);
+            if rec < len {
+                {
+                    let mut cs = self.seq.chord_seq.lock().unwrap();
+                    cs.degrees[rec] = degree;
+                    cs.chord_types[rec] = chord_type;
+                    cs.steps[rec] = true;
+                }
+                let next = (rec + 1) % len;
+                self.seq.rec_step.store(next, Ordering::Relaxed);
+                if next == 0 {
+                    self.seq.recording.store(false, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+
+    /// Step back one step during step-entry recording.
+    pub(crate) fn seq_record_back(&mut self) {
+        use sequencer::SeqMode;
+        if !self.seq.recording.load(Ordering::Relaxed) {
+            return;
+        }
+        if self.seq.playing.load(Ordering::Relaxed) {
+            return;
+        }
+        let len = match SeqMode::from_u8(self.seq.mode.load(Ordering::Relaxed)) {
+            SeqMode::NoteSeq => self.seq.note_seq.lock().unwrap().length,
+            SeqMode::ChordSeq => self.seq.chord_seq.lock().unwrap().length,
+            SeqMode::ChordKb => return,
+        };
+        let rec = self.seq.rec_step.load(Ordering::Relaxed);
+        let prev = if rec == 0 { len - 1 } else { rec - 1 };
+        self.seq.rec_step.store(prev, Ordering::Relaxed);
     }
 
     /// Push a NoteOff from the on-screen keyboard — focused track only.
