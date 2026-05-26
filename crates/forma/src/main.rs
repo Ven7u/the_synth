@@ -369,6 +369,9 @@ pub(crate) struct SynthApp {
     // Drum machine — UI state + audio engine atomics
     pub(crate) drums: DrumMachineState,
     pub(crate) drum_engine: std::sync::Arc<DrumEngineAtomics>,
+    pub(crate) drum_kit_library: Vec<ui::drum_machine_ui::DrumKit>,
+    pub(crate) drum_kit_name: String,
+    pub(crate) show_kit_browser: bool,
 
     // Mixer panel visibility (LIVE mode)
     pub(crate) show_mixer: bool,
@@ -668,6 +671,9 @@ impl SynthApp {
             track_patches,
             drums: DrumMachineState::default(),
             drum_engine,
+            drum_kit_library: ui::drum_machine_ui::factory_kits(),
+            drum_kit_name: "My Kit".into(),
+            show_kit_browser: false,
             show_mixer: false,
             scene_library: scene::load_scenes(),
             scene_name: "Scene 1".into(),
@@ -986,13 +992,25 @@ impl SynthApp {
         for ch in 0..audio::DRUM_CHANNELS {
             let mut pattern: u16 = 0;
             for step in 0..16 {
-                if d.steps[ch][step] {
+                if d.patterns[d.active_pattern][ch][step] {
                     pattern |= 1 << step;
                 }
             }
             e.step_patterns[ch].store(pattern, std::sync::atomic::Ordering::Relaxed);
-            e.channel_muted[ch].store(d.muted[ch], std::sync::atomic::Ordering::Relaxed);
+            let any_solo = d.soloed.iter().any(|&s| s);
+            let effectively_muted = d.muted[ch] || (any_solo && !d.soloed[ch]);
+            e.channel_muted[ch].store(effectively_muted, std::sync::atomic::Ordering::Relaxed);
             e.set_channel_volume(ch, d.channel_volume[ch]);
+            e.set_base_freq(ch, d.base_freq[ch]);
+            e.set_pitch_range(ch, d.pitch_range[ch]);
+            e.set_amp_decay_s(ch, d.amp_decay[ch]);
+            e.set_noise_mix(ch, d.noise_mix[ch]);
+            for step in 0..audio::DRUM_STEP_COUNT {
+                e.step_vel[ch][step].store(
+                    d.step_vel[d.active_pattern][ch][step],
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            }
         }
         self.drums.current_step = e.current_step.load(std::sync::atomic::Ordering::Relaxed);
     }
@@ -1397,6 +1415,7 @@ impl eframe::App for SynthApp {
 
         // Floating windows — must be shown before panels.
         self.ui_patch_browser(ctx);
+        self.ui_kit_browser(ctx);
         self.ui_metronome_window(ctx);
         self.ui_scope_fullscreen(ctx);
         self.ui_scene_browser(ctx);
@@ -1430,7 +1449,6 @@ impl eframe::App for SynthApp {
                 AppMode::Studio => {
                     self.ui_synth_dock(ui);
                 }
-                #[cfg(feature = "live_rig")]
                 AppMode::DrumMachine => {
                     self.ui_drum_machine(ui);
                 }
@@ -1439,7 +1457,7 @@ impl eframe::App for SynthApp {
                     self.ui_live_view(ui);
                 }
                 #[cfg(not(feature = "live_rig"))]
-                _ => {
+                AppMode::Live => {
                     self.ui_synth_dock(ui);
                 }
             });
@@ -2048,8 +2066,14 @@ impl SynthApp {
                 (AppMode::Live, "LIVE", "Rig performance view."),
             ];
             #[cfg(not(feature = "live_rig"))]
-            let mode_entries: &[(AppMode, &str, &str)] =
-                &[(AppMode::Studio, "STUDIO", "Single-synth deep editing.")];
+            let mode_entries: &[(AppMode, &str, &str)] = &[
+                (AppMode::Studio, "STUDIO", "Single-synth deep editing."),
+                (
+                    AppMode::DrumMachine,
+                    "DRUMS",
+                    "Drum machine — step grid + voice editor.",
+                ),
+            ];
             for (mode, label, hover) in mode_entries.iter().copied() {
                 let active = self.app_mode == mode;
                 let col = if active {

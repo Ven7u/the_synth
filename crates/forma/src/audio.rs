@@ -25,6 +25,7 @@ pub use forma_engine::audio::{AudioState, VOICE_COUNT};
 
 pub const TRACK_COUNT: usize = 4;
 pub const DRUM_CHANNELS: usize = 8;
+pub const DRUM_STEP_COUNT: usize = 16;
 
 type RecorderSink = Arc<Mutex<Option<Recorder>>>;
 
@@ -95,6 +96,13 @@ pub struct DrumEngineAtomics {
     pub current_step: AtomicUsize,                  // written by audio, read by UI
     /// UI sets true; audio thread resets step phase to bar 1 on next sample and clears.
     pub phase_reset: AtomicBool,
+    // Per-step velocity (0–127) for the active pattern
+    pub step_vel: [[std::sync::atomic::AtomicU8; DRUM_STEP_COUNT]; DRUM_CHANNELS],
+    // Per-channel voice synthesis params (f32 bits)
+    pub base_freq: [AtomicU32; DRUM_CHANNELS],   // Hz
+    pub pitch_range: [AtomicU32; DRUM_CHANNELS], // Hz of pitch sweep
+    pub amp_decay_s: [AtomicU32; DRUM_CHANNELS], // seconds
+    pub noise_mix: [AtomicU32; DRUM_CHANNELS],   // 0.0–1.0
     // Drum bus mixer
     pub volume: AtomicU32, // f32 bits
     pub pan: AtomicU32,    // f32 bits, -1..+1
@@ -114,6 +122,13 @@ impl DrumEngineAtomics {
             channel_volume: std::array::from_fn(|_| AtomicU32::new(0.8f32.to_bits())),
             current_step: AtomicUsize::new(0),
             phase_reset: AtomicBool::new(false),
+            step_vel: std::array::from_fn(|_| {
+                std::array::from_fn(|_| std::sync::atomic::AtomicU8::new(100))
+            }),
+            base_freq: std::array::from_fn(|i| AtomicU32::new(DRUM_BASE_FREQ[i].to_bits())),
+            pitch_range: std::array::from_fn(|i| AtomicU32::new(DRUM_PITCH_RANGE[i].to_bits())),
+            amp_decay_s: std::array::from_fn(|i| AtomicU32::new(DRUM_AMP_DECAY_S[i].to_bits())),
+            noise_mix: std::array::from_fn(|i| AtomicU32::new(DRUM_DEFAULT_NOISE_MIX[i].to_bits())),
             volume: AtomicU32::new(0.8f32.to_bits()),
             pan: AtomicU32::new(0.0f32.to_bits()),
             muted: AtomicBool::new(false),
@@ -156,6 +171,30 @@ impl DrumEngineAtomics {
     }
     pub fn set_channel_volume(&self, ch: usize, v: f32) {
         self.channel_volume[ch].store(v.to_bits(), Ordering::Relaxed);
+    }
+    pub fn base_freq(&self, ch: usize) -> f32 {
+        f32::from_bits(self.base_freq[ch].load(Ordering::Relaxed))
+    }
+    pub fn pitch_range(&self, ch: usize) -> f32 {
+        f32::from_bits(self.pitch_range[ch].load(Ordering::Relaxed))
+    }
+    pub fn amp_decay_s(&self, ch: usize) -> f32 {
+        f32::from_bits(self.amp_decay_s[ch].load(Ordering::Relaxed))
+    }
+    pub fn noise_mix(&self, ch: usize) -> f32 {
+        f32::from_bits(self.noise_mix[ch].load(Ordering::Relaxed))
+    }
+    pub fn set_base_freq(&self, ch: usize, v: f32) {
+        self.base_freq[ch].store(v.to_bits(), Ordering::Relaxed);
+    }
+    pub fn set_pitch_range(&self, ch: usize, v: f32) {
+        self.pitch_range[ch].store(v.to_bits(), Ordering::Relaxed);
+    }
+    pub fn set_amp_decay_s(&self, ch: usize, v: f32) {
+        self.amp_decay_s[ch].store(v.to_bits(), Ordering::Relaxed);
+    }
+    pub fn set_noise_mix(&self, ch: usize, v: f32) {
+        self.noise_mix[ch].store(v.to_bits(), Ordering::Relaxed);
     }
 }
 
@@ -654,6 +693,8 @@ const DRUM_AMP_DECAY_S: [f32; DRUM_CHANNELS] = [0.25, 0.12, 0.045, 0.09, 0.20, 0
 const DRUM_PITCH_DECAY_S: [f32; DRUM_CHANNELS] = [0.08, 0.0, 0.0, 0.0, 0.12, 0.14, 0.03, 0.0];
 const DRUM_BASE_FREQ: [f32; DRUM_CHANNELS] = [55.0, 180.0, 0.0, 0.0, 120.0, 75.0, 350.0, 0.0];
 const DRUM_PITCH_RANGE: [f32; DRUM_CHANNELS] = [150.0, 0.0, 0.0, 0.0, 80.0, 60.0, 200.0, 0.0];
+// Noise blend per channel: 0.0 = pure sine tone, 1.0 = pure noise
+pub const DRUM_DEFAULT_NOISE_MIX: [f32; DRUM_CHANNELS] = [0.0, 0.6, 1.0, 1.0, 0.0, 0.0, 0.5, 1.0];
 
 struct DrumVoice {
     phase: f32,
@@ -678,6 +719,11 @@ impl DrumVoice {
 
     fn trigger(&mut self) {
         self.env = 1.0;
+        self.pitch_env = 1.0;
+    }
+
+    fn trigger_vel(&mut self, vel: f32) {
+        self.env = vel.clamp(0.0, 1.0);
         self.pitch_env = 1.0;
     }
 
@@ -706,6 +752,9 @@ struct DrumProcessor {
     patterns: [u16; DRUM_CHANNELS],
     ch_muted: [bool; DRUM_CHANNELS],
     ch_vol: [f32; DRUM_CHANNELS],
+    ch_base_freq: [f32; DRUM_CHANNELS],
+    ch_pitch_range: [f32; DRUM_CHANNELS],
+    ch_noise_mix: [f32; DRUM_CHANNELS],
     enabled: bool,
 }
 
@@ -745,6 +794,9 @@ impl DrumProcessor {
             patterns: [0u16; DRUM_CHANNELS],
             ch_muted: [false; DRUM_CHANNELS],
             ch_vol: [0.8; DRUM_CHANNELS],
+            ch_base_freq: DRUM_BASE_FREQ,
+            ch_pitch_range: DRUM_PITCH_RANGE,
+            ch_noise_mix: DRUM_DEFAULT_NOISE_MIX,
             enabled: false,
         }
     }
@@ -762,6 +814,12 @@ impl DrumProcessor {
             self.patterns[ch] = self.atomics.step_patterns[ch].load(Ordering::Relaxed);
             self.ch_muted[ch] = self.atomics.channel_muted[ch].load(Ordering::Relaxed);
             self.ch_vol[ch] = self.atomics.channel_volume(ch);
+            self.ch_base_freq[ch] = self.atomics.base_freq(ch);
+            self.ch_pitch_range[ch] = self.atomics.pitch_range(ch);
+            self.ch_noise_mix[ch] = self.atomics.noise_mix(ch);
+            // Recompute amplitude decay coefficient from the UI-controlled decay time.
+            let amp_d = self.atomics.amp_decay_s(ch).max(0.001);
+            self.amp_coeff[ch] = (-1.0 / (amp_d * self.sr)).exp();
         }
     }
 
@@ -781,7 +839,10 @@ impl DrumProcessor {
                 .store(self.step_idx, Ordering::Relaxed);
             for ch in 0..DRUM_CHANNELS {
                 if !self.ch_muted[ch] && (self.patterns[ch] >> self.step_idx) & 1 != 0 {
-                    self.voices[ch].trigger();
+                    let vel = self.atomics.step_vel[ch][self.step_idx].load(Ordering::Relaxed)
+                        as f32
+                        / 127.0;
+                    self.voices[ch].trigger_vel(vel);
                 }
             }
         }
@@ -796,29 +857,26 @@ impl DrumProcessor {
             if self.pitch_coeff[ch] > 0.0 {
                 v.pitch_env *= self.pitch_coeff[ch];
             }
-            let freq = DRUM_BASE_FREQ[ch] + DRUM_PITCH_RANGE[ch] * v.pitch_env;
+            let freq = self.ch_base_freq[ch] + self.ch_pitch_range[ch] * v.pitch_env;
             if freq > 1.0 {
                 v.phase += freq / self.sr;
                 if v.phase >= 1.0 {
                     v.phase -= 1.0;
                 }
             }
-            let noise = v.next_noise();
-            let sample: f32 = match ch {
-                0 => (v.phase * std::f32::consts::TAU).sin() * v.env,
-                1 => ((v.phase * std::f32::consts::TAU).sin() * 0.4 + noise * 0.6) * v.env,
-                2 => {
-                    // HAT: 1-pole HP filtered noise
-                    let hp = noise - v.hp_x1 + self.hp_coeff * v.hp_y1;
-                    v.hp_x1 = noise;
-                    v.hp_y1 = hp;
-                    hp * v.env
-                }
-                3 | 7 => noise * v.env,
-                4 | 5 => (v.phase * std::f32::consts::TAU).sin() * v.env,
-                6 => ((v.phase * std::f32::consts::TAU).sin() * 0.5 + noise * 0.5) * v.env,
-                _ => 0.0,
+            let noise_raw = v.next_noise();
+            // HAT channel runs noise through a 1-pole HP filter for a crisp tone.
+            let noise = if ch == 2 {
+                let hp = noise_raw - v.hp_x1 + self.hp_coeff * v.hp_y1;
+                v.hp_x1 = noise_raw;
+                v.hp_y1 = hp;
+                hp
+            } else {
+                noise_raw
             };
+            let sine = (v.phase * std::f32::consts::TAU).sin();
+            let nm = self.ch_noise_mix[ch];
+            let sample = (sine * (1.0 - nm) + noise * nm) * v.env;
             out += sample * self.ch_vol[ch];
         }
         // Soft-clip the summed drum bus
