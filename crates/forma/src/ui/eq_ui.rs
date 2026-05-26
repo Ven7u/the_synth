@@ -130,7 +130,7 @@ impl SynthApp {
         ui.add_space(2.0);
 
         // ── Canvas ───────────────────────────────────────────────────────────
-        let canvas_h = (ui.available_width() * 0.28).clamp(90.0, 160.0);
+        let canvas_h = (ui.available_height() - 60.0).max(120.0);
         let canvas_size = Vec2::new(ui.available_width(), canvas_h);
         let (rect, response) = ui.allocate_exact_size(canvas_size, egui::Sense::click_and_drag());
 
@@ -306,16 +306,18 @@ fn draw_response_curve(painter: &egui::Painter, rect: Rect, params: &EqParams) {
         })
         .collect();
 
-    // Filled area under curve
-    let mut fill_pts = points.clone();
+    // Filled area between curve and the 0 dB line.
+    // PathShape tessellates non-convex polygons correctly (convex_polygon would not).
     let zero_y = gain_to_y(&rect, 0.0);
+    let mut fill_pts = points.clone();
     fill_pts.push(Pos2::new(rect.right(), zero_y));
     fill_pts.push(Pos2::new(rect.left(), zero_y));
-    painter.add(egui::Shape::convex_polygon(
-        fill_pts,
-        Color32::from_rgba_premultiplied(100, 160, 255, 30),
-        Stroke::NONE,
-    ));
+    painter.add(egui::Shape::Path(egui::epaint::PathShape {
+        points: fill_pts,
+        closed: true,
+        fill: Color32::from_rgba_premultiplied(100, 160, 255, 30),
+        stroke: egui::epaint::PathStroke::NONE,
+    }));
 
     // Curve line
     painter.add(egui::Shape::line(

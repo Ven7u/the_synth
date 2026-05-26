@@ -11,6 +11,7 @@ pub enum Tab {
     Sequencer,
     ArpWalker,
     FxChain,
+    Equalizer,
     Scope,
     Midi,
 }
@@ -24,6 +25,7 @@ impl Tab {
             Tab::Sequencer => "Sequencer",
             Tab::ArpWalker => "Arp & Walker",
             Tab::FxChain => "FX Chain",
+            Tab::Equalizer => "Equalizer",
             Tab::Scope => "Oscilloscope",
             Tab::Midi => "MIDI & Latency",
         }
@@ -36,6 +38,7 @@ impl Tab {
         Tab::Sequencer,
         Tab::ArpWalker,
         Tab::FxChain,
+        Tab::Equalizer,
         Tab::Scope,
         Tab::Midi,
     ];
@@ -71,8 +74,8 @@ pub fn default_dock_state() -> DockState<Tab> {
     // 3. Split top-left vertically: Modulation + Filter tabbed below Oscillators.
     let [_osc, _mod] = surface.split_below(top_left, 0.55, vec![Tab::Modulation, Tab::Filter]);
 
-    // 4. Split top-right vertically: FX Chain below Oscilloscope.
-    let [_scope, _fx] = surface.split_below(top_right, 0.50, vec![Tab::FxChain]);
+    // 4. Split top-right vertically: FX Chain + Equalizer tabbed below Oscilloscope.
+    let [_scope, _fx] = surface.split_below(top_right, 0.50, vec![Tab::Equalizer, Tab::FxChain]);
 
     state
 }
@@ -207,6 +210,9 @@ impl<'a> TabViewer for SynthTabViewer<'a> {
             }
             Tab::FxChain => {
                 self.app.ui_fx_chain(ui);
+            }
+            Tab::Equalizer => {
+                self.app.ui_eq_panel(ui);
             }
             Tab::Scope => {
                 self.app.ui_oscilloscope(ui);
