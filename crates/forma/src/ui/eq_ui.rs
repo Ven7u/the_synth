@@ -1,6 +1,7 @@
 //! 8-band parametric EQ panel — draggable dots on a frequency/gain canvas.
 
 use crate::eq::{response_curve_db, BandType, EqParams, BAND_COUNT};
+use crate::ui::theme::SynthTheme;
 use crate::SynthApp;
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, RichText, Stroke, Vec2};
@@ -12,40 +13,40 @@ const FREQ_MAX: f32 = 20_000.0;
 const GAIN_MIN: f32 = -18.0;
 const GAIN_MAX: f32 = 18.0;
 
-const SAMPLE_RATE: f32 = 44100.0; // fallback — close enough for display
+const SAMPLE_RATE: f32 = 44100.0;
 
-/// Dot colours per band.
-const BAND_COLORS: [Color32; BAND_COUNT] = [
-    Color32::from_rgb(80, 180, 255),  // 0 low shelf — blue
-    Color32::from_rgb(100, 220, 100), // 1 peak — green
-    Color32::from_rgb(220, 220, 60),  // 2 peak — yellow
-    Color32::from_rgb(255, 160, 50),  // 3 peak — orange
-    Color32::from_rgb(255, 100, 100), // 4 peak — red
-    Color32::from_rgb(200, 80, 220),  // 5 peak — violet
-    Color32::from_rgb(80, 220, 200),  // 6 peak — cyan
-    Color32::from_rgb(255, 180, 80),  // 7 high shelf — amber
-];
+// ── Theme helpers ─────────────────────────────────────────────────────────────
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+/// Per-band dot color, drawn from the theme's FX palette so it adapts to any theme.
+fn band_color(i: usize, t: &SynthTheme, enabled: bool) -> Color32 {
+    let rgb = match i {
+        0 => &t.accent_fm,       // Low Shelf  — blue
+        1 => &t.fx_chorus,       // Peak 200Hz — green
+        2 => &t.accent_hold,     // Peak 500Hz — yellow
+        3 => &t.fx_overdrive,    // Peak 1kHz  — orange
+        4 => &t.fx_distortion,   // Peak 2.5kHz— red
+        5 => &t.fx_reverb,       // Peak 5kHz  — violet
+        6 => &t.fx_crystallizer, // Peak 10kHz — amber
+        _ => &t.accent,          // High Shelf — main teal
+    };
+    let c = t.c(rgb);
+    if enabled {
+        c
+    } else {
+        c.gamma_multiply(0.25)
+    }
+}
+
+// ── Coordinate helpers ────────────────────────────────────────────────────────
 
 fn freq_to_x(rect: &Rect, freq: f32) -> f32 {
     let t = (freq.ln() - FREQ_MIN.ln()) / (FREQ_MAX.ln() - FREQ_MIN.ln());
     rect.left() + t * rect.width()
 }
 
-fn x_to_freq(rect: &Rect, x: f32) -> f32 {
-    let t = ((x - rect.left()) / rect.width()).clamp(0.0, 1.0);
-    (FREQ_MIN.ln() + t * (FREQ_MAX.ln() - FREQ_MIN.ln())).exp()
-}
-
 fn gain_to_y(rect: &Rect, gain: f32) -> f32 {
     let t = 1.0 - (gain - GAIN_MIN) / (GAIN_MAX - GAIN_MIN);
     rect.top() + t * rect.height()
-}
-
-fn y_to_gain(rect: &Rect, y: f32) -> f32 {
-    let t = 1.0 - (y - rect.top()) / rect.height();
-    (GAIN_MIN + t * (GAIN_MAX - GAIN_MIN)).clamp(GAIN_MIN, GAIN_MAX)
 }
 
 fn dot_pos(rect: &Rect, freq: f32, gain: f32) -> Pos2 {
@@ -60,7 +61,6 @@ impl SynthApp {
             Ok(p) => p.clone(),
             Err(_) => return,
         };
-
         let mut changed = false;
 
         // ── Header row ───────────────────────────────────────────────────────
@@ -71,7 +71,7 @@ impl SynthApp {
                 .color(if params.enabled {
                     self.theme.c(&self.theme.accent)
                 } else {
-                    Color32::GRAY
+                    self.theme.c(&self.theme.text_disabled)
                 });
             if ui
                 .button(label)
@@ -84,7 +84,6 @@ impl SynthApp {
 
             ui.separator();
 
-            // Per-band enable/disable chips
             for i in 0..BAND_COUNT {
                 let b = &mut params.bands[i];
                 let short = match b.band_type {
@@ -99,15 +98,20 @@ impl SynthApp {
                         _ => "P6",
                     },
                 };
-                let chip = egui::SelectableLabel::new(
-                    b.enabled,
-                    RichText::new(short).small().color(if b.enabled {
-                        BAND_COLORS[i]
-                    } else {
-                        Color32::DARK_GRAY
-                    }),
-                );
-                if ui.add(chip).on_hover_text(band_hover(i, b)).clicked() {
+                let col = band_color(i, &self.theme, true);
+                let (bg, text_col, stroke_col) = if b.enabled {
+                    (col.gamma_multiply(0.25), col, col)
+                } else {
+                    (
+                        self.theme.c(&self.theme.bg_sunken),
+                        self.theme.c(&self.theme.text_disabled),
+                        self.theme.c(&self.theme.border),
+                    )
+                };
+                let btn = egui::Button::new(RichText::new(short).small().color(text_col))
+                    .fill(bg)
+                    .stroke(Stroke::new(1.0, stroke_col));
+                if ui.add(btn).on_hover_text(band_hover(i, b)).clicked() {
                     b.enabled = !b.enabled;
                     changed = true;
                 }
@@ -145,35 +149,24 @@ impl SynthApp {
 
         let painter = ui.painter_at(rect);
 
-        // Background
-        painter.rect_filled(rect, 4.0, Color32::from_rgb(18, 18, 22));
-
-        // Grid lines
-        draw_grid(&painter, rect);
-
-        // Response curve
+        painter.rect_filled(rect, 4.0, self.theme.c(&self.theme.bg_sunken));
+        draw_grid(&painter, rect, &self.theme);
         if params.enabled {
-            draw_response_curve(&painter, rect, &params);
+            draw_response_curve(&painter, rect, &params, &self.theme);
         }
 
-        // ── Band dots interaction ─────────────────────────────────────────
+        // ── Band dots ────────────────────────────────────────────────────────
         let dot_r = 7.0_f32;
         let mut hovered_band: Option<usize> = None;
 
         for i in 0..BAND_COUNT {
-            // Copy values out before any mutation to avoid split-borrow.
             let (freq, gain_db, q, enabled, band_type) = {
                 let b = &params.bands[i];
                 (b.freq, b.gain_db, b.q, b.enabled, b.band_type)
             };
             let pos = dot_pos(&rect, freq, gain_db);
-            let col = if enabled {
-                BAND_COLORS[i]
-            } else {
-                Color32::DARK_GRAY
-            };
+            let col = band_color(i, &self.theme, enabled);
 
-            // Check hover (use the dot rect, not the whole canvas)
             let dot_rect = Rect::from_center_size(pos, Vec2::splat(dot_r * 2.5));
             if let Some(ptr) = response.hover_pos() {
                 if dot_rect.contains(ptr) {
@@ -181,7 +174,6 @@ impl SynthApp {
                 }
             }
 
-            // Drag: check per-band ID
             let band_id = response.id.with(i);
             let drag_resp = ui.interact(dot_rect, band_id, egui::Sense::click_and_drag());
 
@@ -198,7 +190,6 @@ impl SynthApp {
                 changed = true;
             }
 
-            // Scroll = Q
             if drag_resp.hovered() {
                 let scroll = ui.input(|inp| inp.smooth_scroll_delta.y);
                 if scroll.abs() > 0.1 {
@@ -207,30 +198,32 @@ impl SynthApp {
                 }
             }
 
-            // Double-click resets this band's gain
             if drag_resp.double_clicked() {
                 params.bands[i].gain_db = 0.0;
                 changed = true;
             }
 
-            // Draw dot
             let is_active = drag_resp.dragged() || drag_resp.hovered();
             let r = if is_active { dot_r + 2.0 } else { dot_r };
-            painter.circle_filled(pos, r, col.gamma_multiply(if enabled { 1.0 } else { 0.4 }));
-            painter.circle_stroke(pos, r, Stroke::new(1.5, Color32::WHITE.gamma_multiply(0.6)));
+            painter.circle_filled(pos, r, col);
+            let ring_col = if is_active {
+                self.theme.c(&self.theme.text_primary)
+            } else {
+                self.theme.c(&self.theme.text_primary).gamma_multiply(0.4)
+            };
+            painter.circle_stroke(pos, r, Stroke::new(1.5, ring_col));
 
-            // Band-type label inside dot
             let short = band_short_label(i, &band_type);
             painter.text(
                 pos,
                 egui::Align2::CENTER_CENTER,
                 short,
                 egui::FontId::proportional(8.0),
-                Color32::WHITE,
+                self.theme.c(&self.theme.bg_sunken),
             );
         }
 
-        // Tooltip for hovered band
+        // Tooltip
         if let Some(i) = hovered_band {
             let (freq, gain_db, q) = {
                 let b = &params.bands[i];
@@ -243,15 +236,11 @@ impl SynthApp {
             };
             response.clone().on_hover_text(format!(
                 "Band {} | {} Hz | {:.1} dB | Q {:.2}\nDrag: freq/gain  •  Scroll: Q  •  Double-click: reset",
-                i + 1,
-                freq_str,
-                gain_db,
-                q
+                i + 1, freq_str, gain_db, q
             ));
         }
 
-        // Axis labels
-        draw_axis_labels(&painter, rect);
+        draw_axis_labels(&painter, rect, &self.theme);
 
         if changed {
             if let Ok(mut p) = self.eq.lock() {
@@ -263,11 +252,11 @@ impl SynthApp {
 
 // ── Drawing helpers ───────────────────────────────────────────────────────────
 
-fn draw_grid(painter: &egui::Painter, rect: Rect) {
-    let grid_col = Color32::from_rgba_premultiplied(50, 50, 60, 180);
-    let zero_col = Color32::from_rgba_premultiplied(80, 80, 100, 220);
+fn draw_grid(painter: &egui::Painter, rect: Rect, t: &SynthTheme) {
+    let border = t.c(&t.border);
+    let grid_col = border.gamma_multiply(0.6);
+    let zero_col = t.c(&t.border_focus).gamma_multiply(0.7);
 
-    // Frequency grid lines (decade markers)
     for &freq in &[
         50.0_f32, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0,
     ] {
@@ -278,18 +267,21 @@ fn draw_grid(painter: &egui::Painter, rect: Rect) {
         );
     }
 
-    // Gain grid lines (every 6 dB)
     for &gain in &[-12.0_f32, -6.0, 0.0, 6.0, 12.0] {
         let y = gain_to_y(&rect, gain);
-        let col = if gain == 0.0 { zero_col } else { grid_col };
+        let (col, w) = if gain == 0.0 {
+            (zero_col, 1.5)
+        } else {
+            (grid_col, 1.0)
+        };
         painter.line_segment(
             [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
-            Stroke::new(if gain == 0.0 { 1.5 } else { 1.0 }, col),
+            Stroke::new(w, col),
         );
     }
 }
 
-fn draw_response_curve(painter: &egui::Painter, rect: Rect, params: &EqParams) {
+fn draw_response_curve(painter: &egui::Painter, rect: Rect, params: &EqParams, t: &SynthTheme) {
     let n = rect.width() as usize;
     if n < 2 {
         return;
@@ -306,28 +298,28 @@ fn draw_response_curve(painter: &egui::Painter, rect: Rect, params: &EqParams) {
         })
         .collect();
 
-    // Filled area between curve and the 0 dB line.
-    // PathShape tessellates non-convex polygons correctly (convex_polygon would not).
+    // Trapezoid-strip fill between curve and 0 dB — always convex per strip.
     let zero_y = gain_to_y(&rect, 0.0);
-    let mut fill_pts = points.clone();
-    fill_pts.push(Pos2::new(rect.right(), zero_y));
-    fill_pts.push(Pos2::new(rect.left(), zero_y));
-    painter.add(egui::Shape::Path(egui::epaint::PathShape {
-        points: fill_pts,
-        closed: true,
-        fill: Color32::from_rgba_premultiplied(100, 160, 255, 30),
-        stroke: egui::epaint::PathStroke::NONE,
-    }));
+    let accent = t.c(&t.accent);
+    let fill_col =
+        Color32::from_rgba_premultiplied(accent.r() / 5, accent.g() / 5, accent.b() / 5, 90);
+    for w in points.windows(2) {
+        let quad = vec![
+            w[0],
+            w[1],
+            Pos2::new(w[1].x, zero_y),
+            Pos2::new(w[0].x, zero_y),
+        ];
+        painter.add(egui::Shape::convex_polygon(quad, fill_col, Stroke::NONE));
+    }
 
     // Curve line
-    painter.add(egui::Shape::line(
-        points,
-        Stroke::new(2.0, Color32::from_rgb(120, 180, 255)),
-    ));
+    let line_col = Color32::from_rgba_premultiplied(accent.r(), accent.g(), accent.b(), 200);
+    painter.add(egui::Shape::line(points, Stroke::new(2.0, line_col)));
 }
 
-fn draw_axis_labels(painter: &egui::Painter, rect: Rect) {
-    let col = Color32::from_rgba_premultiplied(130, 130, 150, 200);
+fn draw_axis_labels(painter: &egui::Painter, rect: Rect, t: &SynthTheme) {
+    let col = t.c(&t.text_secondary);
     let font = egui::FontId::proportional(9.0);
 
     for &(freq, label) in &[
