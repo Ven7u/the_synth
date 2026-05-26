@@ -13,6 +13,8 @@ pub enum VizMode {
     Voronoi,
     Spectrum,
     Envelope,
+    Spectrogram,
+    SpectrogramV,
 }
 
 // ── Harmonograph uniform params (48 bytes, 3 × vec4) ──────────────────────────
@@ -225,8 +227,8 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertOut {
 
 struct Params {
     resolution:  vec2<f32>,
-    bloom_scale: f32,  // outer-halo multiplier: <1 = less bloom, >1 = more bloom
-    _pad:        f32,
+    bloom_scale: f32,
+    bypass:      f32,  // 1.0 = output texture directly, skipping barrel/bloom
 }
 
 @group(0) @binding(0) var t_scope:  texture_2d<f32>;
@@ -242,6 +244,11 @@ fn barrel(uv: vec2<f32>, strength: f32) -> vec2<f32> {
 
 @fragment
 fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
+    // Bypass mode: output texture directly (no barrel, no bloom) — used for spectrogram.
+    if p.bypass > 0.5 {
+        return textureSample(t_scope, s_scope, in.uv);
+    }
+
     let uv = barrel(in.uv, 0.18);
 
     // Anything outside the barrel maps to solid black (curved-screen border)
@@ -289,13 +296,122 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+// ── WGSL: spectrogram — reads R8Unorm ring-buffer texture, applies phosphor colormap ──
+const SPECTROGRAM_SHADER: &str = r#"
+struct SgrParams {
+    write_col : u32,
+    sgr_cols  : u32,
+    sgr_rows  : u32,
+    vertical  : u32,   // 0 = X=time Y=freq, 1 = X=freq Y=time(bottom→top)
+    tex_w     : f32,
+    tex_h     : f32,
+    _pad2     : vec2<f32>,
+}
+
+@group(0) @binding(0) var sgr_data : texture_2d<f32>;
+@group(0) @binding(1) var<uniform> sgr : SgrParams;
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+    var p = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 3.0, -1.0),
+        vec2<f32>(-1.0,  3.0),
+    );
+    return vec4<f32>(p[vi], 0.0, 1.0);
+}
+
+fn phosphor_heat(v: f32) -> vec3<f32> {
+    let c = clamp(v, 0.0, 1.0);
+    if c < 0.35 {
+        let t = c / 0.35;
+        return mix(vec3<f32>(0.016, 0.047, 0.035), vec3<f32>(0.086, 0.439, 0.216), vec3<f32>(t, t, t));
+    } else if c < 0.65 {
+        let t = (c - 0.35) / 0.30;
+        return mix(vec3<f32>(0.086, 0.439, 0.216), vec3<f32>(0.125, 0.753, 0.447), vec3<f32>(t, t, t));
+    } else if c < 0.88 {
+        let t = (c - 0.65) / 0.23;
+        return mix(vec3<f32>(0.125, 0.753, 0.447), vec3<f32>(0.282, 1.000, 0.761), vec3<f32>(t, t, t));
+    } else {
+        let t = (c - 0.88) / 0.12;
+        return mix(vec3<f32>(0.282, 1.000, 0.761), vec3<f32>(1.000, 1.000, 1.000), vec3<f32>(t, t, t));
+    }
+}
+
+@fragment
+fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    // Padding matches draw_sgr_labels() in scope.rs
+    let pad_l: f32 = 38.0;
+    let pad_b: f32 = 18.0;
+    let pad_t: f32 =  6.0;
+    let pad_r: f32 =  6.0;
+
+    let ix = pos.x - pad_l;
+    let iy = pos.y - pad_t;
+    let iw = sgr.tex_w - pad_l - pad_r;
+    let ih = sgr.tex_h - pad_t - pad_b;
+
+    // Background outside the data area
+    if ix < 0.0 || iy < 0.0 || ix >= iw || iy >= ih {
+        return vec4<f32>(0.016, 0.047, 0.035, 1.0);
+    }
+
+    let frac_x = ix / iw;
+    // frac_y=0 = top of data area, frac_y=1 = bottom.
+    let frac_y = iy / ih;
+
+    // Texture layout: width = sgr_rows (freq), height = sgr_cols (time).
+    var freq_idx: u32;
+    var time_col: u32;
+
+    if sgr.vertical == 0u {
+        // Horizontal: X = time (left=oldest, right=newest), Y = freq (top=high, bottom=low).
+        time_col = u32(frac_x * f32(sgr.sgr_cols)) % sgr.sgr_cols;
+        freq_idx = u32((1.0 - frac_y) * f32(sgr.sgr_rows));
+    } else {
+        // Vertical: X = freq (left=low, right=high), Y = time (bottom=oldest, top=newest).
+        freq_idx = u32(frac_x * f32(sgr.sgr_rows));
+        // frac_y=0(top)=newest, frac_y=1(bottom)=oldest → invert
+        let yi = min(u32(frac_y * f32(sgr.sgr_cols)), sgr.sgr_cols - 1u);
+        time_col = sgr.sgr_cols - 1u - yi;
+    }
+
+    let ring_row = (sgr.write_col + time_col) % sgr.sgr_cols;
+    let fi       = clamp(freq_idx, 0u, sgr.sgr_rows - 1u);
+
+    let amp = textureLoad(sgr_data, vec2<i32>(i32(fi), i32(ring_row)), 0).r;
+    return vec4<f32>(phosphor_heat(amp), 1.0);
+}
+"#;
+
 // ── Uniform buffer layouts (must match WGSL structs, 16-byte aligned) ─────────
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct CrtParams {
     resolution: [f32; 2],
     bloom_scale: f32,
-    _pad: f32,
+    /// 1.0 = bypass barrel/bloom and output the texture directly (used for spectrogram)
+    bypass: f32,
+}
+
+// ── Spectrogram ring-buffer constants ─────────────────────────────────────────
+/// Number of frequency bins (= texture width). Must be a multiple of 256 for
+/// write_texture alignment when height=1.
+pub const SGR_ROWS: u32 = 256;
+/// Number of time columns kept in the ring buffer (= texture height).
+pub const SGR_COLS: u32 = 512;
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct SgrParams {
+    pub write_col: u32, // oldest-data ring position (next to be overwritten)
+    pub sgr_cols: u32,
+    pub sgr_rows: u32,
+    /// 0 = horizontal (X=time, Y=freq), 1 = vertical (X=freq, Y=time bottom→top)
+    pub vertical: u32,
+    pub tex_w: f32,
+    pub tex_h: f32,
+    pub _pad2: [f32; 2],
 }
 
 // ── Persistent GPU resources (stored in CallbackResources across frames) ──────
@@ -327,6 +443,15 @@ pub struct ScopeGpuResources {
     vor_params_buf: wgpu::Buffer,
     vor_bind_group: wgpu::BindGroup,
     vor_bgl: wgpu::BindGroupLayout,
+
+    // Pipeline 5: spectrogram (ring-buffer texture → phosphor colormap)
+    sgr_pipeline: wgpu::RenderPipeline,
+    sgr_tex: wgpu::Texture,
+    sgr_params_buf: wgpu::Buffer,
+    sgr_bind_group: wgpu::BindGroup,
+    sgr_bgl: wgpu::BindGroupLayout,
+    /// Next ring-buffer row to write into sgr_tex (wraps mod SGR_COLS).
+    sgr_write_col: u32,
 }
 
 const MAX_VERTS: u64 = 16384;
@@ -352,7 +477,7 @@ impl ScopeGpuResources {
             contents: bytemuck::bytes_of(&CrtParams {
                 resolution: [512.0, 256.0],
                 bloom_scale: 1.0,
-                _pad: 0.0,
+                bypass: 0.0,
             }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -607,6 +732,118 @@ impl ScopeGpuResources {
             cache: None,
         });
 
+        // ── Spectrogram ring-buffer texture ──────────────────────────────────
+        // Layout: width = SGR_ROWS (freq axis), height = SGR_COLS (time axis).
+        // Each row = one spectrogram time-column, written via queue.write_texture.
+        let sgr_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("sgr_ring_tex"),
+            size: wgpu::Extent3d {
+                width: SGR_ROWS,
+                height: SGR_COLS,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let sgr_tex_view = sgr_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let sgr_params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("sgr_params"),
+            contents: bytemuck::bytes_of(&SgrParams {
+                write_col: 0,
+                sgr_cols: SGR_COLS,
+                sgr_rows: SGR_ROWS,
+                vertical: 0,
+                tex_w: 512.0,
+                tex_h: 256.0,
+                _pad2: [0.0; 2],
+            }),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let sgr_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("sgr_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let sgr_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("sgr_bg"),
+            layout: &sgr_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&sgr_tex_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: sgr_params_buf.as_entire_binding(),
+                },
+            ],
+        });
+
+        let sgr_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("sgr_shader"),
+            source: wgpu::ShaderSource::Wgsl(SPECTROGRAM_SHADER.into()),
+        });
+        let sgr_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("sgr_layout"),
+            bind_group_layouts: &[Some(&sgr_bgl)],
+            immediate_size: 0,
+        });
+        let sgr_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("sgr_pipeline"),
+            layout: Some(&sgr_layout),
+            vertex: wgpu::VertexState {
+                module: &sgr_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &sgr_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: TEX_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
         Self {
             tex,
             tex_view,
@@ -626,6 +863,12 @@ impl ScopeGpuResources {
             vor_params_buf,
             vor_bind_group,
             vor_bgl,
+            sgr_pipeline,
+            sgr_tex,
+            sgr_params_buf,
+            sgr_bind_group,
+            sgr_bgl,
+            sgr_write_col: 0,
         }
     }
 
@@ -732,6 +975,8 @@ pub struct ScopeCallback {
     pub viz_mode: VizMode,
     pub harm_params: HarmParams,
     pub vor_params: VorParams,
+    /// SGR_ROWS amplitude values in [0,1] for one spectrogram column (Spectrogram mode only).
+    pub sgr_bins: Option<Vec<f32>>,
 }
 
 impl ScopeCallback {
@@ -803,13 +1048,15 @@ impl egui_wgpu::CallbackTrait for ScopeCallback {
             res.resize(device, w, h);
         }
 
-        // Update CRT uniforms — bloom_scale varies per viz mode
-        let bloom_scale = match self.viz_mode {
-            VizMode::Scope => 1.0,
-            VizMode::Harmonograph => 2.8,
-            VizMode::Voronoi => 0.2,
-            // Spectrum and Envelope are drawn by CPU painter; wgpu pass is a no-op.
-            VizMode::Spectrum | VizMode::Envelope => 0.0,
+        // Update CRT uniforms
+        let (bloom_scale, bypass) = match self.viz_mode {
+            VizMode::Scope => (1.0f32, 0.0f32),
+            VizMode::Harmonograph => (2.8, 0.0),
+            VizMode::Voronoi => (0.2, 0.0),
+            // Spectrogram modes: bypass CRT barrel/bloom for accurate color rendering.
+            VizMode::Spectrogram | VizMode::SpectrogramV => (0.0, 1.0),
+            // Spectrum and Envelope are CPU-drawn; the wgpu pass is a no-op.
+            VizMode::Spectrum | VizMode::Envelope => (0.0, 0.0),
         };
         queue.write_buffer(
             &res.params_buf,
@@ -817,7 +1064,7 @@ impl egui_wgpu::CallbackTrait for ScopeCallback {
             bytemuck::bytes_of(&CrtParams {
                 resolution: [w as f32, h as f32],
                 bloom_scale,
-                _pad: 0.0,
+                bypass,
             }),
         );
 
@@ -904,6 +1151,76 @@ impl egui_wgpu::CallbackTrait for ScopeCallback {
                 });
                 pass.set_pipeline(&res.vor_pipeline);
                 pass.set_bind_group(0, &res.vor_bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
+
+            VizMode::Spectrogram | VizMode::SpectrogramV => {
+                let is_vertical = self.viz_mode == VizMode::SpectrogramV;
+                // Upload new column into the ring-buffer texture (one row write = 256 bytes).
+                if let Some(bins) = &self.sgr_bins {
+                    let col_bytes: Vec<u8> = bins
+                        .iter()
+                        .map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8)
+                        .collect();
+                    let write_row = res.sgr_write_col % SGR_COLS;
+                    queue.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &res.sgr_tex,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d {
+                                x: 0,
+                                y: write_row,
+                                z: 0,
+                            },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        &col_bytes,
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            // height=1 → no stride alignment requirement; None = tightly packed
+                            bytes_per_row: None,
+                            rows_per_image: None,
+                        },
+                        wgpu::Extent3d {
+                            width: SGR_ROWS,
+                            height: 1,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                    res.sgr_write_col = res.sgr_write_col.wrapping_add(1);
+                }
+                // Update sgr params with current ring position and texture dimensions.
+                queue.write_buffer(
+                    &res.sgr_params_buf,
+                    0,
+                    bytemuck::bytes_of(&SgrParams {
+                        write_col: res.sgr_write_col % SGR_COLS,
+                        sgr_cols: SGR_COLS,
+                        sgr_rows: SGR_ROWS,
+                        vertical: is_vertical as u32,
+                        tex_w: w as f32,
+                        tex_h: h as f32,
+                        _pad2: [0.0; 2],
+                    }),
+                );
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("sgr_pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &res.tex_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&res.sgr_pipeline);
+                pass.set_bind_group(0, &res.sgr_bind_group, &[]);
                 pass.draw(0..3, 0..1);
             }
 

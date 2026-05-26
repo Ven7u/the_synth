@@ -270,8 +270,8 @@ pub(crate) struct SynthApp {
     pub(crate) scope_y_scale: f32,
     pub(crate) show_voice_debug: bool,
     pub(crate) viz_mode: ui::scope_wgpu::VizMode,
-    pub(crate) harm_phase: f64, // slow-drift animation phase for harmonograph
-    pub(crate) vor_time: f64,   // elapsed seconds for voronoi seed orbits
+    pub(crate) harm_phase: f64,
+    pub(crate) vor_time: f64,
 
     // Patch system
     pub(crate) patch_name: String,
