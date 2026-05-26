@@ -1,6 +1,6 @@
 use crate::sequencer::{
-    chord_name, chord_quality, scale_pitch_classes, ChordType, ScaleType, SeqMode, CHORD_KB_COLS,
-    CHORD_KB_ROWS, DEGREE_LABELS, NOTE_NAMES,
+    apply_voicing, chord_name, chord_quality, scale_pitch_classes, ChordType, ScaleType, SeqMode,
+    VoicingType, CHORD_KB_COLS, CHORD_KB_ROWS, DEGREE_LABELS, NOTE_NAMES,
 };
 use crate::ui::layout::AppMode;
 use crate::SynthApp;
@@ -92,6 +92,91 @@ impl SynthApp {
             }
         }
 
+        // Retrigger held chord-KB pads if voicing changed since last note-on.
+        if self.kb_chord_mode && self.kb_voicing != self.kb_voicing_applied {
+            let old_v = self.kb_voicing_applied;
+            let new_v = self.kb_voicing;
+            // Collect (old_notes, new_notes) for every held pad before any mutable borrows.
+            let mut retriggers: Vec<(Vec<u8>, Vec<u8>)> = self
+                .chord_kb
+                .kb_held
+                .iter()
+                .map(|&(row, col)| {
+                    (
+                        apply_voicing(self.chord_kb.chord_notes_for(row, col), old_v),
+                        apply_voicing(self.chord_kb.chord_notes_for(row, col), new_v),
+                    )
+                })
+                .collect();
+            if let Some((row, col)) = self.chord_kb.held_pad {
+                retriggers.push((
+                    apply_voicing(self.chord_kb.chord_notes_for(row, col), old_v),
+                    apply_voicing(self.chord_kb.chord_notes_for(row, col), new_v),
+                ));
+            }
+            for (old_notes, new_notes) in retriggers {
+                for n in &old_notes {
+                    self.engine.note_off(*n);
+                }
+                for n in &new_notes {
+                    self.engine.note_on(*n, self.piano_velocity);
+                }
+            }
+            // Update frozen notes to the new voicing so freeze-held chords retrigger cleanly.
+            let old_frozen: Vec<u8> = self.frozen_notes.iter().copied().collect();
+            if !old_frozen.is_empty() {
+                // frozen_notes are individual MIDI values — swap any that match old voiced notes.
+                // Rebuild the set with updated values.
+                let mut new_frozen = std::collections::HashSet::new();
+                for n in old_frozen {
+                    // Try to find which pad this note belonged to and remap it.
+                    let mut remapped = false;
+                    'outer: for row in 0..crate::sequencer::CHORD_KB_ROWS {
+                        for col in 0..crate::sequencer::CHORD_KB_COLS {
+                            let old_voiced =
+                                apply_voicing(self.chord_kb.chord_notes_for(row, col), old_v);
+                            if old_voiced.contains(&n) {
+                                for m in
+                                    apply_voicing(self.chord_kb.chord_notes_for(row, col), new_v)
+                                {
+                                    self.engine.note_off(n);
+                                    self.engine.note_on(m, self.piano_velocity);
+                                    new_frozen.insert(m);
+                                }
+                                remapped = true;
+                                break 'outer;
+                            }
+                        }
+                    }
+                    if !remapped {
+                        new_frozen.insert(n);
+                    }
+                }
+                self.frozen_notes = new_frozen;
+            }
+            self.kb_voicing_applied = new_v;
+        }
+
+        // Arrow keys = momentary voicing (chord mode only); release to return to Root.
+        // No arrow = Root  ↑ = 1st  ↓ = 2nd  → = Open  ← = Full
+        if self.kb_chord_mode && !ctx.memory(|m| m.focused().is_some()) {
+            self.kb_voicing = ctx.input(|inp| {
+                if inp.key_down(egui::Key::ArrowUp) {
+                    VoicingType::First
+                } else if inp.key_down(egui::Key::ArrowDown) {
+                    VoicingType::Second
+                } else if inp.key_down(egui::Key::ArrowRight) {
+                    VoicingType::Open
+                } else if inp.key_down(egui::Key::ArrowLeft) {
+                    VoicingType::Full
+                } else {
+                    VoicingType::Root
+                }
+            });
+        } else {
+            self.kb_voicing = VoicingType::Root;
+        }
+
         if self.kb_chord_mode {
             // 3 rows × 7 cols grid:
             //   Row 0 (triads):  A S D F G H J
@@ -147,11 +232,15 @@ impl SynthApp {
                         for n in frozen {
                             self.push_note_off(n);
                         }
-                        for m in self.chord_kb.chord_notes_for(row, col) {
+                        for m in
+                            apply_voicing(self.chord_kb.chord_notes_for(row, col), self.kb_voicing)
+                        {
                             self.push_note_on(m);
                         }
                     } else {
-                        for m in self.chord_kb.chord_notes_for(row, col) {
+                        for m in
+                            apply_voicing(self.chord_kb.chord_notes_for(row, col), self.kb_voicing)
+                        {
                             self.push_note_on(m);
                         }
                     }
@@ -165,7 +254,7 @@ impl SynthApp {
                 .copied()
                 .collect();
             for (row, col) in released {
-                let notes = self.chord_kb.chord_notes_for(row, col);
+                let notes = apply_voicing(self.chord_kb.chord_notes_for(row, col), self.kb_voicing);
                 if self.kb_freeze {
                     for m in notes {
                         self.frozen_notes.insert(m);
@@ -186,7 +275,8 @@ impl SynthApp {
             if !self.chord_kb.kb_held.is_empty() {
                 let held: Vec<(usize, usize)> = self.chord_kb.kb_held.drain().collect();
                 for (row, col) in held {
-                    for m in self.chord_kb.chord_notes_for(row, col) {
+                    for m in apply_voicing(self.chord_kb.chord_notes_for(row, col), self.kb_voicing)
+                    {
                         self.push_note_off(m);
                     }
                 }
@@ -391,6 +481,20 @@ impl SynthApp {
                 ).small();
                 if ui.button(preview_label).on_hover_text("Toggle piano preview").clicked() {
                     self.chord_kb.show_piano_preview = !self.chord_kb.show_piano_preview;
+                }
+                ui.separator();
+                // Voicing selector (also controlled by ↑/↓ arrow keys)
+                // Voicing indicator — arrows are the control, this just shows what's active.
+                ui.label(egui::RichText::new("Voicing:").weak().small());
+                for &v in VoicingType::all() {
+                    let active = self.kb_voicing == v;
+                    let color = if active {
+                        self.theme.c(&self.theme.accent)
+                    } else {
+                        Color32::GRAY
+                    };
+                    ui.label(egui::RichText::new(v.label()).small().color(color))
+                        .on_hover_text("Hold arrow keys: no arrow = Root  ↑ = 1st  ↓ = 2nd  → = Open  ← = Full");
                 }
                 ui.label(egui::RichText::new("  A–J / Q–U / Z–M = rows 1–3").weak().small());
             } else {
@@ -628,20 +732,32 @@ impl SynthApp {
                                         self.push_note_off(n);
                                     }
                                     if let Some((pr, pc)) = self.chord_kb.held_pad {
-                                        for m in self.chord_kb.chord_notes_for(pr, pc) {
+                                        for m in apply_voicing(
+                                            self.chord_kb.chord_notes_for(pr, pc),
+                                            self.kb_voicing,
+                                        ) {
                                             self.frozen_notes.insert(m);
                                         }
                                     }
-                                    for m in self.chord_kb.chord_notes_for(row, col) {
+                                    for m in apply_voicing(
+                                        self.chord_kb.chord_notes_for(row, col),
+                                        self.kb_voicing,
+                                    ) {
                                         self.push_note_on(m);
                                     }
                                 } else {
                                     if let Some((pr, pc)) = self.chord_kb.held_pad {
-                                        for m in self.chord_kb.chord_notes_for(pr, pc) {
+                                        for m in apply_voicing(
+                                            self.chord_kb.chord_notes_for(pr, pc),
+                                            self.kb_voicing,
+                                        ) {
                                             self.push_note_off(m);
                                         }
                                     }
-                                    for m in self.chord_kb.chord_notes_for(row, col) {
+                                    for m in apply_voicing(
+                                        self.chord_kb.chord_notes_for(row, col),
+                                        self.kb_voicing,
+                                    ) {
                                         self.push_note_on(m);
                                     }
                                 }
@@ -649,7 +765,10 @@ impl SynthApp {
                             }
                             if !resp.is_pointer_button_down_on() && is_held_mouse {
                                 self.chord_kb.held_pad = None;
-                                let notes = self.chord_kb.chord_notes_for(row, col);
+                                let notes = apply_voicing(
+                                    self.chord_kb.chord_notes_for(row, col),
+                                    self.kb_voicing,
+                                );
                                 if self.kb_freeze {
                                     for m in notes {
                                         self.frozen_notes.insert(m);
@@ -701,12 +820,12 @@ impl SynthApp {
         // Collect active notes: frozen + currently held pads
         let mut active: std::collections::HashSet<u8> = self.frozen_notes.clone();
         if let Some((row, col)) = self.chord_kb.held_pad {
-            for m in self.chord_kb.chord_notes_for(row, col) {
+            for m in apply_voicing(self.chord_kb.chord_notes_for(row, col), self.kb_voicing) {
                 active.insert(m);
             }
         }
         for &(row, col) in &self.chord_kb.kb_held.clone() {
-            for m in self.chord_kb.chord_notes_for(row, col) {
+            for m in apply_voicing(self.chord_kb.chord_notes_for(row, col), self.kb_voicing) {
                 active.insert(m);
             }
         }

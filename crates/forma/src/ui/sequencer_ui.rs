@@ -1,5 +1,6 @@
 use crate::sequencer::{
-    chord_name, chord_quality, ScaleType, SeqClockDiv, SeqMode, DEGREE_LABELS, NOTE_NAMES,
+    chord_name, chord_quality, ScaleType, SeqClockDiv, SeqMode, VoicingType, DEGREE_LABELS,
+    NOTE_NAMES,
 };
 use crate::SynthApp;
 use eframe::egui;
@@ -460,6 +461,23 @@ impl SynthApp {
                     {
                         self.seq.chord_seq.lock().unwrap().scale = sc;
                     }
+                }
+
+                ui.separator();
+
+                // Voice lead toggle
+                let vl = self.seq.chord_seq.lock().unwrap().voice_lead;
+                let vl_label = egui::RichText::new("Voice Lead")
+                    .color(if vl { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
+                if ui
+                    .button(vl_label)
+                    .on_hover_text(
+                        "Auto-pick the inversion that minimises voice movement between steps. \
+                         Overrides per-step voicing.",
+                    )
+                    .clicked()
+                {
+                    self.seq.chord_seq.lock().unwrap().voice_lead = !vl;
                 }
             }
         });
@@ -925,6 +943,43 @@ impl SynthApp {
                                 (oct_off - 1).max(-2)
                             };
                             self.seq.chord_seq.lock().unwrap().octave_offsets[i] = new_off;
+                        }
+                    }
+
+                    // Voicing row: click left = prev inversion, right = next inversion.
+                    let voicing_h = 12.0;
+                    let voicing = self.seq.chord_seq.lock().unwrap().voicings[i];
+                    let voice_lead = self.seq.chord_seq.lock().unwrap().voice_lead;
+                    let (v_resp, painter) =
+                        ui.allocate_painter(Vec2::new(step_w, voicing_h), Sense::click());
+                    let vr = v_resp.rect;
+                    let vbg = if voice_lead {
+                        Color32::from_rgb(20, 40, 30)
+                    } else {
+                        Color32::from_rgb(20, 35, 50)
+                    };
+                    painter.rect_filled(vr, CornerRadius::same(2), vbg);
+                    let vcolor = if voice_lead {
+                        Color32::from_rgb(80, 140, 100)
+                    } else {
+                        Color32::from_rgb(80, 140, 200)
+                    };
+                    let vlabel = if voice_lead { "VL" } else { voicing.short() };
+                    painter.text(
+                        vr.center(),
+                        egui::Align2::CENTER_CENTER,
+                        vlabel,
+                        egui::FontId::monospace(8.0),
+                        vcolor,
+                    );
+                    if v_resp.clicked() && !voice_lead {
+                        if let Some(pos) = v_resp.interact_pointer_pos() {
+                            let next = if pos.x > vr.center().x {
+                                voicing.next()
+                            } else {
+                                voicing.prev()
+                            };
+                            self.seq.chord_seq.lock().unwrap().voicings[i] = next;
                         }
                     }
                 });

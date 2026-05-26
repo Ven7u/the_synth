@@ -207,6 +207,10 @@ pub(crate) struct SynthApp {
     pub(crate) piano_held_midi: std::collections::HashSet<u8>,
     pub(crate) piano_mouse_midi: Option<u8>,
     pub(crate) kb_chord_mode: bool, // true = chord pads, false = standard piano
+    /// Active voicing this frame — Root when no arrow is held; 1st/2nd/Open while ↑/↓/→ held.
+    pub(crate) kb_voicing: crate::sequencer::VoicingType,
+    /// Last voicing applied to note-ons; used to detect changes and retrigger held pads.
+    pub(crate) kb_voicing_applied: crate::sequencer::VoicingType,
     /// When true, NoteOffs are suppressed; notes keep sounding until a new chord/note is played.
     pub(crate) kb_freeze: bool,
     /// MIDI notes currently sustained by freeze (key lifted but NoteOff suppressed).
@@ -544,6 +548,8 @@ impl SynthApp {
             piano_pitch_bend: 0,
             piano_mod_wheel: 0,
             kb_chord_mode: false,
+            kb_voicing: crate::sequencer::VoicingType::Root,
+            kb_voicing_applied: crate::sequencer::VoicingType::Root,
             kb_freeze: false,
             frozen_notes: std::collections::HashSet::new(),
             piano_held_midi: std::collections::HashSet::new(),

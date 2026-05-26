@@ -150,6 +150,145 @@ pub fn chord_notes(root: u8, scale: ScaleType, degree: usize, octave: i32) -> [u
 }
 
 // ---------------------------------------------------------------------------
+// Voicing
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum VoicingType {
+    #[default]
+    Root, // close position, root in bass
+    First,  // 1st inversion — 3rd in bass
+    Second, // 2nd inversion — 5th in bass
+    Open,   // spread: root + 5th + 3rd (octave up)
+    Full,   // root-position + root doubled an octave above (denser, 4–5 notes)
+}
+
+impl VoicingType {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Root => "Root",
+            Self::First => "1st",
+            Self::Second => "2nd",
+            Self::Open => "Open",
+            Self::Full => "Full",
+        }
+    }
+
+    pub fn short(self) -> &'static str {
+        match self {
+            Self::Root => "R",
+            Self::First => "1",
+            Self::Second => "2",
+            Self::Open => "O",
+            Self::Full => "F",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Root => Self::First,
+            Self::First => Self::Second,
+            Self::Second => Self::Open,
+            Self::Open => Self::Full,
+            Self::Full => Self::Root,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Root => Self::Full,
+            Self::First => Self::Root,
+            Self::Second => Self::First,
+            Self::Open => Self::Second,
+            Self::Full => Self::Open,
+        }
+    }
+
+    pub fn all() -> &'static [VoicingType] {
+        &[
+            Self::Root,
+            Self::First,
+            Self::Second,
+            Self::Open,
+            Self::Full,
+        ]
+    }
+}
+
+/// Apply a voicing to a set of root-position notes (ascending pitch order).
+/// Returns the re-voiced notes in the same count.
+pub fn apply_voicing(mut notes: Vec<u8>, voicing: VoicingType) -> Vec<u8> {
+    let n = notes.len();
+    if n < 2 {
+        return notes;
+    }
+    match voicing {
+        VoicingType::Root => notes,
+        VoicingType::First => {
+            let first = notes.remove(0);
+            notes.push((first as i32 + 12).clamp(0, 127) as u8);
+            notes
+        }
+        VoicingType::Second => {
+            if n < 3 {
+                return notes;
+            }
+            let first = notes.remove(0);
+            notes.push((first as i32 + 12).clamp(0, 127) as u8);
+            let second = notes.remove(0);
+            notes.push((second as i32 + 12).clamp(0, 127) as u8);
+            notes
+        }
+        VoicingType::Open => {
+            // Take index 1 (3rd), move it to the top an octave up: R–5–3↑
+            let third = notes.remove(1);
+            notes.push((third as i32 + 12).clamp(0, 127) as u8);
+            notes
+        }
+        VoicingType::Full => {
+            // Root-position + root doubled an octave above: R–3–5–(7)–R↑
+            let root_up = (notes[0] as i32 + 12).clamp(0, 127) as u8;
+            notes.push(root_up);
+            notes
+        }
+    }
+}
+
+/// Pick the inversion of `notes` (root-position, ascending) that minimises
+/// total semitone movement from `prev`.  Falls back to root position if
+/// `prev` is empty.
+pub fn best_voiced(notes: Vec<u8>, prev: &[u8]) -> Vec<u8> {
+    if prev.is_empty() || notes.is_empty() {
+        return notes;
+    }
+    let n = notes.len();
+    let score = |candidate: &Vec<u8>| -> u32 {
+        let len = candidate.len().min(prev.len());
+        let mut a: Vec<u8> = candidate[..len].to_vec();
+        let mut b: Vec<u8> = prev[..len].to_vec();
+        a.sort_unstable();
+        b.sort_unstable();
+        a.iter()
+            .zip(b.iter())
+            .map(|(&x, &y)| x.abs_diff(y) as u32)
+            .sum()
+    };
+    // Generate all n inversions
+    let mut best = notes.clone();
+    let mut best_score = score(&best);
+    let mut current = notes;
+    for _ in 1..n {
+        current = apply_voicing(current, VoicingType::First);
+        let s = score(&current);
+        if s < best_score {
+            best_score = s;
+            best = current.clone();
+        }
+    }
+    best
+}
+
+// ---------------------------------------------------------------------------
 // Chord types
 // ---------------------------------------------------------------------------
 
@@ -324,7 +463,8 @@ impl NoteSeqState {
 pub struct ChordSeqState {
     pub steps: [bool; 24],
     pub degrees: [usize; 24],         // 0–6 diatonic degree per step
-    pub chord_types: [ChordType; 24], // per-step chord voicing
+    pub chord_types: [ChordType; 24], // per-step chord type
+    pub voicings: [VoicingType; 24],  // per-step voicing (inversion / spread)
     pub octave_offsets: [i32; 24],    // per-step octave shift (−2 to +2)
     pub velocities: [u8; 24],
     pub probabilities: [u8; 24],
@@ -332,7 +472,8 @@ pub struct ChordSeqState {
     pub drag_accum: [f32; 24],
     pub root: u8, // 0=C … 11=B
     pub scale: ScaleType,
-    pub octave: i32, // base octave for chord voicing
+    pub octave: i32,      // base octave for chord voicing
+    pub voice_lead: bool, // auto-pick best inversion for smooth voice movement
 }
 
 impl ChordSeqState {
@@ -352,6 +493,7 @@ impl ChordSeqState {
             },
             degrees,
             chord_types: [ChordType::Triad; 24],
+            voicings: [VoicingType::Root; 24],
             octave_offsets: [0i32; 24],
             velocities: [100u8; 24],
             probabilities: [100u8; 24],
@@ -360,11 +502,12 @@ impl ChordSeqState {
             root: 0, // C
             scale: ScaleType::Major,
             octave: 4,
+            voice_lead: false,
         }
     }
 
-    /// Notes for step i, using per-step chord type and octave offset.
-    pub fn step_notes(&self, i: usize) -> Vec<u8> {
+    /// Root-position notes for step i (before any voicing is applied).
+    fn step_notes_root(&self, i: usize) -> Vec<u8> {
         chord_notes_typed(
             self.root,
             self.scale,
@@ -372,6 +515,22 @@ impl ChordSeqState {
             self.octave + self.octave_offsets[i],
             self.chord_types[i],
         )
+    }
+
+    /// Notes for step i with per-step voicing applied.
+    pub fn step_notes(&self, i: usize) -> Vec<u8> {
+        apply_voicing(self.step_notes_root(i), self.voicings[i])
+    }
+
+    /// Notes for step i with voice-leading: if voice_lead is on, picks the
+    /// inversion closest to `prev`; otherwise uses the stored per-step voicing.
+    pub fn step_notes_vl(&self, i: usize, prev: &[u8]) -> Vec<u8> {
+        let root_pos = self.step_notes_root(i);
+        if self.voice_lead && !prev.is_empty() {
+            best_voiced(root_pos, prev)
+        } else {
+            apply_voicing(root_pos, self.voicings[i])
+        }
     }
 }
 
@@ -753,7 +912,7 @@ pub fn spawn_sequencer(
                                     prob >= 100 || (rand_pct as u32 * 100 / 127 < prob as u32);
                                 if passes {
                                     let vel = cs.velocities[current];
-                                    cs.step_notes(current)
+                                    cs.step_notes_vl(current, &prev_notes)
                                         .into_iter()
                                         .map(|n| (n, vel))
                                         .collect()
