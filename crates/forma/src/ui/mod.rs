@@ -1,6 +1,7 @@
 pub mod arp_walker;
 pub mod dock;
 pub mod drum_machine_ui;
+pub mod eq_ui;
 pub mod frame;
 pub mod fx_chain;
 pub mod keyboard;

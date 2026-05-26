@@ -14,6 +14,7 @@ use fundsp::prelude32::*;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::eq::{EqParams, ParametricEq};
 use crate::recorder::Recorder;
 use forma_control::{make_control_channel, ControlReceiver};
 use forma_dsp::LookaheadLimiter;
@@ -835,6 +836,8 @@ pub struct AudioEngine {
     pub mixers: [Arc<TrackMixerAtomics>; TRACK_COUNT],
     /// Drum engine atomics — shared with the audio callback.
     pub drum: Arc<DrumEngineAtomics>,
+    /// Mix-bus parametric EQ params — UI writes, audio thread reads.
+    pub eq: Arc<Mutex<EqParams>>,
     _stream: Stream,
 }
 
@@ -867,6 +870,7 @@ impl AudioEngine {
         }
 
         let drum = DrumEngineAtomics::new();
+        let eq: Arc<Mutex<EqParams>> = Arc::new(Mutex::new(EqParams::default()));
 
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => build_stream::<f32>(
@@ -879,6 +883,7 @@ impl AudioEngine {
                 Arc::clone(&mixer_vec[2]),
                 Arc::clone(&mixer_vec[3]),
                 Arc::clone(&drum),
+                Arc::clone(&eq),
                 sr,
                 recorder_sink,
             )?,
@@ -892,6 +897,7 @@ impl AudioEngine {
                 Arc::clone(&mixer_vec[2]),
                 Arc::clone(&mixer_vec[3]),
                 Arc::clone(&drum),
+                Arc::clone(&eq),
                 sr,
                 recorder_sink,
             )?,
@@ -905,6 +911,7 @@ impl AudioEngine {
                 Arc::clone(&mixer_vec[2]),
                 Arc::clone(&mixer_vec[3]),
                 Arc::clone(&drum),
+                Arc::clone(&eq),
                 sr,
                 recorder_sink,
             )?,
@@ -926,6 +933,7 @@ impl AudioEngine {
                 mixer_vec.remove(0),
             ],
             drum,
+            eq,
             _stream: stream,
         })
     }
@@ -944,6 +952,7 @@ fn build_stream<T>(
     mixer2: Arc<TrackMixerAtomics>,
     mixer3: Arc<TrackMixerAtomics>,
     drum_atomics: Arc<DrumEngineAtomics>,
+    eq_params: Arc<Mutex<EqParams>>,
     sr: f64,
     recorder_sink: RecorderSink,
 ) -> anyhow::Result<Stream>
@@ -969,6 +978,9 @@ where
 
     // Lookahead limiter on the mix bus.
     let mut lookahead_lim = LookaheadLimiter::new(sr as f32, 1.5, 80.0);
+
+    // Mix-bus parametric EQ.
+    let mut mix_eq = ParametricEq::new(sr as f32);
 
     // DC blocker coefficient (shared constant, same formula for all tracks).
     let dc_coeff = 1.0_f32 - (std::f32::consts::TAU * 20.0 / sr as f32);
@@ -998,6 +1010,11 @@ where
                     let us = t.elapsed().as_micros() as u32;
                     tracks[0].state.last_latency_us.store(us, Ordering::Relaxed);
                 }
+            }
+
+            // Sync EQ params from UI (try_lock — never block).
+            if let Ok(p) = eq_params.try_lock() {
+                mix_eq.update(&p);
             }
 
             // Per-buffer setup for all tracks.
@@ -1086,6 +1103,9 @@ where
                     mix_l += dl * dvol * pan_l;
                     mix_r += dr * dvol * pan_r;
                 }
+
+                // Mix-bus parametric EQ.
+                let (mix_l, mix_r) = mix_eq.process(mix_l, mix_r);
 
                 // Lookahead limiter on the mix bus.
                 let (lim_l, lim_r) = if limiter_on {

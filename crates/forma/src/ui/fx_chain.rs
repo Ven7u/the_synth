@@ -18,6 +18,13 @@ pub const DELAY_DIVISIONS: &[(&str, f32)] = &[
 
 impl SynthApp {
     pub fn ui_fx_chain(&mut self, ui: &mut egui::Ui) {
+        // Mix-bus EQ at the top of the FX panel.
+        ui.group(|ui| {
+            self.ui_eq_panel(ui);
+        });
+
+        ui.add_space(4.0);
+
         let col_od = self.theme.c(&self.theme.fx_overdrive);
         let col_dist = self.theme.c(&self.theme.fx_distortion);
         let col_cho = self.theme.c(&self.theme.fx_chorus);

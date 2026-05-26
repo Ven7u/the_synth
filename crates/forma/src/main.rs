@@ -4,6 +4,7 @@
 #![allow(clippy::precedence)]
 
 mod audio;
+mod eq;
 mod patch;
 mod recorder;
 mod scene;
@@ -428,6 +429,9 @@ pub(crate) struct SynthApp {
     pub(crate) midi_learn_filter: String,
     /// Last CC number seen (for highlighting in the learn window)
     pub(crate) midi_last_cc: Option<u8>,
+
+    // Mix-bus parametric EQ
+    pub(crate) eq: Arc<Mutex<crate::eq::EqParams>>,
 }
 
 impl SynthApp {
@@ -453,6 +457,8 @@ impl SynthApp {
         ];
         // Extract drum engine Arc before audio is moved.
         let drum_engine = std::sync::Arc::clone(&audio.drum);
+        // Extract EQ params Arc before audio is moved.
+        let eq = std::sync::Arc::clone(&audio.eq);
 
         // Snapshot each engine's initial patch state (all "Init" on fresh start).
         let track_patches = [
@@ -699,6 +705,7 @@ impl SynthApp {
             midi_learn_param: None,
             midi_learn_filter: String::new(),
             midi_last_cc: None,
+            eq,
         }
     }
 }
