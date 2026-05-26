@@ -1,6 +1,6 @@
 use crate::sequencer::{
-    chord_name, chord_quality, ChordType, ScaleType, SeqMode, CHORD_KB_COLS, CHORD_KB_ROWS,
-    DEGREE_LABELS, NOTE_NAMES,
+    chord_name, chord_quality, scale_pitch_classes, ChordType, ScaleType, SeqMode, CHORD_KB_COLS,
+    CHORD_KB_ROWS, DEGREE_LABELS, NOTE_NAMES,
 };
 use crate::ui::layout::AppMode;
 use crate::SynthApp;
@@ -449,6 +449,39 @@ impl SynthApp {
                 ui.label(egui::RichText::new(mod_label).color(mod_color))
                     .on_hover_text("Modulation wheel → filter cutoff.  3=off, 4–8=levels  (up to +8 kHz)");
 
+                ui.separator();
+
+                // Scale highlight controls
+                ui.label(egui::RichText::new("Scale:").weak().small());
+                // "Off" button
+                let off_active = self.piano_scale_highlight.is_none();
+                let off_label = egui::RichText::new("Off")
+                    .small()
+                    .color(if off_active { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
+                if ui.button(off_label).clicked() {
+                    self.piano_scale_highlight = None;
+                }
+                for &sc in ScaleType::all_highlight() {
+                    let active = self.piano_scale_highlight == Some(sc);
+                    let label = egui::RichText::new(sc.label())
+                        .small()
+                        .color(if active { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
+                    if ui.button(label).clicked() {
+                        self.piano_scale_highlight = Some(sc);
+                    }
+                }
+                if self.piano_scale_highlight.is_some() {
+                    ui.label(egui::RichText::new("Root:").weak().small());
+                    egui::ComboBox::from_id_salt("piano_scale_root")
+                        .selected_text(NOTE_NAMES[self.piano_scale_root as usize])
+                        .width(48.0)
+                        .show_ui(ui, |ui| {
+                            for (i, name) in NOTE_NAMES.iter().enumerate() {
+                                ui.selectable_value(&mut self.piano_scale_root, i as u8, *name);
+                            }
+                        });
+                }
+
                 let hint = if SeqMode::from_u8(self.seq.mode.load(std::sync::atomic::Ordering::Relaxed)) == SeqMode::ChordSeq
                     && self.seq.playing.load(std::sync::atomic::Ordering::Relaxed) {
                     "  any key = set root note (live transpose)"
@@ -756,6 +789,9 @@ impl SynthApp {
 
     /// Draw a full 88-key piano (A0–C8) with the active keyboard range highlighted.
     fn draw_piano_88(&mut self, ui: &mut egui::Ui) {
+        let scale_pcs: Option<[bool; 12]> = self
+            .piano_scale_highlight
+            .map(|sc| scale_pitch_classes(sc, self.piano_scale_root));
         let num_white = count_white_keys(); // 52
         let available_w = ui.available_width();
         let white_w = (available_w / num_white as f32).max(6.0);
@@ -799,11 +835,17 @@ impl SynthApp {
             let pressed =
                 self.piano_held_midi.contains(&midi) || self.piano_mouse_midi == Some(midi);
             let in_kb_range = midi >= kb_range_start && midi < kb_range_end;
+            let pitch_class = (midi % 12) as usize;
+            let is_root = scale_pcs.is_some() && pitch_class == self.piano_scale_root as usize;
+            let in_scale = scale_pcs.map_or(false, |pcs| pcs[pitch_class]);
 
             let fill = if pressed {
                 self.theme.c(&self.theme.key_white_pressed)
+            } else if is_root {
+                Color32::from_rgb(255, 210, 80)
+            } else if in_scale {
+                Color32::from_rgb(200, 240, 210)
             } else if in_kb_range {
-                // Subtle highlight for the active keyboard range.
                 Color32::from_rgb(230, 240, 245)
             } else {
                 Color32::from_rgb(245, 245, 245)
@@ -855,9 +897,16 @@ impl SynthApp {
             let pressed =
                 self.piano_held_midi.contains(&midi) || self.piano_mouse_midi == Some(midi);
             let in_kb_range = midi >= kb_range_start && midi < kb_range_end;
+            let pitch_class = (midi % 12) as usize;
+            let is_root = scale_pcs.is_some() && pitch_class == self.piano_scale_root as usize;
+            let in_scale = scale_pcs.map_or(false, |pcs| pcs[pitch_class]);
 
             let fill = if pressed {
                 self.theme.c(&self.theme.key_black_pressed)
+            } else if is_root {
+                Color32::from_rgb(120, 80, 10)
+            } else if in_scale {
+                Color32::from_rgb(30, 70, 40)
             } else if in_kb_range {
                 Color32::from_rgb(40, 40, 50)
             } else {

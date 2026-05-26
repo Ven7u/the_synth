@@ -15,6 +15,9 @@
 pub enum ScaleType {
     Major,
     Minor,
+    Dorian,
+    Pentatonic,
+    PentatonicMinor,
 }
 
 impl ScaleType {
@@ -22,16 +25,53 @@ impl ScaleType {
         match self {
             Self::Major => "Major",
             Self::Minor => "Minor",
+            Self::Dorian => "Dorian",
+            Self::Pentatonic => "Pent",
+            Self::PentatonicMinor => "Pent m",
         }
+    }
+
+    /// All variants, in order for UI rendering.
+    pub fn all_highlight() -> &'static [ScaleType] {
+        &[
+            ScaleType::Major,
+            ScaleType::Minor,
+            ScaleType::Dorian,
+            ScaleType::Pentatonic,
+            ScaleType::PentatonicMinor,
+        ]
     }
 }
 
 /// Semitone intervals for each scale degree (0–6) relative to root.
+/// Only valid for diatonic (7-note) scales used by the chord keyboard.
 pub fn scale_intervals(scale: ScaleType) -> [u8; 7] {
     match scale {
         ScaleType::Major => [0, 2, 4, 5, 7, 9, 11],
-        ScaleType::Minor => [0, 2, 3, 5, 7, 8, 10],
+        ScaleType::Minor | ScaleType::Dorian => [0, 2, 3, 5, 7, 8, 10],
+        ScaleType::Pentatonic => [0, 2, 4, 7, 9, 11, 0],
+        ScaleType::PentatonicMinor => [0, 3, 5, 7, 10, 12, 0],
     }
+}
+
+/// Semitone offsets (relative to root) for every tone in the scale.
+pub fn scale_tones(scale: ScaleType) -> &'static [u8] {
+    match scale {
+        ScaleType::Major => &[0, 2, 4, 5, 7, 9, 11],
+        ScaleType::Minor => &[0, 2, 3, 5, 7, 8, 10],
+        ScaleType::Dorian => &[0, 2, 3, 5, 7, 9, 10],
+        ScaleType::Pentatonic => &[0, 2, 4, 7, 9],
+        ScaleType::PentatonicMinor => &[0, 3, 5, 7, 10],
+    }
+}
+
+/// Returns a 12-element bool array: `arr[pitch_class]` is true if that pitch class is in the scale.
+pub fn scale_pitch_classes(scale: ScaleType, root: u8) -> [bool; 12] {
+    let mut arr = [false; 12];
+    for &t in scale_tones(scale) {
+        arr[((root as u16 + t as u16) % 12) as usize] = true;
+    }
+    arr
 }
 
 /// Roman numeral label for a scale degree (0-indexed).
@@ -67,7 +107,10 @@ pub fn chord_quality(scale: ScaleType, degree: usize) -> &'static str {
             6 => "°", // VII — diminished
             _ => "",
         },
-        ScaleType::Minor => match degree % 7 {
+        ScaleType::Minor
+        | ScaleType::Dorian
+        | ScaleType::Pentatonic
+        | ScaleType::PentatonicMinor => match degree % 7 {
             0 => "m", // I   — minor
             1 => "°", // II  — diminished
             2 => "",  // III — major

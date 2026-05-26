@@ -211,6 +211,16 @@ pub(crate) struct SynthApp {
     pub(crate) kb_freeze: bool,
     /// MIDI notes currently sustained by freeze (key lifted but NoteOff suppressed).
     pub(crate) frozen_notes: std::collections::HashSet<u8>,
+    /// Scale highlight: root pitch class (0=C … 11=B) and scale type. None = off.
+    pub(crate) piano_scale_root: u8,
+    pub(crate) piano_scale_highlight: Option<crate::sequencer::ScaleType>,
+
+    // Pattern library popup state
+    pub(crate) show_harmony_library: bool,
+    pub(crate) show_melody_library: bool,
+    pub(crate) harmony_lib_selected: Option<usize>,
+    pub(crate) melody_lib_selected: Option<usize>,
+    pub(crate) pattern_lib_category: Option<&'static str>,
 
     // Peak meter
     pub(crate) peak_display: f32,
@@ -538,6 +548,13 @@ impl SynthApp {
             frozen_notes: std::collections::HashSet::new(),
             piano_held_midi: std::collections::HashSet::new(),
             piano_mouse_midi: None,
+            piano_scale_root: 0,
+            piano_scale_highlight: None,
+            show_harmony_library: false,
+            show_melody_library: false,
+            harmony_lib_selected: None,
+            melody_lib_selected: None,
+            pattern_lib_category: None,
             peak_display: 0.0,
             peak_hold: 0.0,
             peak_hold_timer: 0.0,

@@ -14,6 +14,7 @@ pub mod mixer;
 pub mod modulation;
 pub mod oscillators;
 pub mod patch_browser;
+pub mod pattern_library;
 #[cfg(feature = "live_rig")]
 pub mod rig_strip;
 pub mod scene_browser;

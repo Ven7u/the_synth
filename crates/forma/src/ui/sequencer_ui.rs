@@ -320,6 +320,64 @@ impl SynthApp {
                         self.seq_euclid_hits = self.seq_euclid_hits.min(cur_len);
                     }
                 }
+
+                // Transpose
+                ui.separator();
+                ui.label(egui::RichText::new("Transpose:").weak().small());
+                for (label, semitones, tip) in [
+                    ("−12", -12i32, "Down one octave"),
+                    ("−1",  -1,     "Down one semitone"),
+                    ("+1",   1,     "Up one semitone"),
+                    ("+12", 12,     "Up one octave"),
+                ] {
+                    if ui.button(egui::RichText::new(label).small()).on_hover_text(tip).clicked() {
+                        match seq_mode {
+                            SeqMode::NoteSeq => {
+                                let mut ns = self.seq.note_seq.lock().unwrap();
+                                let len = ns.length;
+                                for i in 0..len {
+                                    ns.notes[i] = (ns.notes[i] as i32 + semitones)
+                                        .clamp(21, 108) as u8;
+                                }
+                            }
+                            SeqMode::ChordSeq => {
+                                let mut cs = self.seq.chord_seq.lock().unwrap();
+                                if semitones.abs() == 12 {
+                                    cs.octave = (cs.octave + semitones / 12).clamp(1, 7);
+                                } else {
+                                    cs.root = ((cs.root as i32 + semitones).rem_euclid(12)) as u8;
+                                }
+                            }
+                            SeqMode::ChordKb => {}
+                        }
+                    }
+                }
+
+                // Pattern library button — mode-appropriate popup
+                ui.separator();
+                let lib_open = match seq_mode {
+                    SeqMode::NoteSeq => self.show_melody_library,
+                    SeqMode::ChordSeq => self.show_harmony_library,
+                    SeqMode::ChordKb => false,
+                };
+                let lib_label = egui::RichText::new("Library")
+                    .color(if lib_open { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
+                if ui.button(lib_label).on_hover_text("Open the pattern library to load a preset into this sequencer.").clicked() {
+                    match seq_mode {
+                        SeqMode::NoteSeq => {
+                            self.show_melody_library = !self.show_melody_library;
+                            self.show_harmony_library = false;
+                        }
+                        SeqMode::ChordSeq => {
+                            self.show_harmony_library = !self.show_harmony_library;
+                            self.show_melody_library = false;
+                        }
+                        SeqMode::ChordKb => {}
+                    }
+                    self.pattern_lib_category = None;
+                    self.harmony_lib_selected = None;
+                    self.melody_lib_selected = None;
+                }
             }
 
             // Euclidean controls (shown inline below toolbar when open).
@@ -396,7 +454,7 @@ impl SynthApp {
                         .button(label)
                         .on_hover_text(match sc {
                             ScaleType::Major => "Major scale — bright, happy feel.",
-                            ScaleType::Minor => "Minor scale — dark, moody feel.",
+                            _ => "Minor scale — dark, moody feel.",
                         })
                         .clicked()
                     {
@@ -412,6 +470,14 @@ impl SynthApp {
             SeqMode::NoteSeq => self.ui_note_seq(ui),
             SeqMode::ChordSeq => self.ui_chord_seq(ui),
             SeqMode::ChordKb => {} // handled in keyboard strip
+        }
+
+        // Library popups (floating windows; must be called with ctx, not ui)
+        if self.show_harmony_library {
+            self.ui_harmony_library_window(ui.ctx());
+        }
+        if self.show_melody_library {
+            self.ui_melody_library_window(ui.ctx());
         }
     }
 
@@ -864,5 +930,258 @@ impl SynthApp {
                 });
             }
         });
+    }
+
+    // -------------------------------------------------------------------------
+    // Pattern library windows
+    // -------------------------------------------------------------------------
+
+    fn ui_harmony_library_window(&mut self, ctx: &egui::Context) {
+        use crate::ui::pattern_library::{apply_harmony, harmony_categories, HARMONY_PRESETS};
+
+        let mut open = self.show_harmony_library;
+        egui::Window::new("Harmony Library")
+            .id(egui::Id::new("harmony_lib_window"))
+            .open(&mut open)
+            .resizable(true)
+            .min_width(340.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new("Click a preset to preview, then Load to apply.")
+                        .weak()
+                        .small(),
+                );
+                ui.separator();
+
+                let categories = harmony_categories();
+
+                // Category filter chips
+                ui.horizontal_wrapped(|ui| {
+                    let all_active = self.pattern_lib_category.is_none();
+                    let all_label = egui::RichText::new("All").small().color(if all_active {
+                        self.theme.c(&self.theme.accent)
+                    } else {
+                        Color32::GRAY
+                    });
+                    if ui.button(all_label).clicked() {
+                        self.pattern_lib_category = None;
+                    }
+                    for &cat in &categories {
+                        let active = self.pattern_lib_category == Some(cat);
+                        let label = egui::RichText::new(cat).small().color(if active {
+                            self.theme.c(&self.theme.accent)
+                        } else {
+                            Color32::GRAY
+                        });
+                        if ui.button(label).clicked() {
+                            self.pattern_lib_category = if active { None } else { Some(cat) };
+                        }
+                    }
+                });
+                ui.separator();
+
+                // Preset list
+                egui::ScrollArea::vertical()
+                    .max_height(260.0)
+                    .show(ui, |ui| {
+                        for (idx, preset) in HARMONY_PRESETS.iter().enumerate() {
+                            if let Some(cat) = self.pattern_lib_category {
+                                if preset.category != cat {
+                                    continue;
+                                }
+                            }
+                            let selected = self.harmony_lib_selected == Some(idx);
+                            ui.horizontal(|ui| {
+                                // Category tag
+                                ui.label(
+                                    egui::RichText::new(preset.category)
+                                        .small()
+                                        .weak()
+                                        .color(Color32::from_gray(100)),
+                                );
+                                // Name
+                                let name_label =
+                                    egui::RichText::new(preset.name).color(if selected {
+                                        self.theme.c(&self.theme.accent)
+                                    } else {
+                                        Color32::WHITE
+                                    });
+                                if ui.selectable_label(selected, name_label).clicked() {
+                                    self.harmony_lib_selected = Some(idx);
+                                }
+                                // Step count badge
+                                ui.label(
+                                    egui::RichText::new(format!("{}s", preset.length))
+                                        .small()
+                                        .weak(),
+                                );
+                            });
+
+                            // Preview row: degree pills
+                            if selected {
+                                ui.horizontal_wrapped(|ui| {
+                                    for &d in preset.degrees {
+                                        ui.label(
+                                            egui::RichText::new(
+                                                crate::sequencer::DEGREE_LABELS[d % 7],
+                                            )
+                                            .monospace()
+                                            .small()
+                                            .color(self.theme.c(&self.theme.accent_dim)),
+                                        );
+                                    }
+                                });
+                            }
+                        }
+                    });
+
+                ui.separator();
+                ui.horizontal(|ui| {
+                    let can_load = self.harmony_lib_selected.is_some();
+                    if ui
+                        .add_enabled(can_load, egui::Button::new("Load"))
+                        .on_hover_text("Load the selected progression into the Chord Sequencer.")
+                        .clicked()
+                    {
+                        if let Some(idx) = self.harmony_lib_selected {
+                            let preset = &HARMONY_PRESETS[idx];
+                            apply_harmony(&mut self.seq.chord_seq.lock().unwrap(), preset);
+                            // Clamp current step
+                            let cur = self.seq.current_step.load(Ordering::Relaxed);
+                            if cur >= preset.length {
+                                self.seq.current_step.store(0, Ordering::Relaxed);
+                            }
+                            self.show_harmony_library = false;
+                        }
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.show_harmony_library = false;
+                    }
+                });
+            });
+        self.show_harmony_library = open;
+    }
+
+    fn ui_melody_library_window(&mut self, ctx: &egui::Context) {
+        use crate::ui::midi_note_full;
+        use crate::ui::pattern_library::{apply_melody, melody_categories, MELODY_PRESETS};
+
+        let mut open = self.show_melody_library;
+        egui::Window::new("Melody Library")
+            .id(egui::Id::new("melody_lib_window"))
+            .open(&mut open)
+            .resizable(true)
+            .min_width(380.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new("Presets are transposed to your current keyboard octave on load.")
+                        .weak()
+                        .small(),
+                );
+                ui.separator();
+
+                let categories = melody_categories();
+
+                ui.horizontal_wrapped(|ui| {
+                    let all_active = self.pattern_lib_category.is_none();
+                    let all_label = egui::RichText::new("All")
+                        .small()
+                        .color(if all_active { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
+                    if ui.button(all_label).clicked() {
+                        self.pattern_lib_category = None;
+                    }
+                    for &cat in &categories {
+                        let active = self.pattern_lib_category == Some(cat);
+                        let label = egui::RichText::new(cat)
+                            .small()
+                            .color(if active { self.theme.c(&self.theme.accent) } else { Color32::GRAY });
+                        if ui.button(label).clicked() {
+                            self.pattern_lib_category = if active { None } else { Some(cat) };
+                        }
+                    }
+                });
+                ui.separator();
+
+                // Base MIDI: C in the user's current piano octave
+                let base_midi = ((self.piano_octave * 12) + 12).clamp(21, 108) as u8;
+
+                egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                    for (idx, preset) in MELODY_PRESETS.iter().enumerate() {
+                        if let Some(cat) = self.pattern_lib_category {
+                            if preset.category != cat {
+                                continue;
+                            }
+                        }
+                        let selected = self.melody_lib_selected == Some(idx);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(preset.category)
+                                    .small()
+                                    .weak()
+                                    .color(Color32::from_gray(100)),
+                            );
+                            let name_label = egui::RichText::new(preset.name).color(
+                                if selected { self.theme.c(&self.theme.accent) } else { Color32::WHITE },
+                            );
+                            if ui.selectable_label(selected, name_label).clicked() {
+                                self.melody_lib_selected = Some(idx);
+                            }
+                            ui.label(
+                                egui::RichText::new(format!("{}s", preset.length))
+                                    .small()
+                                    .weak(),
+                            );
+                        });
+
+                        // Preview: note names at current octave
+                        if selected {
+                            ui.horizontal_wrapped(|ui| {
+                                for (&offset, &active) in preset.notes.iter().zip(preset.active.iter()) {
+                                    let midi = (base_midi as i32 + offset as i32).clamp(21, 108) as u8;
+                                    let name = if active {
+                                        midi_note_full(midi)
+                                    } else {
+                                        "—".to_string()
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(name)
+                                            .monospace()
+                                            .small()
+                                            .color(if active {
+                                                self.theme.c(&self.theme.accent_dim)
+                                            } else {
+                                                Color32::from_gray(80)
+                                            }),
+                                    );
+                                }
+                            });
+                        }
+                    }
+                });
+
+                ui.separator();
+                ui.horizontal(|ui| {
+                    let can_load = self.melody_lib_selected.is_some();
+                    if ui
+                        .add_enabled(can_load, egui::Button::new("Load"))
+                        .on_hover_text("Load the selected melody into the Note Sequencer, transposed to your keyboard octave.")
+                        .clicked()
+                    {
+                        if let Some(idx) = self.melody_lib_selected {
+                            let preset = &MELODY_PRESETS[idx];
+                            apply_melody(&mut self.seq.note_seq.lock().unwrap(), preset, base_midi);
+                            let cur = self.seq.current_step.load(Ordering::Relaxed);
+                            if cur >= preset.length {
+                                self.seq.current_step.store(0, Ordering::Relaxed);
+                            }
+                            self.show_melody_library = false;
+                        }
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.show_melody_library = false;
+                    }
+                });
+            });
+        self.show_melody_library = open;
     }
 }
