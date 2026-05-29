@@ -23,8 +23,9 @@ pub enum MidiEvent {
     NoteOn { channel: u8, note: u8, velocity: u8 },
     NoteOff { channel: u8, note: u8 },
     CC { channel: u8, cc: u8, value: u8 },
-    PitchBend { channel: u8, value: f32 }, // -1.0 … +1.0
-    Aftertouch { channel: u8, value: u8 }, // channel pressure 0–127
+    PitchBend { channel: u8, value: f32 },      // -1.0 … +1.0
+    Aftertouch { channel: u8, value: u8 },      // channel pressure 0–127
+    ProgramChange { channel: u8, program: u8 }, // 0–127
 }
 
 // ---------------------------------------------------------------------------
@@ -38,6 +39,9 @@ pub fn cc_name(cc: u8) -> &'static str {
         7 => "Volume",
         10 => "Pan",
         11 => "Expression",
+        28 => "Data Encoder",
+        46 => "Prev",
+        47 => "Next",
         64 => "Sustain Pedal",
         71 => "Resonance",
         74 => "Cutoff",
@@ -174,6 +178,10 @@ fn parse_midi(msg: &[u8]) -> Option<MidiEvent> {
             channel,
             cc: msg[1],
             value: msg[2],
+        }),
+        0xC if msg.len() >= 2 => Some(MidiEvent::ProgramChange {
+            channel,
+            program: msg[1],
         }),
         0xD if msg.len() >= 2 => Some(MidiEvent::Aftertouch {
             channel,

@@ -5,6 +5,7 @@
 
 mod audio;
 mod eq;
+mod midi_presets;
 mod patch;
 mod recorder;
 mod scene;
@@ -291,6 +292,7 @@ pub(crate) struct SynthApp {
     // Patch system
     pub(crate) patch_name: String,
     pub(crate) patch_library: Vec<Patch>,
+    pub(crate) patch_library_cursor: usize,
     pub(crate) patch_browser_open: bool,
     pub(crate) patch_browser_category: String,
     pub(crate) patch_browser_model: String,
@@ -432,6 +434,9 @@ pub(crate) struct SynthApp {
     pub(crate) midi_learn_filter: String,
     /// Last CC number seen (for highlighting in the learn window)
     pub(crate) midi_last_cc: Option<u8>,
+    /// Recent MIDI events for the monitor panel — newest first, capped at 32.
+    pub(crate) midi_monitor: Vec<String>,
+    midi_reconnect_tick: u32,
 
     // Mix-bus parametric EQ
     pub(crate) eq: Arc<Mutex<crate::eq::EqParams>>,
@@ -440,7 +445,38 @@ pub(crate) struct SynthApp {
 impl SynthApp {
     fn new(audio: AudioEngine, recorder_sink: Arc<Mutex<Option<recorder::Recorder>>>) -> Self {
         let mut midi = MidiEngine::new();
-        midi.list_ports(); // populate port list at startup
+        midi.list_ports();
+
+        // Auto-connect: try the saved port name first, then fall back to the
+        // first available device so the keyboard just works on launch.
+        {
+            let saved = ui::layout::load_layout();
+            let target_idx = if let Some(ref saved_name) = saved.midi_port_name {
+                // Prefer exact match on saved name.
+                midi.port_names
+                    .iter()
+                    .position(|n| n == saved_name)
+                    // Partial match for cases where the OS appended a port number.
+                    .or_else(|| {
+                        midi.port_names
+                            .iter()
+                            .position(|n| n.contains(saved_name.as_str()))
+                    })
+            } else {
+                None
+            };
+            // Fall back to port 0 if no saved preference.
+            let idx = target_idx.or_else(|| {
+                if midi.port_names.is_empty() {
+                    None
+                } else {
+                    Some(0)
+                }
+            });
+            if let Some(i) = idx {
+                let _ = midi.connect(i);
+            }
+        }
 
         // Track 0 is the UI's active engine — existing UI code uses self.engine
         // which always points to the focused track's handle. Phase 2 will add
@@ -607,6 +643,7 @@ impl SynthApp {
             vor_time: 0.0,
             patch_name: "Init".into(),
             patch_library: default_patches(),
+            patch_library_cursor: 0,
             patch_browser_open: false,
             patch_browser_category: "All".into(),
             patch_browser_model: "All".into(),
@@ -711,6 +748,8 @@ impl SynthApp {
             midi_learn_param: None,
             midi_learn_filter: String::new(),
             midi_last_cc: None,
+            midi_monitor: Vec::new(),
+            midi_reconnect_tick: 0,
             eq,
         }
     }
@@ -1280,14 +1319,66 @@ fn save_midi_bindings(bindings: &std::collections::HashMap<u8, forma_control::Pa
     }
 }
 
+pub(crate) fn save_midi_bindings_pub(
+    bindings: &std::collections::HashMap<u8, forma_control::ParamId>,
+) {
+    save_midi_bindings(bindings);
+}
+
 // ---------------------------------------------------------------------------
 // MIDI tick — drain events from the MIDI thread each frame
 // ---------------------------------------------------------------------------
 
 impl SynthApp {
     fn tick_midi(&mut self) {
+        // Periodic reconnect: if not connected, re-scan every ~2 seconds and
+        // try to reconnect to the first available port.
+        if self.midi.connected_port.is_none() {
+            self.midi_reconnect_tick = self.midi_reconnect_tick.wrapping_add(1);
+            if self.midi_reconnect_tick % 120 == 0 {
+                self.midi.list_ports();
+                if !self.midi.port_names.is_empty() {
+                    let _ = self.midi.connect(0);
+                }
+            }
+        }
+
         let events = self.midi.drain();
         for ev in events {
+            // Log to monitor (newest first, cap at 32 entries).
+            let entry = match &ev {
+                MidiEvent::NoteOn {
+                    channel,
+                    note,
+                    velocity,
+                } => format!(
+                    "Note On   ch{:02}  note {:3}  vel {:3}",
+                    channel + 1,
+                    note,
+                    velocity
+                ),
+                MidiEvent::NoteOff { channel, note } => {
+                    format!("Note Off  ch{:02}  note {:3}", channel + 1, note)
+                }
+                MidiEvent::CC { channel, cc, value } => format!(
+                    "CC        ch{:02}  cc  {:3}  val {:3}",
+                    channel + 1,
+                    cc,
+                    value
+                ),
+                MidiEvent::PitchBend { channel, value } => {
+                    format!("Pitch Bend ch{:02}  {:.3}", channel + 1, value)
+                }
+                MidiEvent::Aftertouch { channel, value } => {
+                    format!("Aftertouch ch{:02}  val {:3}", channel + 1, value)
+                }
+                MidiEvent::ProgramChange { channel, program } => {
+                    format!("Prog Change ch{:02}  pgm {:3}", channel + 1, program)
+                }
+            };
+            self.midi_monitor.insert(0, entry);
+            self.midi_monitor.truncate(32);
+
             match ev {
                 MidiEvent::NoteOn {
                     note,
@@ -1325,6 +1416,82 @@ impl SynthApp {
                     }
 
                     match cc {
+                        // ── Patch library actions (KeyLab MkIII buttons) ────
+                        60 => {
+                            if value > 0 {
+                                // Toggle favourite on current patch
+                                let name = self.patch_name.clone();
+                                if self.patch_favorites.contains(&name) {
+                                    self.patch_favorites.remove(&name);
+                                } else {
+                                    self.patch_favorites.insert(name);
+                                }
+                            }
+                        }
+                        61 => {
+                            if value > 0 {
+                                self.navigate_favorite(-1);
+                            }
+                        }
+                        62 => {
+                            if value > 0 {
+                                self.navigate_favorite(1);
+                            }
+                        }
+                        63 => {
+                            if value > 0 {
+                                self.randomize_patch();
+                            }
+                        }
+                        // ── Patch navigation (KeyLab MkIII) ─────────────────
+                        // Wheel encoder: centre = 64, >64 = CW (next), <64 = CCW (prev)
+                        114 => {
+                            if value > 64 {
+                                self.navigate_patch(1);
+                            } else if value < 64 {
+                                self.navigate_patch(-1);
+                            }
+                        }
+                        // Wheel press: toggle favourite on current patch
+                        115 => {
+                            if value > 0 {
+                                let name = self.patch_name.clone();
+                                if self.patch_favorites.contains(&name) {
+                                    self.patch_favorites.remove(&name);
+                                } else {
+                                    self.patch_favorites.insert(name);
+                                }
+                                // Persist immediately so it survives a crash.
+                                let state = ui::layout::LayoutState {
+                                    theme_name: self.theme.name.clone(),
+                                    panels: self.panels.to_state(),
+                                    app_mode: self.app_mode,
+                                    studio_tab: self.studio_tab,
+                                    patch_favorites: self.patch_favorites.iter().cloned().collect(),
+                                    patch_recent: self.patch_recent.clone(),
+                                    midi_port_name: self
+                                        .midi
+                                        .connected_port
+                                        .and_then(|i| self.midi.port_names.get(i).cloned()),
+                                };
+                                ui::layout::save_layout(&state);
+                            }
+                        }
+                        // Generic fallback (other keyboards)
+                        28 => {
+                            let delta: i32 = if value < 64 { 1 } else { -1 };
+                            self.navigate_patch(delta);
+                        }
+                        46 => {
+                            if value > 0 {
+                                self.navigate_patch(-1);
+                            }
+                        }
+                        47 => {
+                            if value > 0 {
+                                self.navigate_patch(1);
+                            }
+                        }
                         1 => {
                             // Mod wheel — routed by mod_wheel_dest in the engine
                             self.piano_mod_wheel = (v * 5.0).round() as u8;
@@ -1366,6 +1533,9 @@ impl SynthApp {
                     let semitones = value * 2.0;
                     self.engine.set_lfo_pitch_mult(2_f32.powf(semitones / 12.0));
                 }
+                MidiEvent::ProgramChange { program, .. } => {
+                    self.select_patch_by_index(program as usize);
+                }
             }
         }
     }
@@ -1384,6 +1554,10 @@ impl eframe::App for SynthApp {
             studio_tab: self.studio_tab,
             patch_favorites: self.patch_favorites.iter().cloned().collect(),
             patch_recent: self.patch_recent.clone(),
+            midi_port_name: self
+                .midi
+                .connected_port
+                .and_then(|i| self.midi.port_names.get(i).cloned()),
         };
         ui::layout::save_layout(&state);
         save_midi_bindings(&self.midi_bindings);
@@ -1605,6 +1779,68 @@ impl SynthApp {
         p.fx_phaser_stages = self.fx_phaser_stages as u8;
         p.fx_phaser_mix = self.fx_phaser_mix;
         p
+    }
+
+    /// Navigate only through favourited patches (library order, wraps).
+    pub(crate) fn navigate_favorite(&mut self, delta: i32) {
+        let fav_indices: Vec<usize> = self
+            .patch_library
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| self.patch_favorites.contains(&p.name))
+            .map(|(i, _)| i)
+            .collect();
+        if fav_indices.is_empty() {
+            return;
+        }
+        // Find where the current cursor sits within the favourites list.
+        let pos = fav_indices
+            .iter()
+            .position(|&i| i == self.patch_library_cursor)
+            .unwrap_or(0);
+        let next_pos = (pos as i32 + delta).rem_euclid(fav_indices.len() as i32) as usize;
+        self.patch_library_cursor = fav_indices[next_pos];
+        let p = self.patch_library[self.patch_library_cursor].clone();
+        self.apply_patch(p);
+    }
+
+    /// Load a random patch from the library.
+    pub(crate) fn randomize_patch(&mut self) {
+        let len = self.patch_library.len();
+        if len == 0 {
+            return;
+        }
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(42);
+        let idx = (seed as usize).wrapping_mul(2891336453).wrapping_add(1) % len;
+        self.patch_library_cursor = idx;
+        let p = self.patch_library[idx].clone();
+        self.apply_patch(p);
+    }
+
+    /// Move the patch library cursor by `delta` (wraps) and load the patch.
+    pub(crate) fn navigate_patch(&mut self, delta: i32) {
+        let len = self.patch_library.len();
+        if len == 0 {
+            return;
+        }
+        self.patch_library_cursor =
+            ((self.patch_library_cursor as i32 + delta).rem_euclid(len as i32)) as usize;
+        let p = self.patch_library[self.patch_library_cursor].clone();
+        self.apply_patch(p);
+    }
+
+    /// Jump directly to a patch by index (e.g. from Program Change).
+    pub(crate) fn select_patch_by_index(&mut self, idx: usize) {
+        let len = self.patch_library.len();
+        if len == 0 {
+            return;
+        }
+        self.patch_library_cursor = idx % len;
+        let p = self.patch_library[self.patch_library_cursor].clone();
+        self.apply_patch(p);
     }
 
     pub(crate) fn apply_patch(&mut self, p: Patch) {

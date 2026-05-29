@@ -1,3 +1,4 @@
+use crate::midi_presets;
 use crate::SynthApp;
 use eframe::egui;
 use egui::Color32;
@@ -61,5 +62,91 @@ impl SynthApp {
             (Color32::from_gray(80), "○")
         };
         ui.label(egui::RichText::new(label).color(color).small());
+
+        ui.separator();
+
+        // ── Keyboard presets ─────────────────────────────────────────────
+        let text_sec = self.theme.c(&self.theme.text_secondary);
+        let text_dis = self.theme.c(&self.theme.text_disabled);
+        let accent = self.theme.c(&self.theme.accent);
+
+        ui.label(
+            egui::RichText::new("Keyboard Presets")
+                .small()
+                .strong()
+                .color(text_sec),
+        );
+        ui.label(
+            egui::RichText::new(
+                "Load a factory CC mapping for your keyboard, then fine-tune with MIDI Learn.",
+            )
+            .small()
+            .color(text_dis),
+        );
+        ui.add_space(4.0);
+
+        for preset in midi_presets::PRESETS {
+            ui.horizontal(|ui| {
+                let btn = egui::Button::new(egui::RichText::new(preset.name).small().color(accent));
+                if ui.add(btn).on_hover_text(preset.description).clicked() {
+                    let bindings = midi_presets::preset_bindings(preset);
+                    self.midi_bindings = bindings;
+                    crate::save_midi_bindings_pub(&self.midi_bindings);
+                }
+            });
+        }
+
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new("Note: loading a preset replaces all current bindings.")
+                .small()
+                .italics()
+                .color(text_dis),
+        );
+
+        ui.separator();
+
+        // ── MIDI Monitor ─────────────────────────────────────────────────
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("MIDI Monitor")
+                    .small()
+                    .strong()
+                    .color(text_sec),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("Clear").clicked() {
+                    self.midi_monitor.clear();
+                }
+            });
+        });
+        ui.label(
+            egui::RichText::new("Press any button/knob on your keyboard to see its message here.")
+                .small()
+                .color(text_dis),
+        );
+        ui.add_space(2.0);
+
+        let monitor_h = (ui.available_height() - 4.0).min(200.0).max(60.0);
+        egui::ScrollArea::vertical()
+            .max_height(monitor_h)
+            .show(ui, |ui| {
+                if self.midi_monitor.is_empty() {
+                    ui.label(
+                        egui::RichText::new("— no messages yet —")
+                            .small()
+                            .color(text_dis),
+                    );
+                }
+                for msg in &self.midi_monitor {
+                    // Highlight CC and Program Change rows in accent color.
+                    let col = if msg.starts_with("CC") || msg.starts_with("Prog") {
+                        accent
+                    } else {
+                        text_sec
+                    };
+                    ui.label(egui::RichText::new(msg).monospace().size(10.0).color(col));
+                }
+            });
     }
 }

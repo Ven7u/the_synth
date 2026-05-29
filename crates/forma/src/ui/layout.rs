@@ -61,6 +61,9 @@ pub struct LayoutState {
     /// Recently loaded patch names, newest first (capped at 12).
     #[serde(default)]
     pub patch_recent: Vec<String>,
+    /// Last connected MIDI port name — used to auto-reconnect on startup.
+    #[serde(default)]
+    pub midi_port_name: Option<String>,
 }
 
 /// Serializable mirror of PanelVisibility.
@@ -84,6 +87,7 @@ impl Default for LayoutState {
             studio_tab: StudioTab::Voice,
             patch_favorites: Vec::new(),
             patch_recent: Vec::new(),
+            midi_port_name: None,
             panels: PanelVisibilityState {
                 oscillators: true,
                 modulation: true,
