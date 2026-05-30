@@ -1,8 +1,12 @@
 # Forma
 
-A polyphonic software synthesizer for macOS and Linux, built in Rust.
+A polyphonic software synthesizer for macOS, built in Rust.
 
 > **Status:** Early development / personal project. **macOS only** — tested on macOS 15 Sequoia. Linux and Windows are untested.
+
+![Forma — main interface](imgs/screen_1.png)
+
+![Forma — oscilloscope](imgs/screen_2.png)
 
 ---
 
