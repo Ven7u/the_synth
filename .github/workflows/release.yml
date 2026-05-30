@@ -35,7 +35,7 @@ jobs:
           mv "Forma-${{ github.ref_name }}-macos.zip" "$GITHUB_WORKSPACE/"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: "Forma ${{ github.ref_name }}"
           body_path: CHANGELOG.md
