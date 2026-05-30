@@ -1,0 +1,7 @@
+# Default owner for everything
+* @Ven7u
+
+# DSP and audio engine — review carefully for audio-thread safety
+crates/forma-dsp/  @Ven7u
+crates/forma-engine/ @Ven7u
+crates/forma/src/audio.rs @Ven7u
