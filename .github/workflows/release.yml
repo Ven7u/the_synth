@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-macos:
+    name: Build macOS app bundle
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle --locked
+
+      - name: Build app bundle
+        run: cargo bundle --release -p forma
+
+      - name: Zip bundle
+        run: |
+          cd target/release/bundle/osx
+          zip -r "Forma-${{ github.ref_name }}-macos.zip" "The Synth.app"
+          mv "Forma-${{ github.ref_name }}-macos.zip" "$GITHUB_WORKSPACE/"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Forma ${{ github.ref_name }}"
+          body_path: CHANGELOG.md
+          files: "Forma-${{ github.ref_name }}-macos.zip"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
