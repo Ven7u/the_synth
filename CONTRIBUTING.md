@@ -32,8 +32,8 @@ Use the **Feature request** issue template. Describe the musical problem you're 
 ## Development setup
 
 ```sh
-git clone https://github.com/Ven7u/the_synth.git
-cd the_synth
+git clone https://github.com/Ven7u/forma-synth.git
+cd forma-synth
 cargo run -p forma --release
 ```
 

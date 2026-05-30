@@ -66,5 +66,5 @@ First public release.
 - Oscilloscope with latency meter
 - On-screen keyboard with scale highlighting and GarageBand-style key bindings
 
-[Unreleased]: https://github.com/Ven7u/the_synth/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/Ven7u/the_synth/releases/tag/v0.1.0
+[Unreleased]: https://github.com/Ven7u/forma-synth/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Ven7u/forma-synth/releases/tag/v0.1.0
