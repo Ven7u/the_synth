@@ -14,14 +14,18 @@
   "studio_tab": "Voice",
   "patch_favorites": [],
   "patch_recent": [
-    "Felt Piano",
-    "Deep Space",
-    "Clav",
-    "Keys Tail",
-    "Celeste",
-    "Distant Choir",
-    "Ambient Pad",
-    "Random",
-    "Init"
-  ]
+    "Acid Chord",
+    "Vital Pluck",
+    "Spiccato Strings",
+    "Serum Pluck",
+    "Pluck",
+    "Pizzicato",
+    "Minimoog Pluck",
+    "Marimba",
+    "Koto",
+    "Kalimba",
+    "Harp",
+    "Gravity Pluck"
+  ],
+  "midi_port_name": "KeyLab 61 mk3 MIDI"
 }

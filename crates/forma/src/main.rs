@@ -5,6 +5,7 @@
 
 mod audio;
 mod eq;
+mod history;
 mod midi_presets;
 mod patch;
 mod recorder;
@@ -293,6 +294,16 @@ pub(crate) struct SynthApp {
     pub(crate) patch_name: String,
     pub(crate) patch_library: Vec<Patch>,
     pub(crate) patch_library_cursor: usize,
+    // ── Patch history ─────────────────────────────────────────────────────────
+    pub(crate) patch_history: history::PatchHistory,
+    pub(crate) history_open: bool,
+    pub(crate) history_pin_name: String,
+    /// Last patch seen by the auto-snapshot poller (JSON for cheap diff).
+    history_last_json: String,
+    /// Seconds since last patch change — counts up, triggers snapshot at 3.0.
+    history_debounce: f32,
+    /// Seconds since last poll — poll every 1.0 s.
+    history_poll_timer: f32,
     pub(crate) patch_browser_open: bool,
     pub(crate) patch_browser_category: String,
     pub(crate) patch_browser_model: String,
@@ -644,6 +655,12 @@ impl SynthApp {
             patch_name: "Init".into(),
             patch_library: default_patches(),
             patch_library_cursor: 0,
+            patch_history: history::load_history(),
+            history_open: false,
+            history_pin_name: String::new(),
+            history_last_json: String::new(),
+            history_debounce: 0.0,
+            history_poll_timer: 0.0,
             patch_browser_open: false,
             patch_browser_category: "All".into(),
             patch_browser_model: "All".into(),
@@ -1452,29 +1469,11 @@ impl SynthApp {
                                 self.navigate_patch(-1);
                             }
                         }
-                        // Wheel press: toggle favourite on current patch
+                        // Wheel press: pin current state to history
                         115 => {
                             if value > 0 {
-                                let name = self.patch_name.clone();
-                                if self.patch_favorites.contains(&name) {
-                                    self.patch_favorites.remove(&name);
-                                } else {
-                                    self.patch_favorites.insert(name);
-                                }
-                                // Persist immediately so it survives a crash.
-                                let state = ui::layout::LayoutState {
-                                    theme_name: self.theme.name.clone(),
-                                    panels: self.panels.to_state(),
-                                    app_mode: self.app_mode,
-                                    studio_tab: self.studio_tab,
-                                    patch_favorites: self.patch_favorites.iter().cloned().collect(),
-                                    patch_recent: self.patch_recent.clone(),
-                                    midi_port_name: self
-                                        .midi
-                                        .connected_port
-                                        .and_then(|i| self.midi.port_names.get(i).cloned()),
-                                };
-                                ui::layout::save_layout(&state);
+                                let label = self.patch_name.clone();
+                                self.pin_history(label);
                             }
                         }
                         // Generic fallback (other keyboards)
@@ -1582,6 +1581,7 @@ impl eframe::App for SynthApp {
         self.tick_drums_sync();
         self.tick_keyboard_input(ctx);
         let dt = ctx.input(|i| i.unstable_dt).min(0.1);
+        self.tick_history(dt);
         self.tick_scene_chain(dt);
 
         // Advance metronome phase each frame.
@@ -1590,6 +1590,7 @@ impl eframe::App for SynthApp {
         // Floating windows — must be shown before panels.
         self.ui_patch_browser(ctx);
         self.ui_kit_browser(ctx);
+        self.ui_history_window(ctx);
         self.ui_metronome_window(ctx);
         self.ui_scope_fullscreen(ctx);
         self.ui_scene_browser(ctx);
@@ -1779,6 +1780,50 @@ impl SynthApp {
         p.fx_phaser_stages = self.fx_phaser_stages as u8;
         p.fx_phaser_mix = self.fx_phaser_mix;
         p
+    }
+
+    /// Auto-snapshot poller — call every frame with the frame delta time.
+    pub(crate) fn tick_history(&mut self, dt: f32) {
+        self.history_poll_timer += dt;
+        if self.history_poll_timer < 1.0 {
+            return;
+        }
+        self.history_poll_timer = 0.0;
+
+        // Cheap change detection via JSON serialisation of the current patch.
+        let current = self.capture_patch();
+        let json = serde_json::to_string(&current).unwrap_or_default();
+        if json == self.history_last_json {
+            // Nothing changed — reset debounce.
+            self.history_debounce = 0.0;
+            return;
+        }
+
+        self.history_debounce += 1.0;
+        self.history_last_json = json;
+
+        if self.history_debounce >= 3.0 {
+            // 3 quiet seconds after a change → auto-snapshot.
+            self.history_debounce = 0.0;
+            self.patch_history.push_auto(current);
+            history::save_history(&self.patch_history);
+        }
+    }
+
+    /// Immediately pin the current patch with a label.
+    pub(crate) fn pin_history(&mut self, label: impl Into<String>) {
+        let current = self.capture_patch();
+        let label = label.into();
+        let label = if label.trim().is_empty() {
+            current.name.clone()
+        } else {
+            label
+        };
+        self.patch_history.push_manual(current, label);
+        history::save_history(&self.patch_history);
+        // Update last_json so the next auto-snapshot doesn't fire immediately.
+        self.history_last_json = serde_json::to_string(&self.capture_patch()).unwrap_or_default();
+        self.history_debounce = 0.0;
     }
 
     /// Navigate only through favourited patches (library order, wraps).
@@ -2779,6 +2824,20 @@ impl SynthApp {
                     .clicked()
                 {
                     self.patch_browser_open = !self.patch_browser_open;
+                }
+
+                // History button
+                let hist_col = if self.history_open {
+                    self.theme.c(&self.theme.accent)
+                } else {
+                    self.theme.c(&self.theme.text_secondary)
+                };
+                if ui
+                    .button(egui::RichText::new("HIST").size(11.0).color(hist_col))
+                    .on_hover_text("Patch History — browse and restore past states.\nUse ● Pin to save a named snapshot.")
+                    .clicked()
+                {
+                    self.history_open = !self.history_open;
                 }
 
                 // Scene browser button

@@ -82,7 +82,7 @@ const GENERIC: &[(u8, ParamId)] = &[
 pub const PRESETS: &[KeyboardPreset] = &[
     KeyboardPreset {
         name: "Arturia KeyLab MkIII",
-        description: "9 encoders + 9 faders mapped to filter, LFO, FX, amp envelope and oscillator levels.\n\nPatch library (always active):\n  Wheel turn (CC 114) — browse all patches\n  Wheel press (CC 115) — toggle favourite\n  CC 60 — toggle favourite\n  CC 61 / 62 — prev / next favourite\n  CC 63 — randomize patch\n  Program Change — jump to patch by index",
+        description: "9 encoders + 9 faders mapped to filter, LFO, FX, amp envelope and oscillator levels.\n\nPatch library (always active):\n  Wheel turn (CC 114) — browse all patches\n  Wheel press (CC 115) — pin current state to history\n  CC 60 — toggle favourite\n  CC 61 / 62 — prev / next favourite\n  CC 63 — randomize patch\n  Program Change — jump to patch by index",
         mappings: KEYLAB_MK3,
     },
     KeyboardPreset {
