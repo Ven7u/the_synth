@@ -16,7 +16,7 @@ forma-ui       = { path = "../forma-ui" }
 fundsp         = { version = "0.23", features = ["files", "fft"] }
 cpal           = "0.15"
 anyhow         = "1"
-eframe         = "0.29"
+eframe         = "0.34"
 egui           = "0.29"
 midir          = "0.9"
 hound          = "3"
