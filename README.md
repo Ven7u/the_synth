@@ -6,6 +6,8 @@ A polyphonic software synthesizer for macOS, built in Rust.
 
 ![Forma — main interface](imgs/screen_1.png)
 
+![Forma — filter, FX chain and chord keyboard](imgs/screen_3.png)
+
 ![Forma — oscilloscope](imgs/screen_2.png)
 
 ---
