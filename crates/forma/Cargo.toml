@@ -1,12 +1,14 @@
 [package]
 name = "forma"
 version = "0.1.0"
+license = "MIT OR Apache-2.0"
 edition = "2021"
 
 [package.metadata.bundle]
 name = "The Synth"
 identifier = "com.francescoventura.forma"
 version = "0.1.0"
+license = "MIT OR Apache-2.0"
 copyright = "© 2026 Francesco Ventura"
 category = "Music"
 short_description = "Moog-style software synthesizer"
