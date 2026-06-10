@@ -5,4 +5,4 @@ license = "MIT OR Apache-2.0"
 edition = "2021"
 
 [dependencies]
-egui = "0.29"
+egui = "0.34"
